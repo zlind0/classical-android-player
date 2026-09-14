@@ -50,6 +50,11 @@ class AppContainer(context: Context) {
 
     val tagEditor = TagEditor(appContext)
 
+    // v0.3 local storage roots (plan §3-13): user-picked directories + scanner
+    val volumeManager = StorageVolumeManager(appContext)
+    val musicRoots = MusicRootsStore(appContext)
+    val rootScanner = RootScanner(musicRoots)
+
     val backupManager = BackupManager(settingsStore, localStore, playHistory)
 
     val musicBrainz = com.aurora.music.data.remote.MusicBrainzClient()

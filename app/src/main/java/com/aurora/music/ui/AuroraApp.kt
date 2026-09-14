@@ -607,6 +607,7 @@ fun AuroraApp() {
                             onOpenEq = { navController.navigate(Routes.SETTINGS_EQ) },
                             onOpenVisualizer = { navController.navigate(Routes.SETTINGS_VISUALIZER) },
                             onOpenSonic = { navController.navigate(Routes.SETTINGS_SONIC) },
+                            onOpenSources = { navController.navigate(Routes.SETTINGS_SOURCES) },
                             onOpenDownloads = { navController.navigate(Routes.SETTINGS_STORAGE) },
                             onOpenAppearance = { navController.navigate(Routes.SETTINGS_APPEARANCE) },
                             onOpenGestures = { navController.navigate(Routes.SETTINGS_GESTURES) },
@@ -647,6 +648,20 @@ fun AuroraApp() {
                     }
                     composable(Routes.SETTINGS_SONIC) {
                         com.aurora.music.ui.screens.settings.SonicSettingsScreen(contentPadding = inner, onBack = { navController.popBackStack() })
+                    }
+                    composable(Routes.SETTINGS_SOURCES) {
+                        com.aurora.music.ui.screens.settings.MusicSourcesScreen(
+                            contentPadding = inner,
+                            onBack = { navController.popBackStack() },
+                            onPlayRoot = { id ->
+                                scope.launch {
+                                    val songs = container.musicRoots.songsOf(id)
+                                    if (songs.isEmpty()) confirm("No scanned tracks in this source — run Scan first")
+                                    else playerVM.playAll(songs, 0)
+                                }
+                            },
+                            confirm = { confirm(it) },
+                        )
                     }
                     composable(Routes.SETTINGS_PERMISSIONS) {
                         com.aurora.music.ui.screens.settings.PermissionsScreen(contentPadding = inner, onBack = { navController.popBackStack() })

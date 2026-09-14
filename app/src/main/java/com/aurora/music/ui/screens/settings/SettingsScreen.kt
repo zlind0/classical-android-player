@@ -53,6 +53,7 @@ fun SettingsScreen(
     onOpenEq: () -> Unit,
     onOpenVisualizer: () -> Unit,
     onOpenSonic: () -> Unit,
+    onOpenSources: () -> Unit,
     onOpenDownloads: () -> Unit,
     onOpenAppearance: () -> Unit,
     onOpenGestures: () -> Unit,
@@ -122,6 +123,8 @@ fun SettingsScreen(
             item { SettingsSectionTitle("Library") }
             item {
                 SettingsGroup {
+                    SettingsNavRow(Icons.Filled.MergeType, "Music sources", "Folders to scan: internal, SD, USB", onClick = onOpenSources)
+                    SettingsRowDivider()
                     SettingsNavRow(Icons.Filled.Download, "Downloads & storage", "${downloads.size} downloaded", onClick = onOpenDownloads)
                 }
             }
