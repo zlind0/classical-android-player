@@ -53,6 +53,7 @@ class PlaybackService : MediaLibraryService() {
     private lateinit var player: ExoPlayer
     private var fadePlayer: ExoPlayer? = null
     private val monoProcessor = MonoAudioProcessor()
+    private val correctionConv = ConvolutionProcessor()
     private val auroraDsp = AuroraDspProcessor()
     private val convolver = ConvolutionProcessor()
     @Volatile private var lastIrPath: String = ""
@@ -90,6 +91,12 @@ class PlaybackService : MediaLibraryService() {
     // items may lag the command so flag and apply neutralize on next timeline change
     private var pendingNeutralize = false
     private var usbSink: com.decent.usbaudio.media3.UsbAudioSink? = null
+
+    // v0.5 correction convolver state (compiled off-thread, applied via setImpulse)
+    @Volatile private var correctionMaxGainDb: Float = 0f
+    @Volatile private var correctionTrimDb: Float = 0f
+    @Volatile private var correctionActive: Boolean = false
+    @Volatile private var lastCorrectionId: String = "flat"
 
     override fun onCreate() {
         super.onCreate()
@@ -133,7 +140,7 @@ class PlaybackService : MediaLibraryService() {
                     }
                 }
                 val base = DefaultAudioSink.Builder(context)
-                    .setAudioProcessors(arrayOf(monoProcessor, auroraDsp, convolver))
+                    .setAudioProcessors(arrayOf(monoProcessor, correctionConv, auroraDsp, convolver))
                     .setEnableFloatOutput(useFloat)
                     // float bypasses sonic so use hardware playback params for speed
                     .setEnableAudioTrackPlaybackParams(useFloat || enableAudioTrackPlaybackParams)
@@ -235,6 +242,13 @@ class PlaybackService : MediaLibraryService() {
                 applyAudioEngine()
             }
         }
+        // v0.5: active correction profile → compile FIR → correction convolver
+        scope.launch {
+            kotlinx.coroutines.flow.combine(
+                store.correctionProfiles, store.activeCorrectionId,
+            ) { profiles, activeId -> profiles.firstOrNull { it.id == activeId } }
+                .collect { profile -> applyCorrectionProfile(profile) }
+        }
         scope.launch {
             container.preferredAudioDeviceId.collect { id -> applyPreferredDevice(id) }
         }
@@ -248,18 +262,60 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
+    // v0.5: compile the active CorrectionProfile to FIR on IO, push to the
+    // correction convolver. Runs off the audio thread; setImpulse swaps atomically.
+    private fun applyCorrectionProfile(profile: com.aurora.music.data.CorrectionProfile?) {
+        val id = profile?.id ?: "flat"
+        val gains = profile?.gains.orEmpty()
+        val on = profile?.enabled == true && !CorrectionCompiler.isFlat(gains) && id != "flat"
+        correctionMaxGainDb = if (on) gains.maxOrNull() ?: 0f else 0f
+        correctionTrimDb = if (on) profile?.preampDb ?: 0f else 0f
+        correctionActive = on
+        if (id == lastCorrectionId && !on) {
+            correctionConv.enabled = false
+            applyAudioEngine()
+            return
+        }
+        lastCorrectionId = id
+        if (!on) {
+            correctionConv.enabled = false
+            applyAudioEngine()
+            return
+        }
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val rate = runCatching { player.audioFormat?.sampleRate ?: 48000 }.getOrDefault(48000).coerceAtLeast(8000)
+            val taps = runCatching { CorrectionCompiler.gainsToFir(gains.toFloatArray(), rate) }.getOrNull()
+            if (taps != null) {
+                val ir = ImpulseResponse(taps, taps, rate)
+                correctionConv.setImpulse(ir, 0f)
+                val custom = (lastAudioPrefs?.dspMode == DspMode.CUSTOM)
+                correctionConv.enabled = custom
+            } else {
+                correctionConv.enabled = false
+            }
+            applyAudioEngine()
+        }
+    }
+
     // runtime-switchable via volatile flags no rebuild the two eq engines are mutually exclusive so they never stack
     private fun applyAudioEngine() {
         val ap = lastAudioPrefs ?: return
         val mode = ap.dspMode
         val layout = DspCoeffBuilder.GRAPHIC_LAYOUTS.getOrElse(ap.dspGraphicLayout) { DspCoeffBuilder.GRAPHIC_LAYOUTS[0] }
         val graphic = FloatArray(layout.freqs.size) { ap.dspGraphicBands.getOrElse(it) { 0f } }
+        // v0.5 auto headroom (plan §28): preamp covers the max positive gain of
+        // user EQ + correction FIR; manual preamp trims on top.
+        val userPeak = DspCoeffBuilder.eqPeakDb(
+            DspParams(graphic = graphic, graphicFreqs = layout.freqs, graphicQ = layout.q), 48000,
+        )
+        val combinedPeak = maxOf(userPeak, correctionMaxGainDb)
+        val autoPre = if (ap.dspAutoHeadroom) -combinedPeak.coerceAtLeast(0f) else 0f
         val params = DspParams(
             graphic = graphic,
             graphicFreqs = layout.freqs,
             graphicQ = layout.q,
             parametric = ap.dspParametric.map { DspBand(it.freqHz, it.gainDb, it.q, it.type) },
-            preampDb = ap.dspPreampDb,
+            preampDb = ap.dspPreampDb + correctionTrimDb + autoPre,
             balance = ap.dspBalance,
             width = if (monoAudioPref) 0f else ap.dspWidth,
             crossfeed = ap.dspCrossfeed,
@@ -277,6 +333,7 @@ class PlaybackService : MediaLibraryService() {
         auroraDsp.update(params)
         auroraDsp.enabled = mode == DspMode.CUSTOM
         audioEffects?.setMasterEnabled(mode == DspMode.SYSTEM)
+        correctionConv.enabled = correctionActive && mode == DspMode.CUSTOM
 
         convolver.enabled = ap.dspConvEnabled
         convolver.setMakeup(ap.dspConvMakeupDb)
@@ -370,6 +427,7 @@ class PlaybackService : MediaLibraryService() {
         // anything that alters samples breaks bit-perfect
         val modifying = (ap?.dspMode == DspMode.CUSTOM) || (ap?.dspMode == DspMode.SYSTEM) ||
             monoAudioPref || (ap?.replayGain ?: 0) != 0 || (ap?.dspConvEnabled == true) ||
+            correctionActive ||
             kotlin.math.abs(player.playbackParameters.speed - 1f) > 0.001f
         val isBt = device != null && (
             device.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||

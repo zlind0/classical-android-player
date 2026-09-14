@@ -24,10 +24,14 @@ class AutoEqController(
 
     @Volatile private var enabled = false
     @Volatile private var bindings: List<EqBinding> = emptyList()
+    @Volatile private var deviceProfiles: Map<String, String> = emptyMap()
+    @Volatile private var audioProfiles: List<AudioProfile> = emptyList()
 
     init {
         scope.launch { settingsStore.autoEqAutoSwitch.collect { enabled = it; applyForCurrent() } }
         scope.launch { settingsStore.eqBindings.collect { bindings = it; applyForCurrent() } }
+        scope.launch { settingsStore.deviceProfiles.collect { deviceProfiles = it; applyForCurrent() } }
+        scope.launch { settingsStore.audioProfiles.collect { audioProfiles = it; applyForCurrent() } }
         runCatching {
             am?.registerAudioDeviceCallback(object : AudioDeviceCallback() {
                 override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>?) = applyForCurrent()
@@ -65,17 +69,76 @@ class AutoEqController(
     private fun applyForCurrent() {
         if (!enabled) return
         val key = currentOutputKey()
-        val b = bindings.firstOrNull { it.deviceKey == key }
         val notify = key != lastToastKey
         lastToastKey = key
+        // v0.5 AudioProfile binding wins over legacy correction bindings
+        val profileId = deviceProfiles[key]
+        val profile = profileId?.let { id -> audioProfiles.firstOrNull { it.id == id } }
+        if (profile != null) {
+            scope.launch {
+                applyAudioProfile(profile)
+                if (notify) toast("${profile.name} → ${currentOutputLabel()}")
+            }
+            return
+        }
+        val b = bindings.firstOrNull { it.deviceKey == key }
         // never wipe a manually-set correction on an unbound device
         if (b == null) return
         scope.launch {
-            settingsStore.setDspParametric(b.bands)
-            settingsStore.setDspPreamp(b.preampDb)
-            settingsStore.setDspMode(DspMode.CUSTOM)
-            settingsStore.setActiveEqProfile(b.profileName)
+            if (b.correctionId.isNotBlank()) {
+                settingsStore.setActiveCorrectionId(b.correctionId)
+                settingsStore.setDspMode(DspMode.CUSTOM)
+                settingsStore.setActiveEqProfile(b.profileName)
+            } else {
+                settingsStore.setDspParametric(b.bands)
+                settingsStore.setDspPreamp(b.preampDb)
+                settingsStore.setDspMode(DspMode.CUSTOM)
+                settingsStore.setActiveEqProfile(b.profileName)
+            }
             if (notify) toast("AutoEQ: ${b.profileName} → ${b.deviceLabel}")
         }
+    }
+
+    /** Applies a whole-chain snapshot (plan §30). Public so the Profiles UI can reuse it. */
+    suspend fun applyAudioProfile(profile: AudioProfile) {
+        settingsStore.setActiveCorrectionId(profile.correctionId.ifBlank { "flat" })
+        settingsStore.setDspGraphicLayout(profile.graphicLayout)
+        settingsStore.setDspGraphicBands(profile.graphic)
+        settingsStore.setDspParametric(profile.parametric)
+        settingsStore.setDspConvEnabled(profile.convEnabled)
+        if (profile.convIrPath.isNotBlank()) settingsStore.setDspConvIr(profile.convIrPath, profile.convIrName)
+        settingsStore.setDspConvMakeup(profile.convMakeupDb)
+        settingsStore.setDspCompEnabled(profile.compEnabled)
+        settingsStore.setDspCompThresh(profile.compThreshDb)
+        settingsStore.setDspCompRatio(profile.compRatio)
+        settingsStore.setDspLimiterEnabled(profile.limiterEnabled)
+        settingsStore.setDspCeiling(profile.limiterCeilingDb)
+        settingsStore.setReplayGain(profile.replayGain)
+        settingsStore.setDspMode(DspMode.CUSTOM)
+        settingsStore.setActiveEqProfile(profile.name)
+    }
+
+    /** Snapshots the current chain into a named profile. */
+    suspend fun snapshotCurrent(name: String, prefs: AudioPrefs, correctionId: String): AudioProfile {
+        val profile = AudioProfile(
+            id = "ap_${System.currentTimeMillis()}",
+            name = name,
+            correctionId = correctionId.ifBlank { "flat" },
+            graphic = prefs.dspGraphicBands,
+            graphicLayout = prefs.dspGraphicLayout,
+            parametric = prefs.dspParametric,
+            convEnabled = prefs.dspConvEnabled,
+            convIrPath = prefs.dspConvIrPath,
+            convIrName = prefs.dspConvIrName,
+            convMakeupDb = prefs.dspConvMakeupDb,
+            compEnabled = prefs.dspCompEnabled,
+            compThreshDb = prefs.dspCompThreshDb,
+            compRatio = prefs.dspCompRatio,
+            limiterEnabled = prefs.dspLimiterEnabled,
+            limiterCeilingDb = prefs.dspLimiterCeilingDb,
+            replayGain = prefs.replayGain,
+        )
+        settingsStore.upsertAudioProfile(profile)
+        return profile
     }
 }

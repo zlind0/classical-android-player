@@ -162,12 +162,13 @@ data class AudioPrefs(
     val dspConvIrPath: String = "",
     val dspConvIrName: String = "",
     val dspConvMakeupDb: Float = 0f,
-    val dspGraphicLayout: Int = 0,          // index into DspCoeffBuilder.GRAPHIC_LAYOUTS
+    val dspGraphicLayout: Int = 3,          // index into DspCoeffBuilder.GRAPHIC_LAYOUTS (3 = 16-band user EQ)
     val dspSaturation: Float = 0f,
     val dspDelayLeftMs: Float = 0f,
     val dspDelayRightMs: Float = 0f,
     val dspTrimLeftDb: Float = 0f,
     val dspTrimRightDb: Float = 0f,
+    val dspAutoHeadroom: Boolean = true,   // v0.5: automatic preamp = -max positive gain (plan §28)
 )
 
 object ThemeMode { const val SYSTEM = 0; const val LIGHT = 1; const val DARK = 2; const val AMOLED = 3 }
@@ -230,6 +231,8 @@ data class EqBinding(
     val profileName: String = "",
     val preampDb: Float = 0f,
     val bands: List<ParamBand> = emptyList(),
+    // v0.5+: CorrectionProfile id; when set, the binding applies it instead of raw bands
+    val correctionId: String = "",
 )
 
 data class AlarmPrefs(
@@ -299,6 +302,10 @@ class SettingsStore(private val context: Context) {
         val SQUIG_BASE = stringPreferencesKey("squig_base_url")
         val SQUIG_TARGET = stringPreferencesKey("squig_target")
         val ACOUSTID_KEY = stringPreferencesKey("acoustid_key")           // survives logout
+        val CORRECTION_PROFILES = stringPreferencesKey("correction_profiles")
+        val ACTIVE_CORRECTION = stringPreferencesKey("active_correction_id")
+        val AUDIO_PROFILES = stringPreferencesKey("audio_profiles")
+        val DEVICE_PROFILES = stringPreferencesKey("device_profiles")   // "deviceKey:profileId;..."
         val EQ_BINDINGS = stringPreferencesKey("eq_bindings")
         val AUTOEQ_SWITCH = booleanPreferencesKey("autoeq_autoswitch")
         val AUTOEQ_PROFILE = stringPreferencesKey("autoeq_active_profile")
@@ -332,6 +339,7 @@ class SettingsStore(private val context: Context) {
         val DSP_DELAY_R = floatPreferencesKey("dsp_delay_r")
         val DSP_TRIM_L = floatPreferencesKey("dsp_trim_l")
         val DSP_TRIM_R = floatPreferencesKey("dsp_trim_r")
+        val DSP_AUTO_HEADROOM = booleanPreferencesKey("dsp_auto_headroom")
         val UI_THEME_MODE = intPreferencesKey("ui_theme_mode")
         val UI_THEME_STYLE = intPreferencesKey("ui_theme_style")
         val UI_ACCENT_MODE = intPreferencesKey("ui_accent_mode")
@@ -402,6 +410,7 @@ class SettingsStore(private val context: Context) {
             dspDelayRightMs = p[Keys.DSP_DELAY_R] ?: 0f,
             dspTrimLeftDb = p[Keys.DSP_TRIM_L] ?: 0f,
             dspTrimRightDb = p[Keys.DSP_TRIM_R] ?: 0f,
+            dspAutoHeadroom = p[Keys.DSP_AUTO_HEADROOM] ?: true,
         )
     }
 
@@ -443,6 +452,75 @@ class SettingsStore(private val context: Context) {
     val eqBindings: Flow<List<EqBinding>> = context.dataStore.data.map { parseBindings(it[Keys.EQ_BINDINGS]) }.distinctUntilChanged()
     val autoEqAutoSwitch: Flow<Boolean> = context.dataStore.data.map { it[Keys.AUTOEQ_SWITCH] ?: false }.distinctUntilChanged()
     val activeEqProfile: Flow<String> = context.dataStore.data.map { it[Keys.AUTOEQ_PROFILE] ?: "" }
+
+    // v0.5 correction profiles (128-band device correction)
+    val correctionProfiles: Flow<List<CorrectionProfile>> = context.dataStore.data.map { p ->
+        parseCorrections(p[Keys.CORRECTION_PROFILES])
+    }.distinctUntilChanged()
+    val activeCorrectionId: Flow<String> = context.dataStore.data.map { it[Keys.ACTIVE_CORRECTION] ?: "flat" }.distinctUntilChanged()
+
+    private fun parseCorrections(json: String?): List<CorrectionProfile> = runCatching {
+        if (json.isNullOrBlank()) emptyList()
+        else gson.fromJson<List<CorrectionProfile>>(json, object : TypeToken<List<CorrectionProfile>>() {}.type) ?: emptyList()
+    }.getOrDefault(emptyList())
+
+    suspend fun upsertCorrectionProfile(profile: CorrectionProfile) = context.dataStore.edit { p ->
+        val cur = parseCorrections(p[Keys.CORRECTION_PROFILES]).filterNot { it.id == profile.id }
+        p[Keys.CORRECTION_PROFILES] = gson.toJson(cur + profile)
+    }
+
+    suspend fun removeCorrectionProfile(id: String) = context.dataStore.edit { p ->
+        if (id == "flat") return@edit
+        p[Keys.CORRECTION_PROFILES] = gson.toJson(parseCorrections(p[Keys.CORRECTION_PROFILES]).filterNot { it.id == id })
+        if (p[Keys.ACTIVE_CORRECTION] == id) p.remove(Keys.ACTIVE_CORRECTION)
+    }
+
+    suspend fun setActiveCorrectionId(id: String) = context.dataStore.edit { it[Keys.ACTIVE_CORRECTION] = id }
+
+    // v0.5 audio profiles (whole-chain snapshots) + per-output mapping
+    val audioProfiles: Flow<List<AudioProfile>> = context.dataStore.data.map { p ->
+        runCatching {
+            val json = p[Keys.AUDIO_PROFILES]
+            if (json.isNullOrBlank()) emptyList()
+            else gson.fromJson<List<AudioProfile>>(json, object : TypeToken<List<AudioProfile>>() {}.type) ?: emptyList()
+        }.getOrDefault(emptyList())
+    }.distinctUntilChanged()
+
+    suspend fun upsertAudioProfile(profile: AudioProfile) = context.dataStore.edit { p ->
+        val cur = runCatching {
+            val json = p[Keys.AUDIO_PROFILES]
+            if (json.isNullOrBlank()) emptyList<AudioProfile>()
+            else gson.fromJson<List<AudioProfile>>(json, object : TypeToken<List<AudioProfile>>() {}.type) ?: emptyList()
+        }.getOrDefault(emptyList()).filterNot { it.id == profile.id }
+        p[Keys.AUDIO_PROFILES] = gson.toJson(cur + profile)
+    }
+
+    suspend fun removeAudioProfile(id: String) = context.dataStore.edit { p ->
+        val cur = runCatching {
+            val json = p[Keys.AUDIO_PROFILES]
+            if (json.isNullOrBlank()) emptyList<AudioProfile>()
+            else gson.fromJson<List<AudioProfile>>(json, object : TypeToken<List<AudioProfile>>() {}.type) ?: emptyList()
+        }.getOrDefault(emptyList())
+        p[Keys.AUDIO_PROFILES] = gson.toJson(cur.filterNot { it.id == id })
+        val map = parseDeviceProfiles(p[Keys.DEVICE_PROFILES]).filterValues { it != id }
+        p[Keys.DEVICE_PROFILES] = map.entries.joinToString(";") { "${it.key}:${it.value}" }
+    }
+
+    val deviceProfiles: Flow<Map<String, String>> = context.dataStore.data.map { parseDeviceProfiles(it[Keys.DEVICE_PROFILES]) }.distinctUntilChanged()
+
+    private fun parseDeviceProfiles(s: String?): Map<String, String> {
+        if (s.isNullOrBlank()) return emptyMap()
+        return s.split(";").mapNotNull { e ->
+            val kv = e.split(":", limit = 2)
+            if (kv.size == 2 && kv[0].isNotBlank() && kv[1].isNotBlank()) kv[0] to kv[1] else null
+        }.toMap()
+    }
+
+    suspend fun bindDeviceProfile(deviceKey: String, profileId: String) = context.dataStore.edit { p ->
+        val map = parseDeviceProfiles(p[Keys.DEVICE_PROFILES]).toMutableMap()
+        if (profileId.isBlank()) map.remove(deviceKey) else map[deviceKey] = profileId
+        p[Keys.DEVICE_PROFILES] = map.entries.joinToString(";") { "${it.key}:${it.value}" }
+    }
 
     private fun parseBindings(json: String?): List<EqBinding> = runCatching {
         if (json.isNullOrBlank()) emptyList()
@@ -679,6 +757,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setDspDelayRight(v: Float) = context.dataStore.edit { it[Keys.DSP_DELAY_R] = v }
     suspend fun setDspTrimLeft(v: Float) = context.dataStore.edit { it[Keys.DSP_TRIM_L] = v }
     suspend fun setDspTrimRight(v: Float) = context.dataStore.edit { it[Keys.DSP_TRIM_R] = v }
+    suspend fun setDspAutoHeadroom(v: Boolean) = context.dataStore.edit { it[Keys.DSP_AUTO_HEADROOM] = v }
 
     suspend fun setThemeMode(v: Int) = context.dataStore.edit { it[Keys.UI_THEME_MODE] = v }
     suspend fun setThemeStyle(v: Int) = context.dataStore.edit { it[Keys.UI_THEME_STYLE] = v.coerceIn(ThemeStyle.AURORA, ThemeStyle.GLASS) }

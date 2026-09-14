@@ -29,7 +29,15 @@ object DspCoeffBuilder {
                 800f, 1000f, 1250f, 1600f, 2000f, 2500f, 3150f, 4000f, 5000f, 6300f, 8000f, 10000f, 12500f, 16000f, 20000f),
             4.32f,
         ),
+        // Classical fork v0.5 (plan §27): fixed 16-band user post-EQ, -12..+12 dB per band
+        GraphicLayout(
+            "16-band",
+            floatArrayOf(20f, 31.5f, 50f, 80f, 125f, 200f, 315f, 500f, 800f, 1250f, 2000f, 3150f, 5000f, 8000f, 12500f, 20000f),
+            1.2f,
+        ),
     )
+
+    const val USER_EQ_LAYOUT = 3
 
     fun build(p: DspParams, sampleRate: Int): Coeffs {
         val fs = sampleRate.coerceAtLeast(8000)
