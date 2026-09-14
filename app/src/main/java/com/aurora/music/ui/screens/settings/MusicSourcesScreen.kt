@@ -1,6 +1,8 @@
 package com.aurora.music.ui.screens.settings
 
 import androidx.compose.foundation.clickable
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -19,12 +21,15 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Usb
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -34,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.MusicRoot
@@ -61,6 +67,22 @@ fun MusicSourcesScreen(
     val scope = rememberCoroutineScope()
     var picking by remember { mutableStateOf(false) }
     var scanJob by remember { mutableStateOf<Job?>(null) }
+
+    // re-check access when coming back from system settings
+    val owner = LocalLifecycleOwner.current
+    var resumeTick by remember { mutableIntStateOf(0) }
+    DisposableEffect(owner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) resumeTick++
+        }
+        owner.lifecycle.addObserver(obs)
+        onDispose { owner.lifecycle.removeObserver(obs) }
+    }
+    val ctx = LocalContext.current
+    resumeTick // recompute below on each resume
+    val readOk = remember(resumeTick) { com.aurora.music.data.hasStorageRead(ctx) }
+    val fullOk = remember(resumeTick) { com.aurora.music.data.canScanStorage(ctx) }
+    val readLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { resumeTick++ }
 
     if (picking) {
         FolderPickerScreen(
@@ -90,6 +112,40 @@ fun MusicSourcesScreen(
     Column(Modifier.fillMaxWidth()) {
         SettingsTopBar("Music sources", onBack)
         LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp)) {
+            // plan §64: permission first — without it the picker lists nothing and scans find nothing
+            if (!fullOk) {
+                item {
+                    SettingsGroup {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+                            Text(
+                                if (!readOk) "Storage permission needed"
+                                else "All-files access needed",
+                                style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                if (!readOk) "Allow Aurora to read audio files on this device."
+                                else "Android 11+ also requires All-files access for folder browsing.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Row(Modifier.fillMaxWidth()) {
+                                if (!readOk) {
+                                    Button(onClick = { readLauncher.launch(com.aurora.music.data.storageReadPermission()) }) {
+                                        Text("Grant read access")
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                if (com.aurora.music.data.needsAllFilesRow()) {
+                                    Button(onClick = { com.aurora.music.data.openAllFilesSettings(ctx) }) {
+                                        Text("Open all-files settings")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             item { SettingsSectionTitle("Scan roots") }
             if (roots.isEmpty()) {
                 item {

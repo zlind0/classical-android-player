@@ -117,6 +117,16 @@ fun PermissionsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                     audioLauncher.launch(audioPerm)
                 }
             }
+            if (com.aurora.music.data.needsAllFilesRow()) {
+                item {
+                    val fullOk = com.aurora.music.data.hasAllFilesAccess(ctx)
+                    PermRow(
+                        Icons.Filled.LibraryMusic, "All files access",
+                        "Let the folder scanner browse SD card / USB directories directly (Android 11+ requires this)",
+                        fullOk,
+                    ) { com.aurora.music.data.openAllFilesSettings(ctx) }
+                }
+            }
             item {
                 PermRow(Icons.Filled.BatteryStd, "Ignore battery optimization", "Keep scanning & playback running in the background", batteryOk) {
                     open(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, withPackage = true)

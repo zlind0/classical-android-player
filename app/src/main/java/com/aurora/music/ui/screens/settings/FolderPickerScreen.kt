@@ -1,5 +1,7 @@
 package com.aurora.music.ui.screens.settings
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -21,7 +23,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -31,9 +35,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.StorageType
 import com.aurora.music.data.StorageVolume
+import com.aurora.music.data.hasStorageRead
+import com.aurora.music.data.storageReadPermission
 import java.io.File
 
 // Classical fork v0.3 (plan §4/§56): traditional file-system folder picker.
@@ -50,14 +59,21 @@ fun FolderPickerScreen(
     var volume by remember { mutableStateOf(volumes.firstOrNull()) }
     var current by remember(volume) { mutableStateOf(volume?.rootPath ?: "") }
 
-    // plan §64-65: listing needs READ_EXTERNAL_STORAGE (API ≤32) / READ_MEDIA_AUDIO (API 33+)
+    // plan §64-65: listing needs read permission, and browsing shared folders on
+    // API 30+ additionally needs All-files access
     val ctx = LocalContext.current
-    val hasRead = remember {
-        val perm = if (android.os.Build.VERSION.SDK_INT >= 33) android.Manifest.permission.READ_MEDIA_AUDIO
-        else android.Manifest.permission.READ_EXTERNAL_STORAGE
-        androidx.core.content.ContextCompat.checkSelfPermission(ctx, perm) ==
-            android.content.pm.PackageManager.PERMISSION_GRANTED
+    var resumeTick by remember { mutableIntStateOf(0) }
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val obs = LifecycleEventObserver { _, e ->
+            if (e == Lifecycle.Event.ON_RESUME) resumeTick++
+        }
+        owner.lifecycle.addObserver(obs)
+        onDispose { owner.lifecycle.removeObserver(obs) }
     }
+    resumeTick
+    val hasRead = remember(resumeTick) { hasStorageRead(ctx) }
+    val readLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { resumeTick++ }
 
     val dirs = remember(current) { container.volumeManager.listDirs(current) ?: emptyList() }
     val canSelect = remember(current) {
@@ -68,12 +84,17 @@ fun FolderPickerScreen(
     Column(Modifier.fillMaxWidth()) {
         SettingsTopBar("Select music folder", onBack)
         if (!hasRead) {
-            Text(
-                "Storage permission not granted — grant it in Settings → Permissions first, then come back.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-            )
+            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
+                Text(
+                    "Storage permission not granted — the folder list will be empty.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = { readLauncher.launch(storageReadPermission()) }) {
+                    Text("Grant read access")
+                }
+            }
         }
         LazyColumn(Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(bottom = 8.dp)) {
             item { SettingsSectionTitle("Storage") }
