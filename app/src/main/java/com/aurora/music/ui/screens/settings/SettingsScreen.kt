@@ -53,7 +53,6 @@ fun SettingsScreen(
     onOpenEq: () -> Unit,
     onOpenVisualizer: () -> Unit,
     onOpenSonic: () -> Unit,
-    onOpenSources: () -> Unit,
     onOpenDownloads: () -> Unit,
     onOpenAppearance: () -> Unit,
     onOpenGestures: () -> Unit,
@@ -61,19 +60,11 @@ fun SettingsScreen(
     onOpenPermissions: () -> Unit,
     onOpenAbout: () -> Unit,
     onOpenProfile: () -> Unit,
-    onOpenAccounts: () -> Unit,
     onOpenBackup: () -> Unit,
-    onLogout: () -> Unit,
 ) {
     val container = (androidx.compose.ui.platform.LocalContext.current.applicationContext as com.aurora.music.AuroraApplication).container
     val session by container.settingsStore.session.collectAsStateWithLifecycle(initialValue = null)
     val downloads by container.downloadManager.downloads.collectAsStateWithLifecycle()
-    val serverBadge = when (session?.type) {
-        com.aurora.music.data.ServerType.SPOTIFY -> "SPOTIFY"
-        com.aurora.music.data.ServerType.JELLYFIN -> "JELLYFIN"
-        com.aurora.music.data.ServerType.LOCAL -> "LOCAL"
-        else -> "NAVIDROME"
-    }
 
     Column(Modifier.fillMaxWidth()) {
         SettingsTopBar("Settings", onBack)
@@ -105,15 +96,8 @@ fun SettingsScreen(
                         Text("View profile", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                     }
                     Box(Modifier.clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.primary).padding(horizontal = 12.dp, vertical = 6.dp)) {
-                        Text(serverBadge, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onPrimary)
+                        Text("LOCAL", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onPrimary)
                     }
-                }
-            }
-
-            item { SettingsSectionTitle("Account") }
-            item {
-                SettingsGroup {
-                    SettingsNavRow(Icons.Filled.SwitchAccount, "Servers & accounts", "Switch between saved logins", onClick = onOpenAccounts)
                 }
             }
 
@@ -138,9 +122,7 @@ fun SettingsScreen(
             item { SettingsSectionTitle("Library") }
             item {
                 SettingsGroup {
-                    SettingsNavRow(Icons.Filled.MergeType, "Library & sources", "Best-source playback order, unified multi-server library", onClick = onOpenSources)
-                    SettingsRowDivider()
-                    SettingsNavRow(Icons.Filled.Download, "Downloads & storage", "${downloads.size} downloaded · quality, offline", onClick = onOpenDownloads)
+                    SettingsNavRow(Icons.Filled.Download, "Downloads & storage", "${downloads.size} downloaded", onClick = onOpenDownloads)
                 }
             }
 
@@ -149,14 +131,14 @@ fun SettingsScreen(
                 SettingsGroup {
                     SettingsNavRow(Icons.Filled.Palette, "Appearance", "Theme, accent, layout", onClick = onOpenAppearance)
                     SettingsRowDivider()
-                    SettingsNavRow(Icons.Filled.TouchApp, "Gestures & behaviour", "Swipe, haptics, private session", onClick = onOpenGestures)
+                    SettingsNavRow(Icons.Filled.TouchApp, "Gestures & behaviour", "Swipe, haptics, autoplay", onClick = onOpenGestures)
                 }
             }
 
             item { SettingsSectionTitle("Connections") }
             item {
                 SettingsGroup {
-                    SettingsNavRow(Icons.Filled.Extension, "Integrations", "Last.fm, ListenBrainz, Discord, lyrics", onClick = onOpenIntegrations)
+                    SettingsNavRow(Icons.Filled.Extension, "Integrations", "Lyrics, acoustic ID, artist info", onClick = onOpenIntegrations)
                     SettingsRowDivider()
                     SettingsNavRow(Icons.Filled.Lock, "Permissions", "Notifications, background, alarms, DAC", onClick = onOpenPermissions)
                     SettingsRowDivider()
@@ -168,21 +150,6 @@ fun SettingsScreen(
             item {
                 SettingsGroup {
                     SettingsNavRow(Icons.Filled.Backup, "Backup & restore", "Export or import your settings & playlists", onClick = onOpenBackup)
-                }
-            }
-
-            item {
-                Spacer(Modifier.height(20.dp))
-                Box(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp).clip(RoundedCornerShape(50))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh).clickable(onClick = onLogout).padding(vertical = 14.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.AutoMirrored.Filled.Logout, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Log out", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
-                    }
                 }
             }
         }

@@ -24,7 +24,6 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch { container.offline.collect { load() } }
-        viewModelScope.launch { container.accountEpoch.drop(1).collect { load() } }
         viewModelScope.launch { container.libraryReload.drop(1).collect { load() } }
     }
 

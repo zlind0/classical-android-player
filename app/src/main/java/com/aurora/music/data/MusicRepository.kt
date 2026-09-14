@@ -168,11 +168,6 @@ class MusicRepository(
         return backend?.search(query) ?: SearchResults()
     }
 
-    suspend fun scrobble(id: String) {
-        if (offline) return
-        backend?.scrobble(id)
-    }
-
     suspend fun radio(seedId: String): List<Song> {
         if (offline) return emptyList()
         return backend?.radio(seedId).orEmpty()

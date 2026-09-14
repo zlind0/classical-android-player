@@ -19,7 +19,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Speaker
@@ -45,108 +44,8 @@ private data class OutputDevice(val id: Int, val label: String, val icon: ImageV
 
 @Composable
 fun PlayerCastButton(modifier: Modifier = Modifier) {
-    var show by remember { mutableStateOf(false) }
-    Icon(
-        Icons.Filled.Cast, "Cast",
-        modifier = modifier.clip(CircleShape).clickable { show = true }.padding(8.dp),
-    )
-    if (show) CastSheet(onDismiss = { show = false })
-}
-
-// casting hands receiver a plain url so dsp/effects dont travel
-@Composable
-private fun CastRow() {
-    var show by remember { mutableStateOf(false) }
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { show = true }
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHigh),
-            contentAlignment = Alignment.Center,
-        ) { Icon(Icons.Filled.Cast, null, modifier = Modifier.size(20.dp)) }
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text("Cast to a device", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
-            Text("Chromecast · effects & DSP off", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-    if (show) CastSheet(onDismiss = { show = false })
-}
-
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-@Composable
-private fun CastSheet(onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    val router = remember { androidx.mediarouter.media.MediaRouter.getInstance(context.applicationContext) }
-    val selector = remember {
-        androidx.mediarouter.media.MediaRouteSelector.Builder()
-            .addControlCategory(
-                com.google.android.gms.cast.CastMediaControlIntent.categoryForCast(
-                    com.google.android.gms.cast.CastMediaControlIntent.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID,
-                ),
-            )
-            .build()
-    }
-    var routes by remember { mutableStateOf(emptyList<androidx.mediarouter.media.MediaRouter.RouteInfo>()) }
-    var selectedId by remember { mutableStateOf(router.selectedRoute.id) }
-
-    androidx.compose.runtime.DisposableEffect(Unit) {
-        fun refresh() {
-            routes = router.routes.filter { it.matchesSelector(selector) }
-            selectedId = router.selectedRoute.id
-        }
-        val cb = object : androidx.mediarouter.media.MediaRouter.Callback() {
-            override fun onRouteAdded(r: androidx.mediarouter.media.MediaRouter, route: androidx.mediarouter.media.MediaRouter.RouteInfo) = refresh()
-            override fun onRouteRemoved(r: androidx.mediarouter.media.MediaRouter, route: androidx.mediarouter.media.MediaRouter.RouteInfo) = refresh()
-            override fun onRouteChanged(r: androidx.mediarouter.media.MediaRouter, route: androidx.mediarouter.media.MediaRouter.RouteInfo) = refresh()
-            override fun onRouteSelected(r: androidx.mediarouter.media.MediaRouter, route: androidx.mediarouter.media.MediaRouter.RouteInfo, reason: Int) = refresh()
-            override fun onRouteUnselected(r: androidx.mediarouter.media.MediaRouter, route: androidx.mediarouter.media.MediaRouter.RouteInfo, reason: Int) = refresh()
-        }
-        router.addCallback(selector, cb, androidx.mediarouter.media.MediaRouter.CALLBACK_FLAG_PERFORM_ACTIVE_SCAN)
-        refresh()
-        onDispose { router.removeCallback(cb) }
-    }
-
-    val casting = router.selectedRoute.id != router.defaultRoute.id
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp).padding(bottom = 28.dp)) {
-            Text("Cast to a device", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, modifier = Modifier.padding(start = 16.dp))
-            Text("Effects & DSP are off while casting", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
-            if (routes.isEmpty()) {
-                Text("Searching for devices…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
-            }
-            routes.forEach { route ->
-                val selected = route.id == selectedId
-                Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { route.select(); onDismiss() }.padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.size(40.dp).clip(CircleShape).background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Filled.Cast, null, tint = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(20.dp))
-                    }
-                    Spacer(Modifier.width(14.dp))
-                    Text(route.name, style = MaterialTheme.typography.titleSmall, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium, color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-                    if (selected) Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary)
-                }
-            }
-            if (casting) {
-                Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable {
-                        router.unselect(androidx.mediarouter.media.MediaRouter.UNSELECT_REASON_STOPPED); onDismiss()
-                    }.padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHigh), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Filled.Speaker, null, modifier = Modifier.size(20.dp))
-                    }
-                    Spacer(Modifier.width(14.dp))
-                    Text("Stop casting", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
-                }
-            }
-        }
-    }
+    // Chromecast removed in the local-only fork; the output sheet covers device choice.
+    Spacer(modifier)
 }
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
@@ -164,7 +63,6 @@ fun OutputDeviceSheet(currentId: Int, onSelect: (Int) -> Unit, onDismiss: () -> 
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp).padding(bottom = 28.dp)) {
             Text("Play on", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
-            CastRow()
             devices.forEach { d ->
                 val selected = d.id == currentId
                 Row(

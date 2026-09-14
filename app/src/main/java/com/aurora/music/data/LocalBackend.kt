@@ -79,8 +79,6 @@ class LocalBackend(
         )
     }
 
-    override suspend fun scrobble(id: String) { /* last.fm handled separately */ }
-
     override suspend fun radio(seedId: String): List<Song> {
         library.ensureLoaded()
         val seed = library.song(seedId)

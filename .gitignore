@@ -1,0 +1,13 @@
+# Classical fork: upstream ships no gitignore; keep build outputs out of the repo.
+*.iml
+.gradle/
+/local.properties
+.idea/
+.DS_Store
+/build/
+/app/build/
+decent/*/build/
+.cxx/
+app/.cxx/
+decent/*/.cxx/
+*.hprof

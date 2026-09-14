@@ -19,13 +19,10 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Podcasts
-import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Workspaces
@@ -52,9 +49,6 @@ fun SidebarContent(
     onHistory: () -> Unit,
     onStats: () -> Unit,
     onDuplicates: () -> Unit,
-    onRadio: () -> Unit = {},
-    onPodcasts: () -> Unit = {},
-    onLogout: () -> Unit,
 ) {
     val initials = username.take(2).uppercase().ifBlank { "ME" }
     val host = server.removePrefix("http://").removePrefix("https://").ifBlank { "View profile" }
@@ -96,16 +90,12 @@ fun SidebarContent(
 
         DrawerItem(Icons.Filled.Person, "Profile") { onProfile() }
         DrawerItem(Icons.AutoMirrored.Filled.QueueMusic, "Your Library") { onLibrary() }
-        DrawerItem(Icons.Filled.Radio, "Radio") { onRadio() }
-        DrawerItem(Icons.Filled.Podcasts, "Podcasts") { onPodcasts() }
         DrawerItem(Icons.Filled.History, "Listening history") { onHistory() }
         DrawerItem(Icons.Filled.Workspaces, "Listening stats") { onStats() }
         DrawerItem(Icons.Filled.ContentCopy, "Find duplicates") { onDuplicates() }
         DrawerItem(Icons.Filled.Settings, "Settings") { onSettings() }
 
         Spacer(Modifier.weight(1f))
-
-        DrawerItem(Icons.AutoMirrored.Filled.Logout, "Log out", tint = MaterialTheme.colorScheme.error) { onLogout() }
         Spacer(Modifier.height(16.dp))
     }
 }

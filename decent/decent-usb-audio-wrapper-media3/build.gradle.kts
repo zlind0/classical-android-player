@@ -32,7 +32,4 @@ dependencies {
     implementation("androidx.media3:media3-common:1.5.1")
     implementation("androidx.media3:media3-datasource:1.5.1")
     implementation("androidx.media3:media3-database:1.5.1")
-
-    // JSch fork (maintained) — SFTP streaming with native offset seek.
-    implementation("com.github.mwiede:jsch:0.2.23")
 }

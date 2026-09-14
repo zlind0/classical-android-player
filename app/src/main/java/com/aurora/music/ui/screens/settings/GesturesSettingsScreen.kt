@@ -34,7 +34,6 @@ fun GesturesSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val store = container.settingsStore
     val gestures by store.gesturePrefs.collectAsStateWithLifecycle(initialValue = GesturePrefs())
     val haptics by store.haptics.collectAsStateWithLifecycle(initialValue = false)
-    val privateSession by store.privateSession.collectAsStateWithLifecycle(initialValue = false)
     val playback by store.playbackPrefs.collectAsStateWithLifecycle(initialValue = PlaybackPrefs())
     var notifications by remember { mutableStateOf(true) }
     val scope = rememberCoroutineScope()
@@ -65,11 +64,7 @@ fun GesturesSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                 SettingsGroup {
                     SettingsSwitchRow(Icons.Filled.Notifications, "Push notifications", "New releases & recommendations", notifications) { notifications = it }
                     SettingsRowDivider()
-                    SettingsSwitchRow(Icons.Filled.Radio, "Autoplay radio", "Keep playing similar tracks when the queue ends", playback.autoplayRadio) { v -> scope.launch { store.setAutoplayRadio(v) } }
-                    SettingsRowDivider()
-                    SettingsSwitchRow(Icons.Filled.History, "Scrobble", "Report plays to your server", playback.scrobble) { v -> scope.launch { store.setScrobble(v) } }
-                    SettingsRowDivider()
-                    SettingsSwitchRow(Icons.Filled.Lock, "Private session", "Don't report plays to your server or Last.fm", privateSession) { v -> scope.launch { store.setPrivateSession(v) } }
+                    SettingsSwitchRow(Icons.Filled.Radio, "Autoplay radio", "Keep playing similar local tracks when the queue ends", playback.autoplayRadio) { v -> scope.launch { store.setAutoplayRadio(v) } }
                 }
             }
         }

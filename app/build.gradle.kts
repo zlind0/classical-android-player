@@ -97,12 +97,8 @@ dependencies {
     implementation(libs.okhttp.logging)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.palette)
-    implementation(libs.newpipeextractor)
     implementation(libs.glance.appwidget)
     implementation(libs.glance.material3)
-    implementation(libs.media3.cast)
-    implementation(libs.play.services.cast.framework)
-    implementation(libs.androidx.mediarouter)
     implementation(libs.jaudiotagger)
     // Experimental USB bit-perfect audio driver (vendored decent-player, MIT).
     implementation(project(":decent-usb-audio-wrapper-media3"))

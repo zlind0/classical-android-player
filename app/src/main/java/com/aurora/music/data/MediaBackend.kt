@@ -28,7 +28,7 @@ interface MediaBackend {
     suspend fun starredIds(): Set<String>
     suspend fun songFor(id: String): Song?
     suspend fun search(query: String): SearchResults
-    suspend fun scrobble(id: String)
+    // local autoplay mix (same-artist led); NOT internet radio
     suspend fun radio(seedId: String): List<Song>
     suspend fun createPlaylist(name: String): Boolean
     suspend fun updatePlaylist(id: String, name: String?, comment: String?): Boolean

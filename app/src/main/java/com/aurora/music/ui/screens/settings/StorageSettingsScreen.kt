@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.GraphicEq
@@ -23,7 +22,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,19 +30,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
-import kotlinx.coroutines.launch
 
 @Composable
 fun StorageSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val container = LocalContextApp()
     val downloads by container.downloadManager.downloads.collectAsStateWithLifecycle()
-    val offline by container.settingsStore.offlineMode.collectAsStateWithLifecycle(initialValue = false)
-    val prefs by container.settingsStore.playbackPrefs.collectAsStateWithLifecycle(initialValue = com.aurora.music.data.PlaybackPrefs())
-    val isLocal = container.isLocal
-    val scope = rememberCoroutineScope()
     val bytes = remember(downloads) { container.downloadManager.totalBytes() }
-    val rates = listOf(0, 128, 192, 256, 320)
-    val rateLabels = listOf("Lossless", "128", "192", "256", "320")
 
     Column(Modifier.fillMaxWidth()) {
         SettingsTopBar("Downloads & storage", onBack)
@@ -61,22 +52,8 @@ fun StorageSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                 }
             }
 
-            if (!isLocal) {
-                SettingsSectionTitle("Download quality")
-                SegmentedRow("Bitrate", rateLabels, rates.indexOf(prefs.downloadBitrate).coerceAtLeast(0)) { i ->
-                    scope.launch { container.settingsStore.setDownloadBitrate(rates[i]) }
-                }
-            }
-
-            SettingsSectionTitle("Offline")
-            SettingsGroup {
-                SettingsSwitchRow(Icons.Filled.CloudOff, "Offline mode", "Only show & play downloaded music", offline) { v ->
-                    scope.launch { container.settingsStore.setOfflineMode(v) }
-                }
-            }
-
-            // ReplayGain scan only meaningful for on-device files (servers ship their own gains).
-            if (isLocal) {
+            // ReplayGain scan measures on-device files (EBU R128) to level playback volume.
+            run {
                 val rg by container.replayGainScanner.progress.collectAsStateWithLifecycle()
                 SettingsSectionTitle("Volume leveling")
                 Row(

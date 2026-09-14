@@ -10,7 +10,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.ui.graphics.vector.ImageVector
 
 object Routes {
-    const val SIGN_IN = "sign_in"
     const val HOME = "home"
     const val SEARCH = "search"
     const val LIBRARY = "library"
@@ -26,21 +25,10 @@ object Routes {
     const val SETTINGS_VISUALIZER = "settings_visualizer"
     const val SETTINGS_SONIC = "settings_sonic"
     const val SETTINGS_PERMISSIONS = "settings_permissions"
-    const val SETTINGS_ACCOUNTS = "settings_accounts"
     const val SETTINGS_BACKUP = "settings_backup"
-    const val SETTINGS_SOURCES = "settings_sources"
-    const val DISCORD_LOGIN = "discord_login"
     const val HISTORY = "history"
     const val STATS = "stats"
     const val DUPLICATES = "duplicates"
-    const val RADIO = "radio"
-    const val PODCASTS = "podcasts"
-
-    // feed url has slashes and a query string so ride as encoded query params
-    const val PODCAST_DETAIL = "podcast?feed={feed}&title={title}&image={image}&author={author}"
-    fun podcastDetail(feed: String, title: String = "", image: String = "", author: String = "") =
-        "podcast?feed=${android.net.Uri.encode(feed)}&title=${android.net.Uri.encode(title)}" +
-            "&image=${android.net.Uri.encode(image)}&author=${android.net.Uri.encode(author)}"
     const val DETAIL = "detail/{kind}/{id}"
     fun detail(kind: String, id: String) = "detail/$kind/$id"
 

@@ -8,12 +8,7 @@ import android.os.VibratorManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import com.aurora.music.data.remote.JellyfinClient
-import com.aurora.music.data.remote.SpotifyClient
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
-import com.aurora.music.data.remote.SubsonicClient
-import com.aurora.music.model.Song
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -34,6 +29,8 @@ data class SignalPath(
     val note: String = "",
 )
 
+// Classical fork (local-only): the on-device library is the only backend.
+// There are no server sessions, no unified merge, no best-source rewriting.
 class AppContainer(context: Context) {
 
     private val appContext = context.applicationContext
@@ -71,125 +68,22 @@ class AppContainer(context: Context) {
         targetProvider = { squigTargetValue },
     )
 
-    @Volatile
-    private var maxBitrate: Int = 0
+    private val localSession = Session(server = "On this device", username = "Local Library", salt = "", token = "local", type = ServerType.LOCAL)
 
     @Volatile
-    private var downloadBitrate: Int = 0
-
-    @Volatile
-    private var preferLocalSources: Boolean = true
-
-    @Volatile
-    private var sourcePriorityValue: List<String> = DEFAULT_SOURCE_PRIORITY
-
-    @Volatile private var unifiedLibraryValue: Boolean = false
-    @Volatile private var mergeSourceKeys: Set<String> = emptySet()
-    @Volatile private var lastSession: Session? = null
-    private val localMergeSession = Session(server = "On this device", username = "Local Library", salt = "", token = "local", type = ServerType.LOCAL)
-
-    @Volatile
-    var backend: MediaBackend? = null
+    var backend: MediaBackend = LocalBackend(localLibrary, localStore, localSession)
         private set
 
-    // server base url stamped on downloads so they can be scoped per-server
-    private fun currentServerId(): String = backend?.session?.server ?: ""
-
-    val downloadManager = DownloadManager(
-        appContext,
-        streamUrlProvider = { id, bitrate, lossless -> backend?.streamUrl(id, bitrate, lossless) },
-        downloadBitrateProvider = { downloadBitrate },
-        currentServerIdProvider = { currentServerId() },
-        resolveSentinel = ::resolveYtSentinel,
-    )
+    // server downloads are gone; DownloadManager keeps serving the on-device download index
+    val downloadManager = DownloadManager(appContext)
 
     val sonicStore = SonicStore(appContext)
     val sonicEngine = SonicEngine(localLibrary, downloadManager, sonicStore)
 
-    val radioBrowser = com.aurora.music.data.remote.RadioBrowserClient()
-    val podcastClient = com.aurora.music.data.remote.PodcastClient()
-
     val artistInfoClient = com.aurora.music.data.remote.ArtistInfoClient()
     val artistInfoStore = ArtistInfoStore(appContext)
 
-    private fun resolveYtSentinel(sentinel: String): String? {
-        val uri = runCatching { android.net.Uri.parse(sentinel) }.getOrNull() ?: return null
-        if (uri.scheme != "aurora-yt") return null
-        return youtubeResolver.resolve(
-            uri.host.orEmpty(),
-            uri.getQueryParameter("q").orEmpty(),
-            uri.getQueryParameter("dur")?.toIntOrNull() ?: 0,
-        )
-    }
-
-    // rewrites only streamUrl/metadata id stays the server's so server features keep working
-    private fun localizeSong(song: Song): Song {
-        if (!preferLocalSources) return song
-        val alreadyLocal = song.streamUrl.startsWith("content://") || song.streamUrl.startsWith("file://")
-        for (tier in sourcePriorityValue) {
-            when (tier) {
-                "local" -> if (!alreadyLocal) {
-                    localLibrary.findMatch(song.artist, song.title, song.durationSec)?.let { return localizedFromFile(song, it) }
-                }
-                "downloaded" -> downloadManager.getByOriginalId(song.id)?.let { return localizedFromDownload(song, it.toSong()) }
-                "stream" -> return song
-            }
-        }
-        return song
-    }
-
-    // carry the file's replaygain + format so loudness/ui match what actually plays
-    private fun localizedFromFile(song: Song, local: Song): Song = song.copy(
-        streamUrl = local.streamUrl,
-        artworkUrl = song.artworkUrl.ifBlank { local.artworkUrl },
-        replayGainTrack = local.replayGainTrack,
-        replayGainAlbum = local.replayGainAlbum,
-        suffix = local.suffix,
-        bitrateKbps = local.bitrateKbps,
-        sampleRateHz = local.sampleRateHz,
-        bitDepth = local.bitDepth,
-        path = local.path,
-    )
-
-    private fun localizedFromDownload(song: Song, local: Song): Song =
-        song.copy(streamUrl = local.streamUrl, artworkUrl = local.artworkUrl.ifBlank { song.artworkUrl })
-
-    private fun buildBackend(session: Session): MediaBackend = when (session.type) {
-        ServerType.JELLYFIN -> JellyfinBackend(JellyfinClient(session), { maxBitrate }, ::localizeSong)
-        ServerType.SUBSONIC -> SubsonicBackend(SubsonicClient(session), { maxBitrate }, ::localizeSong)
-        ServerType.SPOTIFY -> SpotifyBackend(
-            SpotifyClient(session, spotifyClientIdValue, onTokenRefreshed = { tok -> scope.launch { settingsStore.updateToken(tok) } }),
-            { maxBitrate }, ::localizeSong,
-        )
-        ServerType.LOCAL -> LocalBackend(localLibrary, localStore, session)
-    }
-
-    private fun buildActiveBackend(session: Session, unified: Boolean, mergeKeys: Set<String>, saved: List<Session>): MediaBackend {
-        if (!unified || session.type == ServerType.SPOTIFY) return buildBackend(session)
-        // empty = all eligible servers MERGE_NONE sentinel = local files only
-        val serverSessions = if (mergeKeys == setOf(MERGE_NONE)) emptyList() else saved
-            .filter { it.type == ServerType.SUBSONIC || it.type == ServerType.JELLYFIN }
-            .filter { mergeKeys.isEmpty() || accountKey(it) in mergeKeys }
-            .distinctBy { accountKey(it) }
-        val sources = buildList {
-            add(LocalBackend(localLibrary, localStore, localMergeSession))
-            serverSessions.forEach { add(buildBackend(it)) }
-        }
-        return if (sources.size <= 1) buildBackend(session) else MergedBackend(sources, session)
-    }
-
-    private suspend fun rebuildBackend() {
-        val session = lastSession
-        backend = session?.let {
-            val saved = runCatching { settingsStore.savedSessions.first() }.getOrDefault(emptyList())
-            buildActiveBackend(it, unifiedLibraryValue, mergeSourceKeys, saved)
-        }
-    }
-
-    @Volatile private var spotifyClientIdValue: String = ""
-    val spotifyClientId: String get() = spotifyClientIdValue
-
-    val isLocal: Boolean get() = backend?.session?.type == ServerType.LOCAL
+    val isLocal: Boolean get() = true
 
     @Volatile private var hapticsEnabled = false
     private val vibrator: Vibrator? = runCatching {
@@ -209,10 +103,6 @@ class AppContainer(context: Context) {
         }
     }
 
-    private val _spotifyRedirect = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 1)
-    val spotifyRedirect = _spotifyRedirect.asSharedFlow()
-    fun emitSpotifyRedirect(code: String) { _spotifyRedirect.tryEmit(code) }
-
     val audioSessionId: Int = runCatching {
         (appContext.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager).generateAudioSessionId()
     }.getOrDefault(0)
@@ -221,62 +111,30 @@ class AppContainer(context: Context) {
 
     val visualizer = com.aurora.music.playback.VisualizerController(scope)
 
-    val lastfm = LastfmScrobbler(settingsStore, scope)
-
-    val listenBrainz = ListenBrainzScrobbler(settingsStore, scope)
-
-    val discord = DiscordRpc(settingsStore, scope)
-
-    val youtubeResolver = com.aurora.music.playback.YoutubeResolver()
-
     @Volatile
     private var lrclibEnabled: Boolean = true
 
     val lyricsRepository = LyricsRepository(backendProvider = { backend }, lrclibEnabledProvider = { lrclibEnabled })
 
     @Volatile
-    private var offlineToggle: Boolean = false
-
-    @Volatile
     private var networkUp: Boolean = true
-
-    @Volatile
-    private var onWifi: Boolean = true
-
-    @Volatile
-    private var streamWifi: Int = 0
-
-    @Volatile
-    private var streamCellular: Int = 0
-
-    @Volatile
-    private var dataSaver: Boolean = false
 
     // 0 = system default
     val preferredAudioDeviceId = MutableStateFlow(0)
 
     val signalPath = MutableStateFlow(SignalPath())
 
-    @Volatile
-    private var offlineFlag: Boolean = false
-
     private val _sessionReady = MutableStateFlow<Boolean?>(null)
     val sessionReady: StateFlow<Boolean?> = _sessionReady.asStateFlow()
 
-    // bumped only on a real account change not initial load or token refresh
-    private val _accountEpoch = MutableStateFlow(0)
-    val accountEpoch: StateFlow<Int> = _accountEpoch.asStateFlow()
-
-    // reloads home/library without the playback-stopping semantics of an account change
+    // reloads home/library without playback-stopping semantics
     private val _libraryReload = MutableStateFlow(0)
     val libraryReload: StateFlow<Int> = _libraryReload.asStateFlow()
-    @Volatile private var lastAccountKey: String? = null
-    private fun accountKey(s: Session?): String = s?.accountKey() ?: ""
 
-    fun currentAccountKey(): String = accountKey(backend?.session)
+    fun currentAccountKey(): String = "local"
 
     private val _offline = MutableStateFlow(false)
-    // effective offline manual toggle or no connectivity
+    // local-files mode never needs the network so it's never offline
     val offline: StateFlow<Boolean> = _offline.asStateFlow()
 
     private val _noNetwork = MutableStateFlow(false)
@@ -288,26 +146,15 @@ class AppContainer(context: Context) {
     val repository = MusicRepository(
         backendProvider = { backend },
         downloadManager = downloadManager,
-        offlineProvider = { offlineFlag },
-        currentServerIdProvider = { currentServerId() },
+        offlineProvider = { false },
+        currentServerIdProvider = { "" },
         smartPlaylistsProvider = { smartPlaylistsValue },
         smartEngine = smartEngine,
     )
 
     private fun recomputeOffline() {
-        // local-files mode never needs the network so it's never offline
-        val local = backend?.session?.type == ServerType.LOCAL
-        offlineFlag = !local && (offlineToggle || !networkUp)
-        _offline.value = offlineFlag
+        _offline.value = false
         _noNetwork.value = !networkUp
-    }
-
-    private fun recomputeBitrate() {
-        maxBitrate = if (onWifi) {
-            streamWifi
-        } else {
-            if (dataSaver) (if (streamCellular == 0) DATA_SAVER_KBPS else minOf(streamCellular, DATA_SAVER_KBPS)) else streamCellular
-        }
     }
 
     init {
@@ -316,51 +163,14 @@ class AppContainer(context: Context) {
             if (runCatching { settingsStore.sonicAutoAnalyze.first() }.getOrDefault(false)) sonicEngine.scan()
         }
         scope.launch {
-            settingsStore.session.collect { session ->
-                lastSession = session
-                // keep a disk-restored session in the saved list so it shows up for switching
-                session?.let { settingsStore.addSavedSession(it) }
-                rebuildBackend()
-                _sessionReady.value = session != null
-                // ignore the first load so startup doesn't count as an account change
-                val key = accountKey(session)
-                if (lastAccountKey != null && lastAccountKey != key) _accountEpoch.value++
-                lastAccountKey = key
-                recomputeOffline()
-            }
-        }
-        scope.launch {
-            var first = true
-            settingsStore.unifiedLibrary.collect {
-                unifiedLibraryValue = it; rebuildBackend()
-                if (!first) _libraryReload.value++
-                first = false
-            }
-        }
-        scope.launch {
-            var first = true
-            settingsStore.mergeSources.collect {
-                mergeSourceKeys = it; rebuildBackend()
-                if (!first) _libraryReload.value++
-                first = false
-            }
-        }
-        scope.launch {
-            settingsStore.playbackPrefs.collect {
-                streamWifi = it.streamWifi
-                streamCellular = it.streamCellular
-                downloadBitrate = it.downloadBitrate
-                recomputeBitrate()
-            }
-        }
-        scope.launch {
-            settingsStore.offlineMode.collect { offlineToggle = it; recomputeOffline() }
+            // local-only bootstrap: stamp the on-device session once so sessionReady gates open
+            val existing = runCatching { settingsStore.session.first() }.getOrNull()
+            if (existing == null) settingsStore.saveSession(localSession)
+            backend = LocalBackend(localLibrary, localStore, runCatching { settingsStore.session.first() }.getOrNull() ?: localSession)
+            _sessionReady.value = true
         }
         scope.launch {
             settingsStore.lrclibEnabled.collect { lrclibEnabled = it }
-        }
-        scope.launch {
-            settingsStore.dataSaver.collect { dataSaver = it; recomputeBitrate() }
         }
         scope.launch {
             settingsStore.haptics.collect { hapticsEnabled = it }
@@ -372,16 +182,6 @@ class AppContainer(context: Context) {
             settingsStore.acoustIdKey.collect { acoustIdKeyValue = it }
         }
         scope.launch {
-            settingsStore.preferLocalSources.collect { on ->
-                preferLocalSources = on
-                // best-source matching needs the on-device index load it once when enabled
-                if (on) runCatching { localLibrary.ensureLoaded() }
-            }
-        }
-        scope.launch {
-            settingsStore.sourcePriority.collect { sourcePriorityValue = it }
-        }
-        scope.launch {
             settingsStore.squigBaseUrl.collect { squigBaseValue = it }
         }
         scope.launch {
@@ -390,63 +190,28 @@ class AppContainer(context: Context) {
         scope.launch {
             settingsStore.alarmPrefs.collect { com.aurora.music.playback.AlarmScheduler.apply(appContext, it) }
         }
-        scope.launch {
-            settingsStore.spotifyClientId.collect { id ->
-                spotifyClientIdValue = id
-                // rebuild an active spotify backend so token refresh uses the up-to-date client id
-                backend?.session?.let { if (it.type == ServerType.SPOTIFY) backend = buildBackend(it) }
-            }
-        }
         registerConnectivity()
     }
 
     private fun registerConnectivity() {
         val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
-        // require VALIDATED so wifi-without-real-internet counts as offline and we serve downloads
+        // require VALIDATED so wifi-without-real-internet counts as offline for info features
         fun hasInternet(caps: NetworkCapabilities?) = caps != null &&
             caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
             caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
         runCatching {
             val caps = cm.getNetworkCapabilities(cm.activeNetwork)
             networkUp = hasInternet(caps)
-            onWifi = caps?.let { it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) } ?: true
         }
-        recomputeOffline(); recomputeBitrate()
+        recomputeOffline()
         runCatching {
             cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
                 override fun onLost(network: Network) { networkUp = false; recomputeOffline() }
                 override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
                     networkUp = hasInternet(caps)
-                    onWifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-                    recomputeOffline(); recomputeBitrate()
+                    recomputeOffline()
                 }
             })
         }
-    }
-
-    suspend fun applySession(session: Session) {
-        lastSession = session
-        settingsStore.saveSession(session)
-        settingsStore.addSavedSession(session)
-        rebuildBackend()
-        _sessionReady.value = true
-    }
-
-    suspend fun switchSession(session: Session) = applySession(session)
-
-    suspend fun signOut() {
-        lastSession = null
-        backend = null
-        _sessionReady.value = false
-        settingsStore.clearSession()
-    }
-
-    suspend fun forgetSavedSession(session: Session) {
-        settingsStore.removeSavedSession(session)
-        if (backend?.session?.let { accountKey(it) } == accountKey(session)) signOut()
-    }
-
-    private companion object {
-        const val DATA_SAVER_KBPS = 96
     }
 }

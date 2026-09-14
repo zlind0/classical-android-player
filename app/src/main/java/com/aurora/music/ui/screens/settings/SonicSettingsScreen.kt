@@ -106,8 +106,8 @@ fun SonicSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
 
             Text(
                 "Sonic radio compares the actual sound of your tracks (timbre, harmony, energy, tempo) " +
-                    "fully on-device — no account or internet needed. Only local-library and downloaded " +
-                    "tracks can be analyzed; streaming-only tracks fall back to your server’s own radio.",
+                    "fully on-device — no account or internet needed. Only on-device tracks " +
+                    "can be analyzed.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
             )

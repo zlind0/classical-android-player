@@ -20,20 +20,17 @@ import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "aurora_settings")
 
-val DEFAULT_SOURCE_PRIORITY = listOf("local", "downloaded", "stream")
+// Classical fork (local-only): single on-device library. Server sessions are gone;
+// ServerType stays as a single-value type so persisted Session JSON keeps parsing.
+enum class ServerType { LOCAL }
 
-// sentinel meaning no servers so empty can keep meaning all eligible
-const val MERGE_NONE = "__none__"
-
-enum class ServerType { SUBSONIC, JELLYFIN, SPOTIFY, LOCAL }
-
-// subsonic keeps salt+token never the raw password jellyfin uses token as access token
+// Local session stamped on the on-device library; server auth fields are unused.
 data class Session(
     val server: String,
     val username: String,
     val salt: String,
     val token: String,
-    val type: ServerType = ServerType.SUBSONIC,
+    val     type: ServerType = ServerType.LOCAL,
     val userId: String = "",
     val imageUrl: String = "",
     // spotify web-player only client-token + app-version that /v1 requires alongside the bearer
@@ -42,12 +39,7 @@ data class Session(
 ) {
     val isValid: Boolean get() = server.isNotBlank() && username.isNotBlank() && token.isNotBlank()
 
-    val typeLabel: String get() = when (type) {
-        ServerType.SPOTIFY -> "Spotify"
-        ServerType.JELLYFIN -> "Jellyfin"
-        ServerType.SUBSONIC -> "Navidrome"
-        ServerType.LOCAL -> "On this device"
-    }
+    val typeLabel: String get() = "On this device"
 }
 
 fun Session.accountKey(): String = "${type.name}|$server|$username|$userId"
@@ -58,12 +50,8 @@ data class PlaybackPrefs(
     val gapless: Boolean = true,
     val defaultSpeed: Float = 1.0f,
     val monoAudio: Boolean = false,
-    val streamWifi: Int = 0,        // 0 = lossless original
-    val streamCellular: Int = 0,
-    val downloadBitrate: Int = 0,   // 0 = lossless original
     val preferHighRes: Boolean = false, // float output off so speed pitch eq chain work everywhere
-    val scrobble: Boolean = true,
-    val autoplayRadio: Boolean = false,
+    val autoplayRadio: Boolean = false, // local queue autoplay via on-device similarity
     val bitPerfectUsb: Boolean = false,
     val independentOutput: Boolean = false, // dont grab audio focus other apps keep playing through the speaker
 )
@@ -226,27 +214,6 @@ data class UiPrefs(
     val hiddenHomeSections: Set<String> = emptySet(),
 )
 
-data class LastfmAccount(
-    val sessionKey: String = "",
-    val username: String = "",
-    val imageUrl: String = "",
-    val enabled: Boolean = true,
-)
-
-data class ListenBrainzAccount(
-    val token: String = "",
-    val username: String = "",
-    val enabled: Boolean = true,
-)
-
-data class DiscordAccount(
-    val token: String = "",
-    val username: String = "",
-    val enabled: Boolean = true,
-    val imgurClientId: String = "",
-    val appId: String = "",
-)
-
 // scoped to serverId so a pin persists across logouts but only reappears on that connection
 data class Pin(
     val id: String = "",
@@ -289,16 +256,11 @@ class SettingsStore(private val context: Context) {
         val SERVER_TYPE = stringPreferencesKey("server_type")
         val USER_ID = stringPreferencesKey("user_id")
         val USER_IMAGE = stringPreferencesKey("user_image")
-        val CLIENT_TOKEN = stringPreferencesKey("sp_client_token")
-        val CLIENT_VERSION = stringPreferencesKey("sp_client_version")
         val SKIP_SILENCE = booleanPreferencesKey("skip_silence")
         val CROSSFADE = intPreferencesKey("crossfade_sec")
         val GAPLESS = booleanPreferencesKey("gapless")
         val DEFAULT_SPEED = floatPreferencesKey("default_speed")
         val MONO = booleanPreferencesKey("mono_audio")
-        val STREAM_WIFI = intPreferencesKey("stream_wifi")
-        val STREAM_CELLULAR = intPreferencesKey("stream_cellular")
-        val DOWNLOAD_BITRATE = intPreferencesKey("download_bitrate")
         val PREFER_HIRES = booleanPreferencesKey("prefer_hires")
         val BIT_PERFECT_USB = booleanPreferencesKey("bit_perfect_usb")
         val INDEPENDENT_OUTPUT = booleanPreferencesKey("independent_output")
@@ -321,12 +283,8 @@ class SettingsStore(private val context: Context) {
         val VIZ_ALBUM_ART = booleanPreferencesKey("viz_album_art")
         val VIZ_TRACK_INFO = booleanPreferencesKey("viz_track_info")
         val SONIC_AUTO_ANALYZE = booleanPreferencesKey("sonic_auto_analyze")
-        val SCROBBLE = booleanPreferencesKey("scrobble")
         val AUTOPLAY_RADIO = booleanPreferencesKey("autoplay_radio")
-        val OFFLINE = booleanPreferencesKey("offline_mode")
         val LRCLIB = booleanPreferencesKey("lrclib_enabled")
-        val DATA_SAVER = booleanPreferencesKey("data_saver")
-        val PRIVATE_SESSION = booleanPreferencesKey("private_session")
         val GESTURE_SWIPE_ART = booleanPreferencesKey("gesture_swipe_art")
         val GESTURE_SWIPE_DISMISS = booleanPreferencesKey("gesture_swipe_dismiss")
         val GESTURE_DOUBLE_TAP = booleanPreferencesKey("gesture_double_tap")
@@ -336,18 +294,10 @@ class SettingsStore(private val context: Context) {
         val ALARM_MINUTE = intPreferencesKey("alarm_minute")
         val PINS = stringPreferencesKey("library_pins")   // not cleared on logout
         val SMART_PLAYLISTS = stringPreferencesKey("smart_playlists")  // not cleared on logout
-        val RADIO_FAVORITES = stringPreferencesKey("radio_favorites")  // not cleared on logout
-        val PODCAST_SUBS = stringPreferencesKey("podcast_subs")        // not cleared on logout
         val ARTIST_ENRICHMENT = booleanPreferencesKey("artist_enrichment")
-        val PREFER_LOCAL = booleanPreferencesKey("prefer_local_sources")
-        val SOURCE_PRIORITY = stringPreferencesKey("source_priority")
-        val UNIFIED_LIBRARY = booleanPreferencesKey("unified_library")
-        val MERGE_SOURCES = stringSetPreferencesKey("merge_sources")      // empty = all
         val RECENT_SEARCHES = stringPreferencesKey("recent_searches")
         val SQUIG_BASE = stringPreferencesKey("squig_base_url")
         val SQUIG_TARGET = stringPreferencesKey("squig_target")
-        val SAVED_SESSIONS = stringPreferencesKey("saved_sessions")
-        val SPOTIFY_CLIENT_ID = stringPreferencesKey("spotify_client_id")  // survives logout
         val ACOUSTID_KEY = stringPreferencesKey("acoustid_key")           // survives logout
         val EQ_BINDINGS = stringPreferencesKey("eq_bindings")
         val AUTOEQ_SWITCH = booleanPreferencesKey("autoeq_autoswitch")
@@ -398,51 +348,6 @@ class SettingsStore(private val context: Context) {
         val UI_MINI_PROGRESS = intPreferencesKey("ui_mini_progress")
         val UI_LIBRARY_COLUMNS = intPreferencesKey("ui_library_columns")
         val UI_HIDDEN_HOME = stringSetPreferencesKey("ui_hidden_home")
-        val LASTFM_SK = stringPreferencesKey("lastfm_sk")
-        val LASTFM_USER = stringPreferencesKey("lastfm_user")
-        val LASTFM_IMAGE = stringPreferencesKey("lastfm_image")
-        val LASTFM_ENABLED = booleanPreferencesKey("lastfm_enabled")
-        val LASTFM_API_KEY = stringPreferencesKey("lastfm_api_key")
-        val LASTFM_SECRET = stringPreferencesKey("lastfm_secret")
-        val LISTENBRAINZ_TOKEN = stringPreferencesKey("listenbrainz_token")
-        val LISTENBRAINZ_USER = stringPreferencesKey("listenbrainz_user")
-        val LISTENBRAINZ_ENABLED = booleanPreferencesKey("listenbrainz_enabled")
-        val DISCORD_TOKEN = stringPreferencesKey("discord_token")
-        val DISCORD_USER = stringPreferencesKey("discord_user")
-        val DISCORD_ENABLED = booleanPreferencesKey("discord_enabled")
-        val DISCORD_IMGUR = stringPreferencesKey("discord_imgur")
-        val DISCORD_APP_ID = stringPreferencesKey("discord_app_id")
-    }
-
-    val discord: Flow<DiscordAccount> = context.dataStore.data.map { p ->
-        DiscordAccount(
-            token = p[Keys.DISCORD_TOKEN].orEmpty(),
-            username = p[Keys.DISCORD_USER].orEmpty(),
-            enabled = p[Keys.DISCORD_ENABLED] ?: true,
-            imgurClientId = p[Keys.DISCORD_IMGUR].orEmpty(),
-            appId = p[Keys.DISCORD_APP_ID].orEmpty(),
-        )
-    }
-
-    val lastfm: Flow<LastfmAccount> = context.dataStore.data.map { p ->
-        LastfmAccount(
-            sessionKey = p[Keys.LASTFM_SK].orEmpty(),
-            username = p[Keys.LASTFM_USER].orEmpty(),
-            imageUrl = p[Keys.LASTFM_IMAGE].orEmpty(),
-            enabled = p[Keys.LASTFM_ENABLED] ?: true,
-        )
-    }
-
-    val lastfmKeys: Flow<Pair<String, String>> = context.dataStore.data.map { p ->
-        (p[Keys.LASTFM_API_KEY].orEmpty()) to (p[Keys.LASTFM_SECRET].orEmpty())
-    }
-
-    val listenBrainz: Flow<ListenBrainzAccount> = context.dataStore.data.map { p ->
-        ListenBrainzAccount(
-            token = p[Keys.LISTENBRAINZ_TOKEN].orEmpty(),
-            username = p[Keys.LISTENBRAINZ_USER].orEmpty(),
-            enabled = p[Keys.LISTENBRAINZ_ENABLED] ?: true,
-        )
     }
 
     val uiPrefs: Flow<UiPrefs> = context.dataStore.data.map { p ->
@@ -513,10 +418,7 @@ class SettingsStore(private val context: Context) {
         }
     }
 
-    val offlineMode: Flow<Boolean> = context.dataStore.data.map { it[Keys.OFFLINE] ?: false }
     val lrclibEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.LRCLIB] ?: true }
-    val dataSaver: Flow<Boolean> = context.dataStore.data.map { it[Keys.DATA_SAVER] ?: false }
-    val privateSession: Flow<Boolean> = context.dataStore.data.map { it[Keys.PRIVATE_SESSION] ?: false }
 
     val gesturePrefs: Flow<GesturePrefs> = context.dataStore.data.map { p ->
         GesturePrefs(
@@ -534,8 +436,6 @@ class SettingsStore(private val context: Context) {
             minute = p[Keys.ALARM_MINUTE] ?: 0,
         )
     }
-
-    val spotifyClientId: Flow<String> = context.dataStore.data.map { it[Keys.SPOTIFY_CLIENT_ID] ?: "" }
 
     val acoustIdKey: Flow<String> = context.dataStore.data.map { it[Keys.ACOUSTID_KEY] ?: "" }
 
@@ -573,40 +473,6 @@ class SettingsStore(private val context: Context) {
         p[Keys.SMART_PLAYLISTS] = gson.toJson(parseSmart(p[Keys.SMART_PLAYLISTS]).filterNot { it.id == id })
     }
 
-    val radioFavorites: Flow<List<RadioStation>> = context.dataStore.data.map { p -> parseRadio(p[Keys.RADIO_FAVORITES]) }
-
-    private fun parseRadio(json: String?): List<RadioStation> = runCatching {
-        if (json.isNullOrBlank()) emptyList()
-        else gson.fromJson<List<RadioStation>>(json, object : TypeToken<List<RadioStation>>() {}.type) ?: emptyList()
-    }.getOrDefault(emptyList())
-
-    suspend fun saveRadioStation(s: RadioStation) = context.dataStore.edit { p ->
-        val cur = parseRadio(p[Keys.RADIO_FAVORITES])
-        val next = if (cur.any { it.uuid == s.uuid }) cur.map { if (it.uuid == s.uuid) s else it } else cur + s
-        p[Keys.RADIO_FAVORITES] = gson.toJson(next)
-    }
-
-    suspend fun deleteRadioStation(uuid: String) = context.dataStore.edit { p ->
-        p[Keys.RADIO_FAVORITES] = gson.toJson(parseRadio(p[Keys.RADIO_FAVORITES]).filterNot { it.uuid == uuid })
-    }
-
-    val podcastSubs: Flow<List<Podcast>> = context.dataStore.data.map { p -> parsePodcasts(p[Keys.PODCAST_SUBS]) }
-
-    private fun parsePodcasts(json: String?): List<Podcast> = runCatching {
-        if (json.isNullOrBlank()) emptyList()
-        else gson.fromJson<List<Podcast>>(json, object : TypeToken<List<Podcast>>() {}.type) ?: emptyList()
-    }.getOrDefault(emptyList())
-
-    suspend fun savePodcast(p: Podcast) = context.dataStore.edit { prefs ->
-        val cur = parsePodcasts(prefs[Keys.PODCAST_SUBS])
-        val next = if (cur.any { it.feedUrl == p.feedUrl }) cur.map { if (it.feedUrl == p.feedUrl) p else it } else cur + p
-        prefs[Keys.PODCAST_SUBS] = gson.toJson(next)
-    }
-
-    suspend fun deletePodcast(feedUrl: String) = context.dataStore.edit { p ->
-        p[Keys.PODCAST_SUBS] = gson.toJson(parsePodcasts(p[Keys.PODCAST_SUBS]).filterNot { it.feedUrl == feedUrl })
-    }
-
     // persisted locally because subsonic has no playlist-star
     val likedPlaylists: Flow<Set<String>> = context.dataStore.data.map { it[Keys.LIKED_PLAYLISTS] ?: emptySet() }
 
@@ -616,11 +482,9 @@ class SettingsStore(private val context: Context) {
             username = p[Keys.USERNAME].orEmpty(),
             salt = p[Keys.SALT].orEmpty(),
             token = p[Keys.TOKEN].orEmpty(),
-            type = runCatching { ServerType.valueOf(p[Keys.SERVER_TYPE] ?: "SUBSONIC") }.getOrDefault(ServerType.SUBSONIC),
+            type = runCatching { ServerType.valueOf(p[Keys.SERVER_TYPE] ?: "LOCAL") }.getOrDefault(ServerType.LOCAL),
             userId = p[Keys.USER_ID].orEmpty(),
             imageUrl = p[Keys.USER_IMAGE].orEmpty(),
-            clientToken = p[Keys.CLIENT_TOKEN].orEmpty(),
-            clientVersion = p[Keys.CLIENT_VERSION].orEmpty(),
         )
         if (s.isValid) s else null
     }
@@ -632,11 +496,7 @@ class SettingsStore(private val context: Context) {
             gapless = p[Keys.GAPLESS] ?: true,
             defaultSpeed = p[Keys.DEFAULT_SPEED] ?: 1.0f,
             monoAudio = p[Keys.MONO] ?: false,
-            streamWifi = p[Keys.STREAM_WIFI] ?: 0,
-            streamCellular = p[Keys.STREAM_CELLULAR] ?: 0,
-            downloadBitrate = p[Keys.DOWNLOAD_BITRATE] ?: 0,
             preferHighRes = p[Keys.PREFER_HIRES] ?: false,
-            scrobble = p[Keys.SCROBBLE] ?: true,
             autoplayRadio = p[Keys.AUTOPLAY_RADIO] ?: false,
             bitPerfectUsb = p[Keys.BIT_PERFECT_USB] ?: false,
             independentOutput = p[Keys.INDEPENDENT_OUTPUT] ?: false,
@@ -673,24 +533,6 @@ class SettingsStore(private val context: Context) {
     // off keeps artist names from ever leaving the device
     val artistEnrichment: Flow<Boolean> = context.dataStore.data.map { it[Keys.ARTIST_ENRICHMENT] ?: true }
     suspend fun setArtistEnrichment(v: Boolean) = context.dataStore.edit { it[Keys.ARTIST_ENRICHMENT] = v }
-
-    val preferLocalSources: Flow<Boolean> = context.dataStore.data.map { it[Keys.PREFER_LOCAL] ?: true }
-    suspend fun setPreferLocalSources(v: Boolean) = context.dataStore.edit { it[Keys.PREFER_LOCAL] = v }
-
-    val sourcePriority: Flow<List<String>> = context.dataStore.data.map { p ->
-        parseStringList(p[Keys.SOURCE_PRIORITY]).filter { it in DEFAULT_SOURCE_PRIORITY }
-            .ifEmpty { DEFAULT_SOURCE_PRIORITY }
-    }
-    suspend fun setSourcePriority(order: List<String>) = context.dataStore.edit {
-        it[Keys.SOURCE_PRIORITY] = gson.toJson(order.filter { t -> t in DEFAULT_SOURCE_PRIORITY }.distinct())
-    }
-
-    val unifiedLibrary: Flow<Boolean> = context.dataStore.data.map { it[Keys.UNIFIED_LIBRARY] ?: false }
-    suspend fun setUnifiedLibrary(v: Boolean) = context.dataStore.edit { it[Keys.UNIFIED_LIBRARY] = v }
-
-    // empty = every eligible saved source
-    val mergeSources: Flow<Set<String>> = context.dataStore.data.map { it[Keys.MERGE_SOURCES] ?: emptySet() }
-    suspend fun setMergeSources(keys: Set<String>) = context.dataStore.edit { it[Keys.MERGE_SOURCES] = keys }
 
     val recentSearches: Flow<List<String>> = context.dataStore.data.map { parseStringList(it[Keys.RECENT_SEARCHES]) }
 
@@ -751,42 +593,14 @@ class SettingsStore(private val context: Context) {
             p[Keys.SERVER_TYPE] = session.type.name
             p[Keys.USER_ID] = session.userId
             p[Keys.USER_IMAGE] = session.imageUrl
-            p[Keys.CLIENT_TOKEN] = session.clientToken
-            p[Keys.CLIENT_VERSION] = session.clientVersion
         }
     }
-
-    suspend fun updateToken(token: String) = context.dataStore.edit { it[Keys.TOKEN] = token }
-
-    suspend fun updateUserImage(url: String) = context.dataStore.edit { it[Keys.USER_IMAGE] = url }
 
     suspend fun clearSession() {
         context.dataStore.edit { p ->
             p.remove(Keys.SERVER); p.remove(Keys.USERNAME); p.remove(Keys.SALT); p.remove(Keys.TOKEN)
             p.remove(Keys.SERVER_TYPE); p.remove(Keys.USER_ID); p.remove(Keys.USER_IMAGE)
-            p.remove(Keys.CLIENT_TOKEN); p.remove(Keys.CLIENT_VERSION)
         }
-    }
-
-    val savedSessions: Flow<List<Session>> = context.dataStore.data.map { parseSessions(it[Keys.SAVED_SESSIONS]) }
-
-    private fun parseSessions(json: String?): List<Session> = runCatching {
-        if (json.isNullOrBlank()) emptyList()
-        else gson.fromJson<List<Session>>(json, object : TypeToken<List<Session>>() {}.type) ?: emptyList()
-    }.getOrDefault(emptyList()).filter { it.isValid }
-
-    private fun Session.accountKey() = "${type.name}|$server|$username|$userId"
-
-    suspend fun addSavedSession(session: Session) = context.dataStore.edit { p ->
-        if (!session.isValid) return@edit
-        val cur = parseSessions(p[Keys.SAVED_SESSIONS])
-        val next = cur.filterNot { it.accountKey() == session.accountKey() } + session
-        p[Keys.SAVED_SESSIONS] = gson.toJson(next)
-    }
-
-    suspend fun removeSavedSession(session: Session) = context.dataStore.edit { p ->
-        val cur = parseSessions(p[Keys.SAVED_SESSIONS])
-        p[Keys.SAVED_SESSIONS] = gson.toJson(cur.filterNot { it.accountKey() == session.accountKey() })
     }
 
     suspend fun setSkipSilence(v: Boolean) = context.dataStore.edit { it[Keys.SKIP_SILENCE] = v }
@@ -794,18 +608,11 @@ class SettingsStore(private val context: Context) {
     suspend fun setGapless(v: Boolean) = context.dataStore.edit { it[Keys.GAPLESS] = v }
     suspend fun setDefaultSpeed(v: Float) = context.dataStore.edit { it[Keys.DEFAULT_SPEED] = v }
     suspend fun setMono(v: Boolean) = context.dataStore.edit { it[Keys.MONO] = v }
-    suspend fun setStreamWifi(v: Int) = context.dataStore.edit { it[Keys.STREAM_WIFI] = v }
-    suspend fun setStreamCellular(v: Int) = context.dataStore.edit { it[Keys.STREAM_CELLULAR] = v }
-    suspend fun setDownloadBitrate(v: Int) = context.dataStore.edit { it[Keys.DOWNLOAD_BITRATE] = v }
     suspend fun setPreferHighRes(v: Boolean) = context.dataStore.edit { it[Keys.PREFER_HIRES] = v }
+    suspend fun setAutoplayRadio(v: Boolean) = context.dataStore.edit { it[Keys.AUTOPLAY_RADIO] = v }
     suspend fun setBitPerfectUsb(v: Boolean) = context.dataStore.edit { it[Keys.BIT_PERFECT_USB] = v }
     suspend fun setIndependentOutput(v: Boolean) = context.dataStore.edit { it[Keys.INDEPENDENT_OUTPUT] = v }
-    suspend fun setScrobble(v: Boolean) = context.dataStore.edit { it[Keys.SCROBBLE] = v }
-    suspend fun setAutoplayRadio(v: Boolean) = context.dataStore.edit { it[Keys.AUTOPLAY_RADIO] = v }
-    suspend fun setOfflineMode(v: Boolean) = context.dataStore.edit { it[Keys.OFFLINE] = v }
     suspend fun setLrclibEnabled(v: Boolean) = context.dataStore.edit { it[Keys.LRCLIB] = v }
-    suspend fun setDataSaver(v: Boolean) = context.dataStore.edit { it[Keys.DATA_SAVER] = v }
-    suspend fun setPrivateSession(v: Boolean) = context.dataStore.edit { it[Keys.PRIVATE_SESSION] = v }
     suspend fun setGestureSwipeArtwork(v: Boolean) = context.dataStore.edit { it[Keys.GESTURE_SWIPE_ART] = v }
     suspend fun setGestureSwipeDismiss(v: Boolean) = context.dataStore.edit { it[Keys.GESTURE_SWIPE_DISMISS] = v }
     suspend fun setGestureDoubleTap(v: Boolean) = context.dataStore.edit { it[Keys.GESTURE_DOUBLE_TAP] = v }
@@ -813,8 +620,6 @@ class SettingsStore(private val context: Context) {
     suspend fun setAlarm(enabled: Boolean, hour: Int, minute: Int) = context.dataStore.edit {
         it[Keys.ALARM_ENABLED] = enabled; it[Keys.ALARM_HOUR] = hour; it[Keys.ALARM_MINUTE] = minute
     }
-    suspend fun setSpotifyClientId(v: String) = context.dataStore.edit { it[Keys.SPOTIFY_CLIENT_ID] = v.trim() }
-
     suspend fun setAcoustIdKey(v: String) = context.dataStore.edit { it[Keys.ACOUSTID_KEY] = v.trim() }
     suspend fun setAutoEqAutoSwitch(v: Boolean) = context.dataStore.edit { it[Keys.AUTOEQ_SWITCH] = v }
     suspend fun setActiveEqProfile(name: String) = context.dataStore.edit { it[Keys.AUTOEQ_PROFILE] = name }
@@ -895,48 +700,6 @@ class SettingsStore(private val context: Context) {
         if (hidden) set.add(id) else set.remove(id)
         p[Keys.UI_HIDDEN_HOME] = set
     }
-
-    suspend fun saveLastfm(sessionKey: String, username: String, imageUrl: String) = context.dataStore.edit { p ->
-        p[Keys.LASTFM_SK] = sessionKey
-        p[Keys.LASTFM_USER] = username
-        p[Keys.LASTFM_IMAGE] = imageUrl
-        p[Keys.LASTFM_ENABLED] = true
-    }
-
-    suspend fun clearLastfm() = context.dataStore.edit { p ->
-        p.remove(Keys.LASTFM_SK); p.remove(Keys.LASTFM_USER); p.remove(Keys.LASTFM_IMAGE)
-    }
-
-    suspend fun setLastfmEnabled(v: Boolean) = context.dataStore.edit { it[Keys.LASTFM_ENABLED] = v }
-
-    suspend fun setLastfmKeys(apiKey: String, secret: String) = context.dataStore.edit { p ->
-        p[Keys.LASTFM_API_KEY] = apiKey.trim()
-        p[Keys.LASTFM_SECRET] = secret.trim()
-    }
-
-    suspend fun saveListenBrainz(token: String, username: String) = context.dataStore.edit { p ->
-        p[Keys.LISTENBRAINZ_TOKEN] = token
-        p[Keys.LISTENBRAINZ_USER] = username
-        p[Keys.LISTENBRAINZ_ENABLED] = true
-    }
-    suspend fun clearListenBrainz() = context.dataStore.edit { p ->
-        p.remove(Keys.LISTENBRAINZ_TOKEN); p.remove(Keys.LISTENBRAINZ_USER)
-    }
-    suspend fun setListenBrainzEnabled(v: Boolean) = context.dataStore.edit { it[Keys.LISTENBRAINZ_ENABLED] = v }
-
-    suspend fun saveDiscord(token: String, username: String) = context.dataStore.edit { p ->
-        p[Keys.DISCORD_TOKEN] = token
-        p[Keys.DISCORD_USER] = username
-        p[Keys.DISCORD_ENABLED] = true
-    }
-
-    suspend fun clearDiscord() = context.dataStore.edit { p ->
-        p.remove(Keys.DISCORD_TOKEN); p.remove(Keys.DISCORD_USER)
-    }
-
-    suspend fun setDiscordEnabled(v: Boolean) = context.dataStore.edit { it[Keys.DISCORD_ENABLED] = v }
-    suspend fun setDiscordImgur(v: String) = context.dataStore.edit { it[Keys.DISCORD_IMGUR] = v.trim() }
-    suspend fun setDiscordAppId(v: String) = context.dataStore.edit { it[Keys.DISCORD_APP_ID] = v.trim() }
 
     // typed so json round-trips losslessly
     suspend fun exportPrefs(): PrefsBackup {

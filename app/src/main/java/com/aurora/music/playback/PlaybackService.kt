@@ -52,7 +52,6 @@ class PlaybackService : MediaLibraryService() {
     private val LIBRARY_ROOT = "root"
     private lateinit var player: ExoPlayer
     private var fadePlayer: ExoPlayer? = null
-    private var castPlayer: androidx.media3.cast.CastPlayer? = null
     private val monoProcessor = MonoAudioProcessor()
     private val auroraDsp = AuroraDspProcessor()
     private val convolver = ConvolutionProcessor()
@@ -147,22 +146,7 @@ class PlaybackService : MediaLibraryService() {
             renderersFactory.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
         }
 
-        // resolve aurora-yt sentinel uris to a real youtube stream just-in-time on the loader thread
-        val resolver = container.youtubeResolver
-        val ytResolver = androidx.media3.datasource.ResolvingDataSource.Resolver { dataSpec ->
-            val uri = dataSpec.uri
-            if (uri.scheme == "aurora-yt") {
-                val real = resolver.resolve(
-                    uri.host.orEmpty(),
-                    uri.getQueryParameter("q").orEmpty(),
-                    uri.getQueryParameter("dur")?.toIntOrNull() ?: 0,
-                ) ?: throw java.io.IOException("No stream found for this track")
-                dataSpec.withUri(android.net.Uri.parse(real))
-            } else dataSpec
-        }
-        val dataSourceFactory = androidx.media3.datasource.ResolvingDataSource.Factory(
-            androidx.media3.datasource.DefaultDataSource.Factory(this), ytResolver,
-        )
+        val dataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this)
         val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(dataSourceFactory)
 
         val playerBuilder = ExoPlayer.Builder(this, renderersFactory)
@@ -225,8 +209,6 @@ class PlaybackService : MediaLibraryService() {
         mediaSession = MediaLibrarySession.Builder(this, player, MediaCallback())
             .setCustomLayout(buildCustomLayout())
             .build()
-
-        setupCast()
 
         val store = container.settingsStore
         audioEffects = container.audioEffects
@@ -820,50 +802,6 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
-    private fun setupCast() {
-        val castContext = runCatching {
-            com.google.android.gms.cast.framework.CastContext.getSharedInstance(this)
-        }.getOrNull() ?: return
-        val cp = androidx.media3.cast.CastPlayer(castContext)
-        cp.setSessionAvailabilityListener(object : androidx.media3.cast.SessionAvailabilityListener {
-            override fun onCastSessionAvailable() = switchToPlayer(toCast = true)
-            override fun onCastSessionUnavailable() = switchToPlayer(toCast = false)
-        })
-        castPlayer = cp
-    }
-
-    // casting hands the receiver a plain url so the dsp chain doesnt travel
-    private fun switchToPlayer(toCast: Boolean) {
-        val cp = castPlayer ?: return
-        val from = mediaSession?.player ?: return
-        val to: Player = if (toCast) cp else player
-        if (from === to) return
-        val items = (0 until from.mediaItemCount).map { from.getMediaItemAt(it) }
-            .map { if (toCast) it.buildUpon().setMimeType(guessMime(it)).build() else it }
-        val idx = from.currentMediaItemIndex.coerceAtLeast(0)
-        val pos = from.currentPosition
-        val play = from.playWhenReady
-        from.pause()
-        if (items.isNotEmpty()) {
-            to.setMediaItems(items, idx, pos)
-            to.playWhenReady = play
-            to.prepare()
-        }
-        mediaSession?.player = to
-        publishNowPlaying()
-    }
-
-    private fun guessMime(item: MediaItem): String {
-        val uri = item.localConfiguration?.uri?.toString().orEmpty().lowercase()
-        return when {
-            uri.contains(".flac") -> androidx.media3.common.MimeTypes.AUDIO_FLAC
-            uri.contains(".m4a") || uri.contains(".aac") || uri.contains(".mp4") -> androidx.media3.common.MimeTypes.AUDIO_AAC
-            uri.contains(".ogg") || uri.contains(".opus") -> androidx.media3.common.MimeTypes.AUDIO_OGG
-            uri.contains(".wav") -> androidx.media3.common.MimeTypes.AUDIO_WAV
-            else -> androidx.media3.common.MimeTypes.AUDIO_MPEG
-        }
-    }
-
     private fun publishNowPlaying() {
         val active = mediaSession?.player ?: player
         val item = active.currentMediaItem
@@ -959,10 +897,8 @@ class PlaybackService : MediaLibraryService() {
     override fun onDestroy() {
         runCatching { fadePlayer?.release() }
         fadePlayer = null
-        runCatching { castPlayer?.setSessionAvailabilityListener(null); castPlayer?.release() }
-        castPlayer = null
         mediaSession?.release()
-        runCatching { player.release() } // sessions player may have been the cast player
+        runCatching { player.release() }
         mediaSession = null
         super.onDestroy()
     }

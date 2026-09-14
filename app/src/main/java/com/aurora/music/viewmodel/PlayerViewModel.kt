@@ -15,8 +15,6 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.SavedQueue
-import com.aurora.music.data.isPodcast
-import com.aurora.music.data.isRadio
 import com.aurora.music.data.toSavedTrack
 import com.aurora.music.model.Song
 import com.aurora.music.playback.PlaybackService
@@ -73,9 +71,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private var queueFillJob: Job? = null
     private var songById: Map<String, Song> = emptyMap()
 
-    @Volatile private var scrobbleEnabled = true
     @Volatile private var autoplayEnabled = false
-    @Volatile private var privateSession = false
 
     // likes merge server stars + local playlist likes
     private var serverLikedIds: Set<String> = emptySet()
@@ -86,12 +82,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile private var playingAccountKey: String = ""
     private var openRestoreAttempted = false
     private var lastPersistMs = 0L
-    // clearing for account switch must not overwrite the saved queue
-    @Volatile private var suppressPersist = false
-    private var playStartMs: Long = 0L
-    private var lastDiscordSig: String? = null
-    private var lastDiscordPosSec = 0f
-    private var lastDiscordWallMs = 0L
     private var lastKeyInfoId: String? = null
     private var lastKeyInfo: com.aurora.music.data.SonicEngine.TrackKey? = null
     @Volatile private var loadingRadio = false
@@ -127,23 +117,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val cur = _state.value.current
         if (cur.id.isEmpty() || cur.id == lastNowPlayingId) return
         lastNowPlayingId = cur.id
-        // radio/podcasts aren't library tracks never scrobble them
-        if (cur.isRadio() || cur.isPodcast()) return
-        playStartMs = System.currentTimeMillis()
-        if (!privateSession) { container.lastfm.nowPlaying(cur); container.listenBrainz.nowPlaying(cur) }
     }
 
     private fun recordIfPlayed(posSec: Float) {
         val cur = _state.value.current
         if (cur.id.isEmpty() || posSec < 30f || cur.id == lastRecordedId) return
         lastRecordedId = cur.id
-        // radio/podcasts carry synthetic ids don't record to history server or scrobblers
-        if (cur.isRadio() || cur.isPodcast()) return
         container.playHistory.record(cur, System.currentTimeMillis())
-        if (privateSession) return
-        if (scrobbleEnabled) viewModelScope.launch { runCatching { container.repository.scrobble(cur.id) } }
-        container.lastfm.scrobble(cur, playStartMs)
-        container.listenBrainz.scrobble(cur, playStartMs)
     }
 
     private fun maybeAutoplay() {
@@ -200,29 +180,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         viewModelScope.launch {
-            container.settingsStore.privateSession.collect { privateSession = it }
-        }
-        viewModelScope.launch {
             container.settingsStore.playbackPrefs.collect { p ->
-                scrobbleEnabled = p.scrobble
                 autoplayEnabled = p.autoplayRadio
                 if (_state.value.speed == 1.0f && p.defaultSpeed != 1.0f && _state.value.current.id.isEmpty()) {
                     _state.update { it.copy(speed = p.defaultSpeed) }
                 }
-            }
-        }
-        // on account change save outgoing queue first stop then restore incoming epoch only bumps on real transitions
-        viewModelScope.launch {
-            container.accountEpoch.drop(1).collect {
-                persistQueue()
-                container.queueStore.requestFlush()
-                suppressPersist = true         // clearing below must not wipe what we just saved
-                stopPlayback()
-                suppressPersist = false
-                val key = container.currentAccountKey()
-                playingAccountKey = key
-                val saved = key.takeIf { it.isNotBlank() }?.let { container.queueStore.get(it) }
-                if (saved != null) restoreQueue(saved)
             }
         }
     }
@@ -240,7 +202,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun persistQueue() {
-        if (suppressPersist) return
         val c = controller ?: return
         val key = playingAccountKey.ifBlank { container.currentAccountKey() }
         if (key.isBlank()) return
@@ -381,7 +342,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 keyName = ki?.name ?: "",
             )
         }
-        updateDiscordPresence()
         maybeEnrichLocal(_state.value.current)
         persistQueue()
     }
@@ -413,22 +373,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             songById = songById.mapValues { (id, s) -> if (id == song.id) enrich(s) else s }
             _state.update { st -> if (st.current.id == song.id) st.copy(current = enrich(st.current)) else st }
         }
-    }
-
-    private fun updateDiscordPresence() {
-        val s = _state.value
-        if (s.current.id.isEmpty()) return
-        val sig = "${s.current.id}|${s.isPlaying}"
-        val now = System.currentTimeMillis()
-        val pos = s.positionSec
-        // discord animates the bar client-side from timestamps re-push on desync (loop/seek) else it sticks at the end
-        val expected = lastDiscordPosSec + if (s.isPlaying) (now - lastDiscordWallMs) / 1000f else 0f
-        val desynced = pos < expected - 2f || pos > expected + 2f
-        if (sig == lastDiscordSig && !desynced) return
-        lastDiscordSig = sig
-        lastDiscordPosSec = pos
-        lastDiscordWallMs = now
-        container.discord.update(s.current, s.isPlaying, pos)
     }
 
     private fun toMediaItem(song: Song): MediaItem = MediaItem.Builder()
@@ -531,7 +475,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                     syncFromController()
                 }
                 offset += page.size
-                delay(180) // stay clear of spotify rate limit
             }
         }
     }
@@ -651,12 +594,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // radio/podcasts dropped since the backend can't resolve their ids
+    // queue holds library tracks only now
     fun saveQueueAsPlaylist(name: String, onResult: (String) -> Unit = {}) {
         val title = name.trim()
         if (title.isEmpty()) return
         val ids = _state.value.queue
-            .filterNot { it.isRadio() || it.isPodcast() }
             .map { it.id }
             .filter { it.isNotEmpty() }
             .distinct()

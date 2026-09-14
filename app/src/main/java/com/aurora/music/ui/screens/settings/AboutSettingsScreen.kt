@@ -29,7 +29,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
-import com.aurora.music.data.ServerType
 
 @Composable
 fun AboutSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
@@ -49,20 +48,18 @@ fun AboutSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                 contentAlignment = Alignment.Center,
             ) { Icon(Icons.Filled.GraphicEq, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(44.dp)) }
             Spacer(Modifier.height(14.dp))
-            val isJellyfin = session?.type == ServerType.JELLYFIN
             Text("Aurora", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
-            Text("Version 1.0  •  ${if (isJellyfin) "Jellyfin" else "Navidrome"} client", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Version 1.0  •  Local music player", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(24.dp))
 
-            InfoRow("Connected server", session?.server?.removePrefix("http://")?.removePrefix("https://") ?: "—")
+            InfoRow("Library", "On this device")
             InfoRow("Signed in as", session?.username ?: "—")
-            InfoRow("Protocol", if (isJellyfin) "Jellyfin" else "Subsonic / OpenSubsonic")
             InfoRow("Client name", "Aurora")
             InfoRow("Playback engine", "AndroidX Media3 (ExoPlayer)")
 
             Spacer(Modifier.height(20.dp))
             Text(
-                "Built with Jetpack Compose & Material 3.\nMusic streamed from your own music server.",
+                "Built with Jetpack Compose & Material 3.\nPlays music stored on this device — no account needed.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,

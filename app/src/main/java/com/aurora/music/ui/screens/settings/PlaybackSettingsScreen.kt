@@ -16,7 +16,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Audiotrack
-import androidx.compose.material.icons.filled.DataSaverOn
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HighQuality
@@ -44,41 +43,18 @@ import com.aurora.music.data.PlaybackPrefs
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-private val BITRATES = listOf(0, 128, 192, 256, 320)
-private val BITRATE_LABELS = listOf("Lossless", "128", "192", "256", "320")
-
 @Composable
 fun PlaybackSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val context = LocalContext.current
     val container = remember { (context.applicationContext as AuroraApplication).container }
     val store = container.settingsStore
-    val isLocal = container.isLocal
     val prefs by store.playbackPrefs.collectAsStateWithLifecycle(initialValue = PlaybackPrefs())
-    val dataSaver by store.dataSaver.collectAsStateWithLifecycle(initialValue = false)
     val alarm by store.alarmPrefs.collectAsStateWithLifecycle(initialValue = AlarmPrefs())
     val scope = rememberCoroutineScope()
 
     Column(Modifier.fillMaxWidth()) {
         SettingsTopBar("Playback & quality", onBack)
         LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp)) {
-
-            // streaming quality only applies to server backends
-            if (!isLocal) {
-                item { SettingsSectionTitle("Streaming quality") }
-                item {
-                    val sel = BITRATES.indexOf(prefs.streamWifi).coerceAtLeast(0)
-                    SegmentedRow("On Wi-Fi", BITRATE_LABELS, sel) { i -> scope.launch { store.setStreamWifi(BITRATES[i]) } }
-                }
-                item {
-                    val sel = BITRATES.indexOf(prefs.streamCellular).coerceAtLeast(0)
-                    SegmentedRow("On cellular", BITRATE_LABELS, sel) { i -> scope.launch { store.setStreamCellular(BITRATES[i]) } }
-                }
-                item {
-                    SettingsGroup {
-                        SettingsSwitchRow(Icons.Filled.DataSaverOn, "Data saver", "Cap streaming to ~96 kbps on mobile data", dataSaver) { v -> scope.launch { store.setDataSaver(v) } }
-                    }
-                }
-            }
 
             item { SettingsSectionTitle("Output") }
             item {

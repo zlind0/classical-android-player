@@ -46,10 +46,8 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Podcasts
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
-import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SwapVert
@@ -147,8 +145,6 @@ fun LibraryScreen(
     onImportM3u: () -> Unit,
     onExportPlaylist: (String, String, String) -> Unit,
     onOpenFolders: () -> Unit,
-    onOpenRadio: () -> Unit = {},
-    onOpenPodcasts: () -> Unit = {},
     onPlayCollection: (String, String) -> Unit,
     onShuffleCollection: (String, String) -> Unit,
     onQueueCollection: (String, String) -> Unit,
@@ -276,7 +272,7 @@ fun LibraryScreen(
             LibraryFilter.ALL -> AllOverview(
                 state = state, pins = pins, canDownload = canDownload, bottom = bottom,
                 onFilter = onFilter, onOpenDetail = onOpenDetail,
-                onOpenFolders = onOpenFolders, onOpenRadio = onOpenRadio, onOpenPodcasts = onOpenPodcasts,
+                onOpenFolders = onOpenFolders,
             )
             LibraryFilter.SONGS -> SongsTab(
                 state = state, sort = sort, likedIds = likedIds, currentSongId = currentSongId, isPlaying = isPlaying,
@@ -297,13 +293,11 @@ fun LibraryScreen(
             else -> {
                 val rows = buildRows(state, filter, sort, pins)
                 if (rows.isEmpty()) {
-                    EmptyHint("Nothing here yet", "Your ${filter.label.lowercase()} will show up once the server has some.")
+                    EmptyHint("Nothing here yet", "Your ${filter.label.lowercase()} will show up once your library has some.")
                 } else {
                     RowsContent(rows, layout, libColumns, sort, bottom, actions) { r ->
                         when (r.kind) {
                             "folders" -> onOpenFolders()
-                            "radio" -> onOpenRadio()
-                            "podcasts" -> onOpenPodcasts()
                             else -> onOpenDetail(r.kind, r.id)
                         }
                     }
@@ -360,8 +354,6 @@ private fun AllOverview(
     onFilter: (LibraryFilter) -> Unit,
     onOpenDetail: (String, String) -> Unit,
     onOpenFolders: () -> Unit,
-    onOpenRadio: () -> Unit,
-    onOpenPodcasts: () -> Unit,
 ) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = bottom)) {
         // quick access tiles
@@ -370,8 +362,6 @@ private fun AllOverview(
                 add(QuickTile("Liked Songs", "${state.likedSongCount} songs", Icons.Filled.Favorite, state.likedCover) { onOpenDetail("liked", "liked") })
                 if (canDownload) add(QuickTile("Downloads", "${state.downloadedRows.size} items", Icons.Filled.Download, "") { onFilter(LibraryFilter.DOWNLOADED) })
                 if (state.supportsFolders) add(QuickTile("Folders", "Browse files", Icons.Filled.Folder, "") { onOpenFolders() })
-                add(QuickTile("Radio", "Live stations", Icons.Filled.Radio, "") { onOpenRadio() })
-                add(QuickTile("Podcasts", "Shows & episodes", Icons.Filled.Podcasts, "") { onOpenPodcasts() })
             }
             Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 tiles.chunked(2).forEach { pair ->

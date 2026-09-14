@@ -70,7 +70,6 @@ import com.aurora.music.navigation.topLevelDestinations
 import com.aurora.music.ui.components.AmbientBackground
 import com.aurora.music.ui.components.MiniPlayer
 import com.aurora.music.ui.components.SidebarContent
-import com.aurora.music.ui.screens.auth.SignInScreen
 import com.aurora.music.ui.screens.detail.DetailScreen
 import com.aurora.music.ui.screens.home.HomeScreen
 import com.aurora.music.ui.screens.library.LibraryScreen
@@ -81,7 +80,6 @@ import com.aurora.music.ui.screens.search.SearchScreen
 import com.aurora.music.ui.theme.auroraPanel
 import com.aurora.music.ui.screens.settings.PlaybackSettingsScreen
 import com.aurora.music.ui.screens.settings.SettingsScreen
-import com.aurora.music.viewmodel.AuthViewModel
 import com.aurora.music.viewmodel.DetailViewModel
 import com.aurora.music.viewmodel.HomeViewModel
 import com.aurora.music.viewmodel.LibraryViewModel
@@ -96,23 +94,19 @@ fun AuroraApp() {
 
     val navController = rememberNavController()
     val playerVM: PlayerViewModel = viewModel()
-    val authVM: AuthViewModel = viewModel()
 
     val playerState by playerVM.state.collectAsStateWithLifecycle()
-    val authState by authVM.state.collectAsStateWithLifecycle()
     val sessionReady by container.sessionReady.collectAsStateWithLifecycle()
     val session by container.settingsStore.session.collectAsStateWithLifecycle(initialValue = null)
-    val savedSessions by container.settingsStore.savedSessions.collectAsStateWithLifecycle(initialValue = emptyList())
     val downloadsMap by container.downloadManager.downloads.collectAsStateWithLifecycle()
     val downloadedIds = downloadsMap.keys
-    val localMode = session?.type == com.aurora.music.data.ServerType.LOCAL
-    val serverTagEditing = session?.let { container.repository.supportsServerTagEdit } ?: false
-    // pins scoped to the active connection
-    val currentServer = session?.server ?: ""
+    // local-only fork: always the on-device library
+    val localMode = true
+    val serverTagEditing = false
+    // pins are no longer scoped per connection
     val allPins by container.settingsStore.pins.collectAsStateWithLifecycle(initialValue = emptyList())
-    val pins = allPins.filter { it.serverId == currentServer }
+    val pins = allPins
     val gesturePrefs by container.settingsStore.gesturePrefs.collectAsStateWithLifecycle(initialValue = com.aurora.music.data.GesturePrefs())
-    val offlineMode by container.offline.collectAsStateWithLifecycle()
 
     val downloadStates by container.downloadManager.states.collectAsStateWithLifecycle()
 
@@ -170,7 +164,7 @@ fun AuroraApp() {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     val onTopLevel = currentRoute in topLevelDestinations.map { it.route }
-    val showChrome = currentRoute != null && currentRoute != Routes.SIGN_IN
+    val showChrome = currentRoute != null
 
     var showSpeedSheet by remember { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
@@ -215,44 +209,15 @@ fun AuroraApp() {
     fun playById(id: String) = scope.launch {
         container.repository.songFor(id)?.let { playerVM.play(it) }
     }
-    fun logout() {
-        // dont stop playback here the account-change observer saves the queue first then stops
-        scope.launch { container.signOut() }
-        navController.navigate(Routes.SIGN_IN) { popUpTo(0) }
-    }
 
-    // wait for the persisted session check before choosing a start destination
+    // wait for the local-session bootstrap before choosing a start destination
     if (sessionReady == null) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.Center) {
             com.aurora.music.ui.components.LottieLoader(modifier = Modifier.size(90.dp))
         }
         return
     }
-    val startDestination = if (sessionReady == true) Routes.HOME else Routes.SIGN_IN
-
-    // session ready while still on sign-in eg async spotify oauth redirect advance to home
-    androidx.compose.runtime.LaunchedEffect(sessionReady) {
-        if (sessionReady == true && navController.currentDestination?.route == Routes.SIGN_IN) {
-            navController.navigate(Routes.HOME) { popUpTo(Routes.SIGN_IN) { inclusive = true } }
-        }
-    }
-
-    // adding an account reuses sign-in while logged in so sessionReady doesnt change account epoch advances to home
-    // guard on sessionReady true so logout which also bumps the epoch doesnt bounce off sign-in
-    val accountEpoch by container.accountEpoch.collectAsStateWithLifecycle()
-    androidx.compose.runtime.LaunchedEffect(accountEpoch) {
-        if (accountEpoch > 0 && sessionReady == true && navController.currentDestination?.route == Routes.SIGN_IN) {
-            navController.navigate(Routes.HOME) { popUpTo(Routes.SIGN_IN) { inclusive = true } }
-        }
-    }
-
-    // backfill avatar for sessions created before we stored it
-    androidx.compose.runtime.LaunchedEffect(sessionReady, session?.imageUrl) {
-        if (sessionReady == true && session != null && session?.imageUrl.isNullOrBlank()) {
-            val url = runCatching { container.repository.profileImageUrl() }.getOrNull()
-            if (!url.isNullOrBlank()) container.settingsStore.updateUserImage(url)
-        }
-    }
+    val startDestination = Routes.HOME
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -269,9 +234,6 @@ fun AuroraApp() {
                     onHistory = { closeDrawerThen { navController.navigate(Routes.HISTORY) } },
                     onStats = { closeDrawerThen { navController.navigate(Routes.STATS) } },
                     onDuplicates = { closeDrawerThen { navController.navigate(Routes.DUPLICATES) } },
-                    onRadio = { closeDrawerThen { navController.navigate(Routes.RADIO) } },
-                    onPodcasts = { closeDrawerThen { navController.navigate(Routes.PODCASTS) } },
-                    onLogout = { closeDrawerThen { logout() } },
                 )
             }
         },
@@ -292,17 +254,6 @@ fun AuroraApp() {
                         ) {
                             if (activeDownloads > 0) {
                                 DownloadProgressBanner(count = activeDownloads, progress = downloadProgress)
-                                Spacer(Modifier.height(8.dp))
-                            }
-                            if (offlineMode) {
-                                Row(
-                                    Modifier.clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)).padding(horizontal = 14.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Icon(Icons.Filled.CloudOff, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("Offline mode", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                                }
                                 Spacer(Modifier.height(8.dp))
                             }
                             if (playerState.hasTrack) {
@@ -332,32 +283,6 @@ fun AuroraApp() {
                     popEnterTransition = { EnterTransition.None },
                     popExitTransition = { ExitTransition.None },
                 ) {
-                    composable(Routes.SIGN_IN) {
-                        SignInScreen(
-                            state = authState,
-                            onSelectType = authVM::selectType,
-                            onScheme = authVM::onScheme,
-                            onHost = authVM::onHost,
-                            onUsername = authVM::onUsername,
-                            onPassword = authVM::onPassword,
-                            onBack = authVM::back,
-                            canContinueServer = authVM.canContinueServer,
-                            onContinueServer = authVM::continueToCredentials,
-                            canSubmit = authVM.canSubmit,
-                            onSignIn = {
-                                authVM.signIn {
-                                    navController.navigate(Routes.HOME) {
-                                        popUpTo(Routes.SIGN_IN) { inclusive = true }
-                                    }
-                                }
-                            },
-                            onAuthUrlOpened = authVM::authUrlOpened,
-                            onLocal = authVM::signInLocal,
-                            onConnectSpotify = authVM::connectSpotify,
-                            savedSessions = savedSessions,
-                            onUseSaved = { s -> authVM.useSaved(s) },   // nav to home handled by the sessionReady effect
-                        )
-                    }
                     composable(Routes.HOME) {
                         val homeVM: HomeViewModel = viewModel()
                         val homeState by homeVM.state.collectAsStateWithLifecycle()
@@ -478,8 +403,6 @@ fun AuroraApp() {
                                 }
                             } },
                             onOpenFolders = { navController.navigate(Routes.folders()) },
-                            onOpenRadio = { navController.navigate(Routes.RADIO) },
-                            onOpenPodcasts = { navController.navigate(Routes.PODCASTS) },
                             onPlayCollection = { id, kind -> scope.launch { container.repository.detail(kind, id)?.let { d -> if (d.tracks.isNotEmpty()) playerVM.playCollection(kind, id, d.tracks, 0, d.info.songCount) } } },
                             onShuffleCollection = { id, kind -> scope.launch { container.repository.detail(kind, id)?.let { d -> if (d.tracks.isNotEmpty()) playerVM.shuffleCollection(kind, id, d.tracks, d.info.songCount) } } },
                             onQueueCollection = { id, kind -> scope.launch {
@@ -644,7 +567,7 @@ fun AuroraApp() {
                                     title = d?.info?.title ?: kind,
                                     subtitle = d?.info?.subtitle ?: "",
                                     coverUrl = d?.info?.artUrl ?: "",
-                                    serverId = currentServer,
+                                    serverId = "",
                                 )
                                 scope.launch { container.settingsStore.togglePin(pin) }
                             },
@@ -684,7 +607,6 @@ fun AuroraApp() {
                             onOpenEq = { navController.navigate(Routes.SETTINGS_EQ) },
                             onOpenVisualizer = { navController.navigate(Routes.SETTINGS_VISUALIZER) },
                             onOpenSonic = { navController.navigate(Routes.SETTINGS_SONIC) },
-                            onOpenSources = { navController.navigate(Routes.SETTINGS_SOURCES) },
                             onOpenDownloads = { navController.navigate(Routes.SETTINGS_STORAGE) },
                             onOpenAppearance = { navController.navigate(Routes.SETTINGS_APPEARANCE) },
                             onOpenGestures = { navController.navigate(Routes.SETTINGS_GESTURES) },
@@ -692,22 +614,7 @@ fun AuroraApp() {
                             onOpenPermissions = { navController.navigate(Routes.SETTINGS_PERMISSIONS) },
                             onOpenAbout = { navController.navigate(Routes.SETTINGS_ABOUT) },
                             onOpenProfile = { navController.navigate(Routes.PROFILE) },
-                            onOpenAccounts = { navController.navigate(Routes.SETTINGS_ACCOUNTS) },
                             onOpenBackup = { navController.navigate(Routes.SETTINGS_BACKUP) },
-                            onLogout = { logout() },
-                        )
-                    }
-                    composable(Routes.SETTINGS_ACCOUNTS) {
-                        com.aurora.music.ui.screens.settings.AccountsScreen(
-                            contentPadding = inner,
-                            onBack = { navController.popBackStack() },
-                            onSwitch = { s ->
-                                scope.launch { container.switchSession(s) }   // playback stop and reload via accountEpoch
-                                confirm("Switched to ${s.typeLabel}")
-                                navController.popBackStack()
-                            },
-                            onForget = { s -> scope.launch { container.forgetSavedSession(s) } },
-                            onAddAccount = { authVM.reset(); navController.navigate(Routes.SIGN_IN) },
                         )
                     }
                     composable(Routes.SETTINGS_PLAYBACK) {
@@ -727,21 +634,10 @@ fun AuroraApp() {
                         com.aurora.music.ui.screens.settings.IntegrationsSettingsScreen(
                             contentPadding = inner,
                             onBack = { navController.popBackStack() },
-                            onOpenDiscordLogin = { navController.navigate(Routes.DISCORD_LOGIN) },
                         )
                     }
                     composable(Routes.SETTINGS_APPEARANCE) {
                         com.aurora.music.ui.screens.settings.AppearanceScreen(contentPadding = inner, onBack = { navController.popBackStack() })
-                    }
-                    composable(Routes.DISCORD_LOGIN) {
-                        com.aurora.music.ui.screens.settings.DiscordLoginScreen(
-                            contentPadding = inner,
-                            onBack = { navController.popBackStack() },
-                            onToken = { token ->
-                                scope.launch { container.settingsStore.saveDiscord(token, "") }
-                                navController.popBackStack()
-                            },
-                        )
                     }
                     composable(Routes.SETTINGS_EQ) {
                         com.aurora.music.ui.screens.settings.EqualizerScreen(contentPadding = inner, onBack = { navController.popBackStack() })
@@ -751,9 +647,6 @@ fun AuroraApp() {
                     }
                     composable(Routes.SETTINGS_SONIC) {
                         com.aurora.music.ui.screens.settings.SonicSettingsScreen(contentPadding = inner, onBack = { navController.popBackStack() })
-                    }
-                    composable(Routes.SETTINGS_SOURCES) {
-                        com.aurora.music.ui.screens.settings.SourcesSettingsScreen(contentPadding = inner, onBack = { navController.popBackStack() })
                     }
                     composable(Routes.SETTINGS_PERMISSIONS) {
                         com.aurora.music.ui.screens.settings.PermissionsScreen(contentPadding = inner, onBack = { navController.popBackStack() })
@@ -782,41 +675,6 @@ fun AuroraApp() {
                     }
                     composable(Routes.STATS) {
                         com.aurora.music.ui.screens.stats.ListeningStatsScreen(contentPadding = inner, onBack = { navController.popBackStack() }, onPlay = { playById(it) }, onOpenDetail = { k, i -> openDetail(k, i) })
-                    }
-                    composable(Routes.RADIO) {
-                        com.aurora.music.ui.screens.radio.RadioScreen(
-                            contentPadding = inner,
-                            onBack = { navController.popBackStack() },
-                            onPlay = { playerVM.play(it) },
-                        )
-                    }
-                    composable(Routes.PODCASTS) {
-                        com.aurora.music.ui.screens.podcasts.PodcastsScreen(
-                            contentPadding = inner,
-                            onBack = { navController.popBackStack() },
-                            onOpenPodcast = { p ->
-                                navController.navigate(Routes.podcastDetail(p.feedUrl, p.displayTitle, p.imageUrl.orEmpty(), p.author.orEmpty()))
-                            },
-                        )
-                    }
-                    composable(
-                        Routes.PODCAST_DETAIL,
-                        arguments = listOf(
-                            androidx.navigation.navArgument("feed") { defaultValue = "" },
-                            androidx.navigation.navArgument("title") { defaultValue = "" },
-                            androidx.navigation.navArgument("image") { defaultValue = "" },
-                            androidx.navigation.navArgument("author") { defaultValue = "" },
-                        ),
-                    ) { entry ->
-                        com.aurora.music.ui.screens.podcasts.PodcastDetailScreen(
-                            contentPadding = inner,
-                            feedUrl = entry.arguments?.getString("feed").orEmpty(),
-                            title = entry.arguments?.getString("title").orEmpty(),
-                            imageUrl = entry.arguments?.getString("image").orEmpty(),
-                            author = entry.arguments?.getString("author").orEmpty(),
-                            onBack = { navController.popBackStack() },
-                            onPlay = { playerVM.play(it) },
-                        )
                     }
                 }
             }

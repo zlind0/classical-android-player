@@ -117,9 +117,8 @@ class DownloadManager(
     fun isDownloaded(id: String): Boolean = _downloads.value.containsKey(id)
     fun get(id: String): DownloadedSong? = _downloads.value[id]
 
-    // also matches merged-namespaced keys downloads keyed by wrapped id but localize looks up raw id
-    fun getByOriginalId(originalId: String): DownloadedSong? =
-        _downloads.value[originalId] ?: _downloads.value.values.firstOrNull { stripMergeNamespace(it.id) == originalId }
+    // local-only: single library, ids are never namespaced
+    fun getByOriginalId(originalId: String): DownloadedSong? = _downloads.value[originalId]
 
     fun downloadSong(song: Song) {
         if (isDownloaded(song.id) || _states.value[song.id] is DownloadState.Downloading) return
@@ -151,12 +150,7 @@ class DownloadManager(
             setState(song.id, DownloadState.Downloading(0f))
             val audioFile = File(dir, "${song.id}.audio")
             val bitrate = downloadBitrateProvider()
-            val provided = streamUrlProvider(song.id, bitrate, bitrate == 0) ?: song.streamUrl
-            // resolve aurora-yt sentinel via the songs full sentinel which holds the search query
-            val audioUrl = if (provided.startsWith("aurora-yt://")) {
-                val sentinel = if (song.streamUrl.startsWith("aurora-yt://")) song.streamUrl else provided
-                resolveSentinel(sentinel) ?: throw IOException("No stream found for this track")
-            } else provided
+            val audioUrl = streamUrlProvider(song.id, bitrate, bitrate == 0) ?: song.streamUrl
             downloadTo(audioUrl, audioFile) { p -> setState(song.id, DownloadState.Downloading(p)) }
             val coverFile = File(dir, "${song.id}.jpg")
             runCatching { if (song.artworkUrl.isNotBlank()) downloadTo(song.artworkUrl, coverFile) {} }

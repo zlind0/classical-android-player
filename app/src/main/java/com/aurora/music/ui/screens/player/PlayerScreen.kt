@@ -207,7 +207,7 @@ fun PlayerScreen(
                         Text("PLAYING FROM", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f), maxLines = 1)
                         Text(song.album.ifBlank { "Aurora" }, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, maxLines = 1, color = MaterialTheme.colorScheme.onSurface)
                     }
-                    // cast route picker tvs/chromecast show here not in the local-output sheet
+                    // output device sheet covers local device choice
                     PlayerCastButton(Modifier.size(40.dp))
                     Icon(
                         Icons.Filled.Speaker, "Output device",
