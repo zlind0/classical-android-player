@@ -36,6 +36,11 @@ class LocalLibrary(
 
     @Volatile var folderRoot: String = ""; private set
 
+    // Classical fork v0.3 (plan §6): when the user configured scan roots, only
+    // tracks inside those subtrees enter the library. Null = unscoped (legacy).
+    // Takes effect on the next scan()/refresh().
+    @Volatile var scopeFilter: ((Song) -> Boolean)? = null
+
     suspend fun ensureLoaded() {
         if (loaded) return
         mutex.withLock {
@@ -193,12 +198,14 @@ class LocalLibrary(
                 }
             }
         }
-        songs = out
-        byId = out.associateBy { it.id }
-        matchIndex = out.groupBy { TrackMatch.key(it.artist, it.title) }
-        dirOf = dirs
-        folderRoot = commonDir(dirs.values)
-        albums = out.groupBy { it.albumId }
+        val scoped = scopeFilter?.let { f -> out.filter(f) } ?: out
+        val scopedIds = scoped.map { it.id }.toSet()
+        songs = scoped
+        byId = scoped.associateBy { it.id }
+        matchIndex = scoped.groupBy { TrackMatch.key(it.artist, it.title) }
+        dirOf = dirs.filterKeys { it in scopedIds }
+        folderRoot = commonDir(dirOf.values)
+        albums = scoped.groupBy { it.albumId }
             .map { (aid, tracks) ->
                 val f = tracks.first()
                 Album(
@@ -212,7 +219,7 @@ class LocalLibrary(
                 )
             }
             .sortedByDescending { albumDateAdded[it.id] ?: 0L }
-        artists = out.groupBy { it.artistId }
+        artists = scoped.groupBy { it.artistId }
             .map { (aid, tracks) ->
                 Artist(
                     id = aid,

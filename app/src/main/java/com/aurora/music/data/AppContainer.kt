@@ -55,6 +55,21 @@ class AppContainer(context: Context) {
     val musicRoots = MusicRootsStore(appContext)
     val rootScanner = RootScanner(musicRoots)
 
+    // plan §6: the browsable library only contains the user's scan roots
+    fun refreshLibraryScope() {
+        val enabled = musicRoots.roots.value.filter { it.enabled }
+            .map { it.rootPath.trimEnd('/') }
+            .filter { it.isNotBlank() }
+        localLibrary.scopeFilter = if (enabled.isEmpty()) null else { song ->
+            val p = song.path
+            p.isNotBlank() && enabled.any { root -> p == root || p.startsWith("$root/") }
+        }
+        scope.launch {
+            runCatching { localLibrary.refresh() }
+            _libraryReload.value++
+        }
+    }
+
     val backupManager = BackupManager(settingsStore, localStore, playHistory)
 
     val musicBrainz = com.aurora.music.data.remote.MusicBrainzClient()
@@ -163,6 +178,10 @@ class AppContainer(context: Context) {
     }
 
     init {
+        refreshLibraryScope()
+        scope.launch {
+            musicRoots.roots.collect { refreshLibraryScope() }
+        }
         // scan() is idempotent only processes tracks not already in the vector store
         scope.launch {
             if (runCatching { settingsStore.sonicAutoAnalyze.first() }.getOrDefault(false)) sonicEngine.scan()
