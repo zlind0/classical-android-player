@@ -66,6 +66,14 @@ data class AudioProfile(
     val compEnabled: Boolean = false,
     val compThreshDb: Float = -18f,
     val compRatio: Float = 2f,
+    // v0.6 driving + compressor detail
+    val driveMode: Int = DrivingMode.OFF,
+    val driveTargetDb: Float = -16f,
+    val compAttackMs: Float = 80f,
+    val compReleaseMs: Float = 400f,
+    val compKneeDb: Float = 6f,
+    val compMakeupDb: Float = 0f,
+    val makeupAuto: Boolean = true,
     val limiterEnabled: Boolean = true,
     val limiterCeilingDb: Float = -0.3f,
     val replayGain: Int = 0,
@@ -76,7 +84,8 @@ fun AudioProfile.describe(): String = buildList {
     if (graphic.any { it != 0f }) add("16-band")
     if (parametric.isNotEmpty()) add("${parametric.size} param")
     if (convEnabled) add("IR")
-    if (compEnabled) add("comp")
+    if (driveMode != DrivingMode.OFF) add(DrivingMode.label(driveMode))
+    else if (compEnabled) add("comp")
     if (limiterEnabled) add("limit")
     if (replayGain > 0) add(if (replayGain == 1) "RG track" else "RG album")
 }.ifEmpty { listOf("flat") }.joinToString(" · ")

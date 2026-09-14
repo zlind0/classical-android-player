@@ -136,6 +136,21 @@ object BandType { const val PEAK = 0; const val LOW_SHELF = 1; const val HIGH_SH
 
 data class ParamBand(val freqHz: Float, val gainDb: Float, val q: Float, val type: Int = BandType.PEAK)
 
+object DrivingMode {
+    const val OFF = 0
+    const val NATURAL = 1
+    const val BALANCED = 2
+    const val STRONG = 3
+    const val CUSTOM = 4
+    fun label(v: Int) = when (v) {
+        NATURAL -> "Natural"
+        BALANCED -> "Balanced"
+        STRONG -> "Strong"
+        CUSTOM -> "Custom"
+        else -> "Off"
+    }
+}
+
 object DspMode { const val SYSTEM = 0; const val CUSTOM = 1; const val OFF = 2 }
 
 data class AudioPrefs(
@@ -158,6 +173,14 @@ data class AudioPrefs(
     val dspCompEnabled: Boolean = false,
     val dspCompThreshDb: Float = -18f,
     val dspCompRatio: Float = 2f,
+    // v0.6 driving loudness (plan §35-38)
+    val dspDriveMode: Int = DrivingMode.OFF,   // 0 off 1 natural 2 balanced 3 strong 4 custom
+    val dspDriveTargetDb: Float = -16f,        // target integrated LUFS
+    val dspCompAttackMs: Float = 80f,
+    val dspCompReleaseMs: Float = 400f,
+    val dspCompKneeDb: Float = 6f,
+    val dspCompMakeupDb: Float = 0f,
+    val dspMakeupAuto: Boolean = true,
     val dspConvEnabled: Boolean = false,
     val dspConvIrPath: String = "",
     val dspConvIrName: String = "",
@@ -329,6 +352,13 @@ class SettingsStore(private val context: Context) {
         val DSP_COMP = booleanPreferencesKey("dsp_comp")
         val DSP_COMP_THRESH = floatPreferencesKey("dsp_comp_thresh")
         val DSP_COMP_RATIO = floatPreferencesKey("dsp_comp_ratio")
+        val DSP_DRIVE_MODE = intPreferencesKey("dsp_drive_mode")
+        val DSP_DRIVE_TARGET = floatPreferencesKey("dsp_drive_target")
+        val DSP_COMP_ATTACK = floatPreferencesKey("dsp_comp_attack")
+        val DSP_COMP_RELEASE = floatPreferencesKey("dsp_comp_release")
+        val DSP_COMP_KNEE = floatPreferencesKey("dsp_comp_knee")
+        val DSP_COMP_MAKEUP = floatPreferencesKey("dsp_comp_makeup")
+        val DSP_MAKEUP_AUTO = booleanPreferencesKey("dsp_makeup_auto")
         val DSP_CONV = booleanPreferencesKey("dsp_conv_enabled")
         val DSP_CONV_PATH = stringPreferencesKey("dsp_conv_path")
         val DSP_CONV_NAME = stringPreferencesKey("dsp_conv_name")
@@ -400,6 +430,13 @@ class SettingsStore(private val context: Context) {
             dspCompEnabled = p[Keys.DSP_COMP] ?: false,
             dspCompThreshDb = p[Keys.DSP_COMP_THRESH] ?: -18f,
             dspCompRatio = p[Keys.DSP_COMP_RATIO] ?: 2f,
+            dspDriveMode = p[Keys.DSP_DRIVE_MODE] ?: DrivingMode.OFF,
+            dspDriveTargetDb = p[Keys.DSP_DRIVE_TARGET] ?: -16f,
+            dspCompAttackMs = p[Keys.DSP_COMP_ATTACK] ?: 80f,
+            dspCompReleaseMs = p[Keys.DSP_COMP_RELEASE] ?: 400f,
+            dspCompKneeDb = p[Keys.DSP_COMP_KNEE] ?: 6f,
+            dspCompMakeupDb = p[Keys.DSP_COMP_MAKEUP] ?: 0f,
+            dspMakeupAuto = p[Keys.DSP_MAKEUP_AUTO] ?: true,
             dspConvEnabled = p[Keys.DSP_CONV] ?: false,
             dspConvIrPath = p[Keys.DSP_CONV_PATH].orEmpty(),
             dspConvIrName = p[Keys.DSP_CONV_NAME].orEmpty(),
@@ -746,6 +783,13 @@ class SettingsStore(private val context: Context) {
     suspend fun setDspCompEnabled(v: Boolean) = context.dataStore.edit { it[Keys.DSP_COMP] = v }
     suspend fun setDspCompThresh(v: Float) = context.dataStore.edit { it[Keys.DSP_COMP_THRESH] = v }
     suspend fun setDspCompRatio(v: Float) = context.dataStore.edit { it[Keys.DSP_COMP_RATIO] = v }
+    suspend fun setDspDriveMode(v: Int) = context.dataStore.edit { it[Keys.DSP_DRIVE_MODE] = v }
+    suspend fun setDspDriveTarget(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_TARGET] = v }
+    suspend fun setDspCompAttack(v: Float) = context.dataStore.edit { it[Keys.DSP_COMP_ATTACK] = v }
+    suspend fun setDspCompRelease(v: Float) = context.dataStore.edit { it[Keys.DSP_COMP_RELEASE] = v }
+    suspend fun setDspCompKnee(v: Float) = context.dataStore.edit { it[Keys.DSP_COMP_KNEE] = v }
+    suspend fun setDspCompMakeup(v: Float) = context.dataStore.edit { it[Keys.DSP_COMP_MAKEUP] = v }
+    suspend fun setDspMakeupAuto(v: Boolean) = context.dataStore.edit { it[Keys.DSP_MAKEUP_AUTO] = v }
     suspend fun setDspConvEnabled(v: Boolean) = context.dataStore.edit { it[Keys.DSP_CONV] = v }
     suspend fun setDspConvMakeup(v: Float) = context.dataStore.edit { it[Keys.DSP_CONV_MAKEUP] = v }
     suspend fun setDspConvIr(path: String, name: String) = context.dataStore.edit {

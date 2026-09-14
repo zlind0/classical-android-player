@@ -92,11 +92,16 @@ class PlaybackService : MediaLibraryService() {
     private var pendingNeutralize = false
     private var usbSink: com.decent.usbaudio.media3.UsbAudioSink? = null
 
-    // v0.5 correction convolver state (compiled off-thread, applied via setImpulse)
+    // v0.6 correction convolver state (compiled off-thread, applied via setImpulse)
     @Volatile private var correctionMaxGainDb: Float = 0f
     @Volatile private var correctionTrimDb: Float = 0f
     @Volatile private var correctionActive: Boolean = false
     @Volatile private var lastCorrectionId: String = "flat"
+
+    // v0.6 driving loudness state (plan §34): per-track make-up toward target LUFS
+    @Volatile private var driveOn: Boolean = false
+    @Volatile private var driveTargetDb: Float = -16f
+    @Volatile private var driveGainDb: Float = 0f
 
     override fun onCreate() {
         super.onCreate()
@@ -205,6 +210,7 @@ class PlaybackService : MediaLibraryService() {
                 if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION) ||
                     events.contains(Player.EVENT_TIMELINE_CHANGED)
                 ) xfadeBpPending = false
+                if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) updateDriveGain()
                 if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION) ||
                     events.contains(Player.EVENT_MEDIA_METADATA_CHANGED) ||
                     events.contains(Player.EVENT_IS_PLAYING_CHANGED) ||
@@ -310,6 +316,15 @@ class PlaybackService : MediaLibraryService() {
         )
         val combinedPeak = maxOf(userPeak, correctionMaxGainDb)
         val autoPre = if (ap.dspAutoHeadroom) -combinedPeak.coerceAtLeast(0f) else 0f
+        // v0.6 driving presets override the static compressor (plan §35)
+        driveOn = ap.dspDriveMode != com.aurora.music.data.DrivingMode.OFF
+        driveTargetDb = ap.dspDriveTargetDb
+        val compEff = when (ap.dspDriveMode) {
+            com.aurora.music.data.DrivingMode.NATURAL -> floatArrayOf(-20f, 1.5f, 80f, 400f, 6f)
+            com.aurora.music.data.DrivingMode.BALANCED -> floatArrayOf(-24f, 2f, 60f, 400f, 6f)
+            com.aurora.music.data.DrivingMode.STRONG -> floatArrayOf(-28f, 3.5f, 40f, 300f, 3f)
+            else -> null
+        }
         val params = DspParams(
             graphic = graphic,
             graphicFreqs = layout.freqs,
@@ -326,9 +341,15 @@ class PlaybackService : MediaLibraryService() {
             trimRightDb = ap.dspTrimRightDb,
             limiterEnabled = ap.dspLimiterEnabled,
             limiterCeilingDb = ap.dspLimiterCeilingDb,
-            compEnabled = ap.dspCompEnabled,
-            compThreshDb = ap.dspCompThreshDb,
-            compRatio = ap.dspCompRatio,
+            compEnabled = compEff != null || ap.dspCompEnabled,
+            compThreshDb = compEff?.get(0) ?: ap.dspCompThreshDb,
+            compRatio = compEff?.get(1) ?: ap.dspCompRatio,
+            compAttackMs = compEff?.get(2) ?: ap.dspCompAttackMs,
+            compReleaseMs = compEff?.get(3) ?: ap.dspCompReleaseMs,
+            compKneeDb = compEff?.get(4) ?: ap.dspCompKneeDb,
+            compMakeupDb = ap.dspCompMakeupDb,
+            makeupAuto = ap.dspMakeupAuto,
+            driveGainDb = driveGainDb,
         )
         auroraDsp.update(params)
         auroraDsp.enabled = mode == DspMode.CUSTOM
@@ -348,6 +369,7 @@ class PlaybackService : MediaLibraryService() {
         // mono in system/off runs in monoprocessor in custom its width=0 above
         monoProcessor.enabled = monoAudioPref && mode != DspMode.CUSTOM
         updateSignalPath()
+        updateDriveGain()
     }
 
     private fun applyPreferredDevice(id: Int) {
@@ -451,6 +473,8 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private fun tickAudio() {
+        // v0.6 GR meters for the Dynamics UI (cheap volatile reads)
+        container.dspMeters.value = com.aurora.music.data.DspMeters(auroraDsp.compGrDb, auroraDsp.limGrDb)
         if (sleepFadeActive) { driveSleepFade(); return }
         if (wakeFadeActive) { driveWakeFade(); return }
         if (xfadeActive) {
@@ -567,12 +591,25 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private fun replayGainMultiplier(): Float {
-        if (replayGainMode == 0) return 1f
+        // v0.6: driving loudness owns gain in DSP (and may boost) — never stack volume RG on top
+        if (driveOn || replayGainMode == 0) return 1f
         val extras = player.currentMediaItem?.mediaMetadata?.extras ?: return 1f
         val gainDb = if (replayGainMode == 2) extras.getFloat("rgAlbum", Float.NaN) else extras.getFloat("rgTrack", Float.NaN)
         if (gainDb.isNaN() || gainDb == 0f) return 1f
         // attenuate-only to avoid inter-sample clipping when boosting quiet tracks
         return Math.pow(10.0, gainDb / 20.0).toFloat().coerceIn(0.1f, 1f)
+    }
+
+    // v0.6: per-track driving make-up = target LUFS − track LUFS (plan §34)
+    private fun updateDriveGain() {
+        if (!driveOn) {
+            if (driveGainDb != 0f) { driveGainDb = 0f; applyAudioEngine() }
+            return
+        }
+        val lufs = player.currentMediaItem?.mediaMetadata?.extras?.getFloat("lufs", Float.NaN)
+            ?.takeIf { !it.isNaN() && it < 0f && it > -70f }
+        val want = if (lufs == null) 0f else (driveTargetDb - lufs).coerceIn(-12f, 12f)
+        if (want != driveGainDb) { driveGainDb = want; applyAudioEngine() }
     }
 
     private inner class MediaCallback : MediaLibrarySession.Callback {

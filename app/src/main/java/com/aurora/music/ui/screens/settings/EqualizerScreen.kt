@@ -27,6 +27,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Compress
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GraphicEq
@@ -36,6 +37,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SurroundSound
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VerticalAlignBottom
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Whatshot
 import androidx.compose.runtime.mutableStateMapOf
@@ -75,6 +77,7 @@ import com.aurora.music.data.AudioPrefs
 import com.aurora.music.data.DEFAULT_SQUIG_BASE
 import com.aurora.music.data.DEFAULT_SQUIG_TARGET
 import com.aurora.music.data.DspMode
+import com.aurora.music.data.DrivingMode
 import com.aurora.music.data.SQUIG_INSTANCES
 import com.aurora.music.data.SQUIG_TARGETS
 import com.aurora.music.data.EqBinding
@@ -129,7 +132,7 @@ fun EqualizerScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                 when (tab) {
                     0 -> correctionTab(prefs, activeCorrection, corrections, activeCorrectionId, store, scope, container, expanded)
                     1 -> userEqTab(prefs, activeCorrection, store, scope, container, expanded, activeCorrectionId)
-                    else -> dynamicsTab(prefs, store, scope, expanded)
+                    else -> dynamicsTab(prefs, store, scope, expanded, container)
                 }
             } else if (prefs.dspMode == DspMode.SYSTEM) {
                 item { SettingsSectionTitle("System equalizer") }; systemEqSection(prefs, fx, store, scope, expanded)
@@ -677,18 +680,102 @@ private fun LazyListScope.dynamicsTab(
     store: SettingsStore,
     scope: CoroutineScope,
     expanded: SnapshotStateMap<String, Boolean>,
+    container: AppContainer,
 ) {
-    val dyn = buildList { if (prefs.dspLimiterEnabled) add("Limiter"); if (prefs.dspCompEnabled) add("Compressor") }.joinToString(" · ").ifBlank { "Off" }
-    collapsible("c_dyn", "Dynamics", Icons.Filled.Compress, dyn, expanded, defaultOpen = true) {
-        SettingsSwitchRow(Icons.Filled.GraphicEq, "Limiter", "Brick-wall clip protection (recommended)", prefs.dspLimiterEnabled) { v -> scope.launch { store.setDspLimiterEnabled(v) } }
-        if (prefs.dspLimiterEnabled) {
-            FloatSliderRow("Ceiling", prefs.dspLimiterCeilingDb, -6f..0f, valueText = "%.1f dB".format(prefs.dspLimiterCeilingDb)) { v -> scope.launch { store.setDspCeiling(v) } }
+    // v0.6 driving loudness (plan §35, §38)
+    collapsible("c_drive", "Driving mode", Icons.Filled.DirectionsCar,
+        DrivingMode.label(prefs.dspDriveMode) + if (prefs.dspDriveMode != DrivingMode.OFF) " · ${"%+.0f".format(prefs.dspDriveTargetDb)} LUFS" else "",
+        expanded, defaultOpen = true) {
+        val modes = listOf(DrivingMode.OFF, DrivingMode.NATURAL, DrivingMode.BALANCED, DrivingMode.STRONG, DrivingMode.CUSTOM)
+        SegmentedRow("Mode", modes.map { DrivingMode.label(it) }, modes.indexOf(prefs.dspDriveMode).coerceAtLeast(0)) { i ->
+            scope.launch { store.setDspDriveMode(modes[i]) }
         }
-        SettingsSwitchRow(Icons.Filled.GraphicEq, "Compressor", "Even out loud/quiet passages", prefs.dspCompEnabled) { v -> scope.launch { store.setDspCompEnabled(v) } }
-        if (prefs.dspCompEnabled) {
+        Text(
+            when (prefs.dspDriveMode) {
+                DrivingMode.NATURAL -> "Gentle: target −16 LUFS, light compression. Keeps the most dynamics."
+                DrivingMode.BALANCED -> "Target −15 LUFS, 2:1. For mixed road noise."
+                DrivingMode.STRONG -> "Target −14 LUFS, up to ~3.5:1. Quiet passages stay audible."
+                DrivingMode.CUSTOM -> "Every parameter below is live."
+                else -> "Off. Use the manual compressor below if you want static dynamics."
+            },
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+        )
+        if (prefs.dspDriveMode == DrivingMode.CUSTOM) {
+            FloatSliderRow("Target loudness", prefs.dspDriveTargetDb, -24f..-8f, valueText = "%.0f LUFS".format(prefs.dspDriveTargetDb)) { v -> scope.launch { store.setDspDriveTarget(v) } }
+        }
+    }
+
+    val dyn = buildList {
+        if (prefs.dspDriveMode != DrivingMode.OFF) add(DrivingMode.label(prefs.dspDriveMode))
+        if (prefs.dspLimiterEnabled) add("Limiter")
+        if (prefs.dspCompEnabled && prefs.dspDriveMode == DrivingMode.OFF) add("Compressor")
+    }.joinToString(" · ").ifBlank { "Off" }
+    collapsible("c_dyn", "Compressor", Icons.Filled.Compress, dyn, expanded) {
+        if (prefs.dspDriveMode == DrivingMode.OFF) {
+            SettingsSwitchRow(Icons.Filled.GraphicEq, "Compressor", "Even out loud/quiet passages", prefs.dspCompEnabled) { v -> scope.launch { store.setDspCompEnabled(v) } }
+        } else {
+            Text("Driven by Driving mode above — switch it Off for manual control.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+        }
+        val showParams = prefs.dspCompEnabled && prefs.dspDriveMode == DrivingMode.OFF || prefs.dspDriveMode == DrivingMode.CUSTOM
+        if (showParams) {
             FloatSliderRow("Threshold", prefs.dspCompThreshDb, -40f..0f, valueText = "%.0f dB".format(prefs.dspCompThreshDb)) { v -> scope.launch { store.setDspCompThresh(v) } }
             FloatSliderRow("Ratio", prefs.dspCompRatio, 1f..10f, valueText = "%.1f:1".format(prefs.dspCompRatio)) { v -> scope.launch { store.setDspCompRatio(v) } }
+            FloatSliderRow("Attack", prefs.dspCompAttackMs, 1f..200f, valueText = "%.0f ms".format(prefs.dspCompAttackMs)) { v -> scope.launch { store.setDspCompAttack(v) } }
+            FloatSliderRow("Release", prefs.dspCompReleaseMs, 50f..1000f, valueText = "%.0f ms".format(prefs.dspCompReleaseMs)) { v -> scope.launch { store.setDspCompRelease(v) } }
+            FloatSliderRow("Knee", prefs.dspCompKneeDb, 0f..12f, valueText = "%.0f dB".format(prefs.dspCompKneeDb)) { v -> scope.launch { store.setDspCompKnee(v) } }
+            SettingsSwitchRow(Icons.Filled.GraphicEq, "Auto makeup", "Restore level lost to compression automatically", prefs.dspMakeupAuto) { v -> scope.launch { store.setDspMakeupAuto(v) } }
+            if (!prefs.dspMakeupAuto) {
+                DbSliderRow("Makeup gain", prefs.dspCompMakeupDb, -6f..12f) { v -> scope.launch { store.setDspCompMakeup(v) } }
+            }
         }
+        GainReductionMeter(container)
+    }
+
+    collapsible("c_lim", "Limiter", Icons.Filled.VerticalAlignBottom,
+        if (prefs.dspLimiterEnabled) "%.1f dBTP".format(prefs.dspLimiterCeilingDb) else "Off", expanded) {
+        SettingsSwitchRow(Icons.Filled.GraphicEq, "Limiter", "Brick-wall clip protection, always last in chain (recommended)", prefs.dspLimiterEnabled) { v -> scope.launch { store.setDspLimiterEnabled(v) } }
+        if (prefs.dspLimiterEnabled) {
+            FloatSliderRow("True peak ceiling", prefs.dspLimiterCeilingDb, -6f..0f, valueText = "%.1f dBTP".format(prefs.dspLimiterCeilingDb)) { v -> scope.launch { store.setDspCeiling(v) } }
+            Text("Sample-peak ceiling; inter-sample peaks stay ≈0.3 dB below it. Keep −1 dBTP for lossy/car playback.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+        }
+        GainReductionMeter(container)
+    }
+}
+
+@Composable
+private fun GainReductionMeter(container: AppContainer) {
+    val meters by container.dspMeters.collectAsStateWithLifecycle(initialValue = com.aurora.music.data.DspMeters())
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
+        GrBar("Gain reduction", meters.compGrDb)
+        Spacer(Modifier.height(6.dp))
+        GrBar("Limiter", meters.limGrDb)
+    }
+}
+
+@Composable
+private fun GrBar(label: String, grDb: Float) {
+    // grDb is 0..-30; bar fills leftwards from 0
+    val frac = (-grDb / 30f).coerceIn(0f, 1f)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(110.dp))
+        Box(
+            Modifier.weight(1f).height(10.dp).clip(RoundedCornerShape(50))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+        ) {
+            Box(
+                Modifier.fillMaxWidth(frac).height(10.dp).clip(RoundedCornerShape(50))
+                    .background(if (grDb < -0.5f) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)),
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(if (grDb > -0.05f) "0.0" else "%.1f".format(grDb),
+            style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(40.dp))
     }
 }
 

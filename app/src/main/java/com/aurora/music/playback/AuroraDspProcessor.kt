@@ -46,6 +46,13 @@ class AuroraDspProcessor : BaseAudioProcessor() {
     private var limGain = 1f
     private var compGain = 1f
 
+    // v0.6 gain-reduction meters (plan §36): worst-case dB over the last buffer,
+    // polled by the UI. Negative = reduction, 0 = idle.
+    @Volatile var compGrDb: Float = 0f
+    @Volatile var limGrDb: Float = 0f
+    // slow follower of comp GR for auto makeup
+    private var compGrAvgDb = 0f
+
     private var smoothCoef = 0f
     private var curPreamp = 1f
     private var curBalL = 1f
@@ -100,6 +107,15 @@ class AuroraDspProcessor : BaseAudioProcessor() {
         val limOn = c.limiterEnabled; val ceiling = c.ceilingLin; val limAtt = c.limAtt; val limRel = c.limRel
         val compOn = c.compEnabled; val compThr = c.compThreshLin; val compRatio = c.compRatio
         val compAtt = c.compAtt; val compRel = c.compRel
+        val kneeDb = c.compKneeDb; val kneeLinHalf = Math.pow(10.0, (kneeDb / 2.0 / 20.0)).toFloat()
+        val kneeLinInv = if (kneeLinHalf > 1f) 1f / kneeLinHalf else 1f
+        val makeupBase = c.compMakeupLin; val makeupAuto = c.makeupAuto
+        val driveLin = c.driveLin
+        // auto makeup follows the slow GR average; computed once per buffer
+        val mkAuto = if (makeupAuto) Math.pow(10.0, ((-compGrAvgDb * 0.5f).coerceIn(0f, 6f) / 20.0)).toFloat() else 1f
+        val mkStatic = if (makeupAuto) mkAuto else makeupBase
+        var minCompGain = 1f
+        var minLimGain = 1f
 
         if (!smoothInit) { curPreamp = tPreamp; curBalL = tBalL; curBalR = tBalR; curWidth = tWidth; smoothInit = true }
 
@@ -119,6 +135,10 @@ class AuroraDspProcessor : BaseAudioProcessor() {
 
             l *= curPreamp * curBalL * trimL
             r *= curPreamp * curBalR * trimR
+
+            // v0.6 driving loudness make-up (post-EQ, pre-dynamics)
+            l *= driveLin
+            r *= driveLin
 
             if (satDrive > 0f) {
                 val sl = tanh(satK * l) / satK
@@ -145,13 +165,24 @@ class AuroraDspProcessor : BaseAudioProcessor() {
 
             if (compOn) {
                 val level = max(abs(l), abs(r))
-                val desired = if (level > compThr) {
+                // soft knee: blend ratio from 1:1 below (thr-knee/2) to full above (thr+knee/2)
+                val overDb = 20f * Math.log10((level / compThr).toDouble()).toFloat()
+                val desired = if (level <= compThr * kneeLinInv) {
+                    1f
+                } else if (kneeDb <= 0.01f || level >= compThr * kneeLinHalf) {
                     Math.pow((level / compThr).toDouble(), (1.0 / compRatio - 1.0)).toFloat()
-                } else 1f
+                } else {
+                    val t = (overDb + kneeDb / 2f) / kneeDb   // 0..1 through the knee
+                    val hard = Math.pow((level / compThr).toDouble(), (1.0 / compRatio - 1.0)).toFloat()
+                    1f + (hard - 1f) * t * t
+                }
                 val coef = if (desired < compGain) compAtt else compRel
                 compGain = desired + (compGain - desired) * coef
                 l *= compGain; r *= compGain
+                if (compGain < minCompGain) minCompGain = compGain
             }
+            // makeup after the compressor (manual, or auto from the slow GR average)
+            l *= mkStatic; r *= mkStatic
 
             if (limOn) {
                 val peak = max(abs(l), abs(r))
@@ -159,6 +190,7 @@ class AuroraDspProcessor : BaseAudioProcessor() {
                 val coef = if (desired < limGain) limAtt else limRel
                 limGain = desired + (limGain - desired) * coef
                 l *= limGain; r *= limGain
+                if (limGain < minLimGain) minLimGain = limGain
             }
 
             if (delayOn) {
@@ -172,6 +204,10 @@ class AuroraDspProcessor : BaseAudioProcessor() {
             output.putShort(toPcm16(r))
             i++
         }
+        // publish meters once per buffer; average decays toward 0 when idle
+        compGrDb = if (compOn) (20f * Math.log10(minCompGain.toDouble())).toFloat().coerceIn(-30f, 0f) else 0f
+        limGrDb = if (limOn) (20f * Math.log10(minLimGain.toDouble())).toFloat().coerceIn(-30f, 0f) else 0f
+        compGrAvgDb += (compGrDb - compGrAvgDb) * 0.05f
         inputBuffer.position(inputBuffer.limit())
         output.flip()
     }
@@ -210,6 +246,7 @@ class AuroraDspProcessor : BaseAudioProcessor() {
         dRingL.fill(0f); dRingR.fill(0f); dWrite = 0
         cfWrite = 0; cfLpfL = 0f; cfLpfR = 0f
         limGain = 1f; compGain = 1f
+        compGrDb = 0f; limGrDb = 0f; compGrAvgDb = 0f
         smoothInit = false
     }
 

@@ -79,7 +79,10 @@ fun StorageSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                         Text(
                             when {
                                 rg.running -> "${rg.done} / ${rg.total} • ${rg.current}"
-                                container.replayGainStore.size > 0 -> "${container.replayGainStore.size} tracks analysed — tap to rescan"
+                                container.replayGainStore.size > 0 -> {
+                                    val avg = container.replayGainStore.avgLufs()?.let { "%.1f LUFS avg".format(it) } ?: ""
+                                    "${container.replayGainStore.size} tracks analysed $avg — tap to rescan"
+                                }
                                 else -> "Measure loudness (EBU R128) to level playback volume"
                             },
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,

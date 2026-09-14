@@ -111,6 +111,13 @@ class AutoEqController(
         settingsStore.setDspCompEnabled(profile.compEnabled)
         settingsStore.setDspCompThresh(profile.compThreshDb)
         settingsStore.setDspCompRatio(profile.compRatio)
+        settingsStore.setDspDriveMode(profile.driveMode)
+        settingsStore.setDspDriveTarget(profile.driveTargetDb)
+        settingsStore.setDspCompAttack(profile.compAttackMs)
+        settingsStore.setDspCompRelease(profile.compReleaseMs)
+        settingsStore.setDspCompKnee(profile.compKneeDb)
+        settingsStore.setDspCompMakeup(profile.compMakeupDb)
+        settingsStore.setDspMakeupAuto(profile.makeupAuto)
         settingsStore.setDspLimiterEnabled(profile.limiterEnabled)
         settingsStore.setDspCeiling(profile.limiterCeilingDb)
         settingsStore.setReplayGain(profile.replayGain)
@@ -134,6 +141,13 @@ class AutoEqController(
             compEnabled = prefs.dspCompEnabled,
             compThreshDb = prefs.dspCompThreshDb,
             compRatio = prefs.dspCompRatio,
+            driveMode = prefs.dspDriveMode,
+            driveTargetDb = prefs.dspDriveTargetDb,
+            compAttackMs = prefs.dspCompAttackMs,
+            compReleaseMs = prefs.dspCompReleaseMs,
+            compKneeDb = prefs.dspCompKneeDb,
+            compMakeupDb = prefs.dspCompMakeupDb,
+            makeupAuto = prefs.dspMakeupAuto,
             limiterEnabled = prefs.dspLimiterEnabled,
             limiterCeilingDb = prefs.dspLimiterCeilingDb,
             replayGain = prefs.replayGain,

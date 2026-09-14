@@ -17,6 +17,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+// v0.6 gain-reduction meters (plan §36), polled from the DSP each tick
+data class DspMeters(val compGrDb: Float = 0f, val limGrDb: Float = 0f)
+
 // bitPerfect true only when samples reach output untouched float passthrough no dsp/mixing
 data class SignalPath(
     val active: Boolean = false,
@@ -143,6 +146,8 @@ class AppContainer(context: Context) {
     val preferredAudioDeviceId = MutableStateFlow(0)
 
     val signalPath = MutableStateFlow(SignalPath())
+
+    val dspMeters = MutableStateFlow(DspMeters())
 
     private val _sessionReady = MutableStateFlow<Boolean?>(null)
     val sessionReady: StateFlow<Boolean?> = _sessionReady.asStateFlow()
