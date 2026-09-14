@@ -2,26 +2,15 @@ package com.aurora.music.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import com.aurora.music.R
 import com.aurora.music.data.ThemeStyle
 
-val Circular = FontFamily(
-    Font(R.font.circular_light, FontWeight.Light),
-    Font(R.font.circular_light_italic, FontWeight.Light, FontStyle.Italic),
-    Font(R.font.circular_book, FontWeight.Normal),
-    Font(R.font.circular_book_italic, FontWeight.Normal, FontStyle.Italic),
-    Font(R.font.circular_medium, FontWeight.Medium),
-    Font(R.font.circular_medium_italic, FontWeight.Medium, FontStyle.Italic),
-    Font(R.font.circular_bold, FontWeight.Bold),
-    Font(R.font.circular_bold_italic, FontWeight.Bold, FontStyle.Italic),
-    Font(R.font.circular_black, FontWeight.Black),
-    Font(R.font.circular_black_italic, FontWeight.Black, FontStyle.Italic),
-)
+// Fork baseline: Circular Std is a commercial font not in the repo (see README).
+// Use the system font family so a fresh clone compiles without licensed .otf files.
+// TODO(classical-fork): bundle an OSS face (e.g. Inter/Manrope) under res/font if branded typography is needed.
+val Circular: FontFamily = FontFamily.Default
 
 fun auroraTypography(scale: Float = 1f, style: Int = ThemeStyle.AURORA): Typography {
     val s = scale.coerceIn(0.8f, 1.4f)

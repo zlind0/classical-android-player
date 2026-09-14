@@ -1,0 +1,1324 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<issues format="6" by="lint 8.7.3" type="baseline" client="gradle" dependencies="false" name="AGP (8.7.3)" variant="all" version="8.7.3">
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="                    SettingsSliderRow(&quot;Sensitivity&quot;, String.format(&quot;%.2fx&quot;, prefs.sensitivity), prefs.sensitivity, 0.25f..4f) { save(prefs.copy(sensitivity = it)) }"
+        errorLine2="                                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/screens/settings/VisualizerSettingsScreen.kt"
+            line="126"
+            column="54"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 26 (current min is 24): `android.provider.Settings#ACTION_APP_NOTIFICATION_SETTINGS`"
+        errorLine1="                    else open(Settings.ACTION_APP_NOTIFICATION_SETTINGS)"
+        errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/screens/settings/PermissionsScreen.kt"
+            line="112"
+            column="31"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 26 (current min is 24): `android.media.AudioDeviceInfo#TYPE_USB_HEADSET`"
+        errorLine1="    private fun isUsb(t: Int) = t == android.media.AudioDeviceInfo.TYPE_USB_HEADSET ||"
+        errorLine2="                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/playback/PlaybackService.kt"
+            line="339"
+            column="38"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 31 (current min is 24): `android.media.AudioDeviceInfo#TYPE_BLE_HEADSET`"
+        errorLine1="            device.type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET ||"
+        errorLine2="                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/playback/PlaybackService.kt"
+            line="394"
+            column="28"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 31 (current min is 24): `android.media.AudioDeviceInfo#TYPE_BLE_SPEAKER`"
+        errorLine1="            device.type == android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER)"
+        errorLine2="                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/playback/PlaybackService.kt"
+            line="395"
+            column="28"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 26 (current min is 24): `android.media.AudioDeviceInfo#TYPE_USB_HEADSET`"
+        errorLine1="    AudioDeviceInfo.TYPE_USB_HEADSET,"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/screens/player/PlayerSheets.kt"
+            line="234"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 31 (current min is 24): `android.media.AudioDeviceInfo#TYPE_BLE_HEADSET`"
+        errorLine1="    AudioDeviceInfo.TYPE_BLE_HEADSET,"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/screens/player/PlayerSheets.kt"
+            line="237"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 28 (current min is 24): `android.media.AudioDeviceInfo#TYPE_HEARING_AID`"
+        errorLine1="    AudioDeviceInfo.TYPE_HEARING_AID,"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/screens/player/PlayerSheets.kt"
+            line="238"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="MissingIntentFilterForMediaSearch"
+        message="Missing `intent-filter` for action `android.media.action.MEDIA_PLAY_FROM_SEARCH`."
+        errorLine1="    &lt;application"
+        errorLine2="    ^">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="22"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="OldTargetApi"
+        message="Not targeting the latest versions of Android; compatibility modes apply. Consider testing and updating this version. Consult the `android.os.Build.VERSION_CODES` javadoc for details."
+        errorLine1="        targetSdk = 35"
+        errorLine2="        ~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="17"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `showWhenLocked` is only used in API level 27 and higher (current min is 24)"
+        errorLine1="            android:showWhenLocked=&quot;true&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="78"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `turnScreenOn` is only used in API level 27 and higher (current min is 24)"
+        errorLine1="            android:turnScreenOn=&quot;true&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="79"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `targetCellWidth` is only used in API level 31 and higher (current min is 24)"
+        errorLine1="    android:targetCellWidth=&quot;4&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/xml/aurora_widget_info.xml"
+            line="5"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `targetCellHeight` is only used in API level 31 and higher (current min is 24)"
+        errorLine1="    android:targetCellHeight=&quot;1&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/xml/aurora_widget_info.xml"
+            line="6"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="WrongConstant"
+        message="Must be one of: LibraryResult.RESULT_SUCCESS, SessionError.INFO_CANCELLED, SessionError.ERROR_UNKNOWN, SessionError.ERROR_INVALID_STATE, SessionError.ERROR_BAD_VALUE, SessionError.ERROR_PERMISSION_DENIED, SessionError.ERROR_IO, SessionError.ERROR_SESSION_DISCONNECTED, SessionError.ERROR_NOT_SUPPORTED, SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED, SessionError.ERROR_SESSION_PREMIUM_ACCOUNT_REQUIRED, SessionError.ERROR_SESSION_CONCURRENT_STREAM_LIMIT, SessionError.ERROR_SESSION_PARENTAL_CONTROL_RESTRICTED, SessionError.ERROR_SESSION_NOT_AVAILABLE_IN_REGION, SessionError.ERROR_SESSION_SKIP_LIMIT_REACHED, SessionError.ERROR_SESSION_SETUP_REQUIRED"
+        errorLine1="            else LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE)"
+        errorLine2="                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/playback/PlaybackService.kt"
+            line="603"
+            column="40"/>
+    </issue>
+
+    <issue
+        id="BatteryLife"
+        message="Use of `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` violates the Play Store Content Policy regarding acceptable use cases, as described in https://developer.android.com/training/monitoring-device-state/doze-standby.html"
+        errorLine1="                    open(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, withPackage = true)"
+        errorLine2="                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/screens/settings/PermissionsScreen.kt"
+            line="122"
+            column="35"/>
+    </issue>
+
+    <issue
+        id="RedundantLabel"
+        message="Redundant label can be removed"
+        errorLine1="            android:label=&quot;@string/app_name&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="44"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="AndroidGradlePluginVersion"
+        message="A newer version of com.android.application than 8.7.3 is available: 9.4.0"
+        errorLine1="agp = &quot;8.7.3&quot;"
+        errorLine2="      ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="2"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="AndroidGradlePluginVersion"
+        message="A newer version of com.android.application than 8.7.3 is available: 9.4.0"
+        errorLine1="agp = &quot;8.7.3&quot;"
+        errorLine2="      ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="2"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="AndroidGradlePluginVersion"
+        message="A newer version of com.android.application than 8.7.3 is available: 9.4.0"
+        errorLine1="agp = &quot;8.7.3&quot;"
+        errorLine2="      ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="2"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of com.android.tools:desugar_jdk_libs than 2.0.4 is available: 2.1.5"
+        errorLine1="    coreLibraryDesugaring(&quot;com.android.tools:desugar_jdk_libs:2.0.4&quot;)"
+        errorLine2="                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="75"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of org.jetbrains.kotlin.android than 2.0.21 is available: 2.2.0"
+        errorLine1="kotlin = &quot;2.0.21&quot;"
+        errorLine2="         ~~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="3"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of org.jetbrains.kotlin.android than 2.0.21 is available: 2.2.0"
+        errorLine1="kotlin = &quot;2.0.21&quot;"
+        errorLine2="         ~~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="3"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of org.jetbrains.kotlin.android than 2.0.21 is available: 2.2.0"
+        errorLine1="kotlin = &quot;2.0.21&quot;"
+        errorLine2="         ~~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="3"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of org.jetbrains.kotlin.plugin.compose than 2.0.21 is available: 2.2.0"
+        errorLine1="kotlin = &quot;2.0.21&quot;"
+        errorLine2="         ~~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="3"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of org.jetbrains.kotlin.plugin.compose than 2.0.21 is available: 2.2.0"
+        errorLine1="kotlin = &quot;2.0.21&quot;"
+        errorLine2="         ~~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="3"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of org.jetbrains.kotlin.plugin.compose than 2.0.21 is available: 2.2.0"
+        errorLine1="kotlin = &quot;2.0.21&quot;"
+        errorLine2="         ~~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="3"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.core:core-ktx than 1.15.0 is available: 1.19.0"
+        errorLine1="coreKtx = &quot;1.15.0&quot;"
+        errorLine2="          ~~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="4"
+            column="11"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.core:core-ktx than 1.15.0 is available: 1.19.0"
+        errorLine1="coreKtx = &quot;1.15.0&quot;"
+        errorLine2="          ~~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="4"
+            column="11"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.core:core-ktx than 1.15.0 is available: 1.19.0"
+        errorLine1="coreKtx = &quot;1.15.0&quot;"
+        errorLine2="          ~~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="4"
+            column="11"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.lifecycle:lifecycle-runtime-compose than 2.8.7 is available: 2.11.0"
+        errorLine1="lifecycle = &quot;2.8.7&quot;"
+        errorLine2="            ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="5"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.lifecycle:lifecycle-runtime-compose than 2.8.7 is available: 2.11.0"
+        errorLine1="lifecycle = &quot;2.8.7&quot;"
+        errorLine2="            ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="5"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.lifecycle:lifecycle-runtime-compose than 2.8.7 is available: 2.11.0"
+        errorLine1="lifecycle = &quot;2.8.7&quot;"
+        errorLine2="            ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="5"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.lifecycle:lifecycle-runtime-ktx than 2.8.7 is available: 2.11.0"
+        errorLine1="lifecycle = &quot;2.8.7&quot;"
+        errorLine2="            ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="5"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.lifecycle:lifecycle-runtime-ktx than 2.8.7 is available: 2.11.0"
+        errorLine1="lifecycle = &quot;2.8.7&quot;"
+        errorLine2="            ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="5"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.lifecycle:lifecycle-runtime-ktx than 2.8.7 is available: 2.11.0"
+        errorLine1="lifecycle = &quot;2.8.7&quot;"
+        errorLine2="            ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="5"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.lifecycle:lifecycle-viewmodel-compose than 2.8.7 is available: 2.11.0"
+        errorLine1="lifecycle = &quot;2.8.7&quot;"
+        errorLine2="            ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="5"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.lifecycle:lifecycle-viewmodel-compose than 2.8.7 is available: 2.11.0"
+        errorLine1="lifecycle = &quot;2.8.7&quot;"
+        errorLine2="            ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="5"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.lifecycle:lifecycle-viewmodel-compose than 2.8.7 is available: 2.11.0"
+        errorLine1="lifecycle = &quot;2.8.7&quot;"
+        errorLine2="            ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="5"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.activity:activity-compose than 1.9.3 is available: 1.13.0"
+        errorLine1="activityCompose = &quot;1.9.3&quot;"
+        errorLine2="                  ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="6"
+            column="19"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.activity:activity-compose than 1.9.3 is available: 1.13.0"
+        errorLine1="activityCompose = &quot;1.9.3&quot;"
+        errorLine2="                  ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="6"
+            column="19"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.activity:activity-compose than 1.9.3 is available: 1.13.0"
+        errorLine1="activityCompose = &quot;1.9.3&quot;"
+        errorLine2="                  ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="6"
+            column="19"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.compose:compose-bom than 2024.12.01 is available: 2026.09.00"
+        errorLine1="composeBom = &quot;2024.12.01&quot;"
+        errorLine2="             ~~~~~~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="7"
+            column="14"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.compose:compose-bom than 2024.12.01 is available: 2026.09.00"
+        errorLine1="composeBom = &quot;2024.12.01&quot;"
+        errorLine2="             ~~~~~~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="7"
+            column="14"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.compose:compose-bom than 2024.12.01 is available: 2026.09.00"
+        errorLine1="composeBom = &quot;2024.12.01&quot;"
+        errorLine2="             ~~~~~~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="7"
+            column="14"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.navigation:navigation-compose than 2.8.5 is available: 2.10.1"
+        errorLine1="navigationCompose = &quot;2.8.5&quot;"
+        errorLine2="                    ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="8"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.navigation:navigation-compose than 2.8.5 is available: 2.10.1"
+        errorLine1="navigationCompose = &quot;2.8.5&quot;"
+        errorLine2="                    ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="8"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.navigation:navigation-compose than 2.8.5 is available: 2.10.1"
+        errorLine1="navigationCompose = &quot;2.8.5&quot;"
+        errorLine2="                    ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="8"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-cast than 1.5.1 is available: 1.11.1"
+        errorLine1="media3 = &quot;1.5.1&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="11"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-cast than 1.5.1 is available: 1.11.1"
+        errorLine1="media3 = &quot;1.5.1&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="11"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-cast than 1.5.1 is available: 1.11.1"
+        errorLine1="media3 = &quot;1.5.1&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="11"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-common than 1.5.1 is available: 1.11.1"
+        errorLine1="media3 = &quot;1.5.1&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="11"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-common than 1.5.1 is available: 1.11.1"
+        errorLine1="media3 = &quot;1.5.1&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="11"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-common than 1.5.1 is available: 1.11.1"
+        errorLine1="media3 = &quot;1.5.1&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="11"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-exoplayer than 1.5.1 is available: 1.11.1"
+        errorLine1="media3 = &quot;1.5.1&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="11"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-exoplayer than 1.5.1 is available: 1.11.1"
+        errorLine1="media3 = &quot;1.5.1&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="11"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-exoplayer than 1.5.1 is available: 1.11.1"
+        errorLine1="media3 = &quot;1.5.1&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="11"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-exoplayer-hls than 1.5.1 is available: 1.11.1"
+        errorLine1="media3 = &quot;1.5.1&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="11"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-exoplayer-hls than 1.5.1 is available: 1.11.1"
+        errorLine1="media3 = &quot;1.5.1&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="11"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-exoplayer-hls than 1.5.1 is available: 1.11.1"
+        errorLine1="media3 = &quot;1.5.1&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="11"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-session than 1.5.1 is available: 1.11.1"
+        errorLine1="media3 = &quot;1.5.1&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="11"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-session than 1.5.1 is available: 1.11.1"
+        errorLine1="media3 = &quot;1.5.1&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="11"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-session than 1.5.1 is available: 1.11.1"
+        errorLine1="media3 = &quot;1.5.1&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="11"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.datastore:datastore-preferences than 1.1.1 is available: 1.2.1"
+        errorLine1="datastore = &quot;1.1.1&quot;"
+        errorLine2="            ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="14"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.datastore:datastore-preferences than 1.1.1 is available: 1.2.1"
+        errorLine1="datastore = &quot;1.1.1&quot;"
+        errorLine2="            ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="14"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.datastore:datastore-preferences than 1.1.1 is available: 1.2.1"
+        errorLine1="datastore = &quot;1.1.1&quot;"
+        errorLine2="            ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="14"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.glance:glance-appwidget than 1.1.0 is available: 1.2.0"
+        errorLine1="glance = &quot;1.1.0&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="17"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.glance:glance-appwidget than 1.1.0 is available: 1.2.0"
+        errorLine1="glance = &quot;1.1.0&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="17"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.glance:glance-appwidget than 1.1.0 is available: 1.2.0"
+        errorLine1="glance = &quot;1.1.0&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="17"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.glance:glance-material3 than 1.1.0 is available: 1.2.0"
+        errorLine1="glance = &quot;1.1.0&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="17"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.glance:glance-material3 than 1.1.0 is available: 1.2.0"
+        errorLine1="glance = &quot;1.1.0&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="17"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.glance:glance-material3 than 1.1.0 is available: 1.2.0"
+        errorLine1="glance = &quot;1.1.0&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="17"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of com.google.android.gms:play-services-cast-framework than 21.5.0 is available: 22.3.1"
+        errorLine1="castFramework = &quot;21.5.0&quot;"
+        errorLine2="                ~~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="18"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of com.google.android.gms:play-services-cast-framework than 21.5.0 is available: 22.3.1"
+        errorLine1="castFramework = &quot;21.5.0&quot;"
+        errorLine2="                ~~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="18"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of com.google.android.gms:play-services-cast-framework than 21.5.0 is available: 22.3.1"
+        errorLine1="castFramework = &quot;21.5.0&quot;"
+        errorLine2="                ~~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="18"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.mediarouter:mediarouter than 1.7.0 is available: 1.8.1"
+        errorLine1="mediarouter = &quot;1.7.0&quot;"
+        errorLine2="              ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="19"
+            column="15"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.mediarouter:mediarouter than 1.7.0 is available: 1.8.1"
+        errorLine1="mediarouter = &quot;1.7.0&quot;"
+        errorLine2="              ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="19"
+            column="15"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.mediarouter:mediarouter than 1.7.0 is available: 1.8.1"
+        errorLine1="mediarouter = &quot;1.7.0&quot;"
+        errorLine2="              ~~~~~~~">
+        <location
+            file="$HOME/Documents/Code/llm-classical-player/aurora/gradle/libs.versions.toml"
+            line="19"
+            column="15"/>
+    </issue>
+
+    <issue
+        id="LockedOrientationActivity"
+        message="Expecting `android:screenOrientation=&quot;unspecified&quot;` or `&quot;fullSensor&quot;` for this activity so the user can use the application in any orientation and provide a great experience on Chrome OS devices"
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="46"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="            startService(Intent(this, PlaybackService::class.java).setAction(PlaybackService.ACTION_ALARM_DISMISS))"
+        errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/playback/AlarmActivity.kt"
+            line="71"
+            column="39"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="            startService(Intent(this, PlaybackService::class.java).setAction(PlaybackService.ACTION_ALARM_DISMISS))"
+        errorLine2="                                                                             ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/playback/AlarmActivity.kt"
+            line="71"
+            column="78"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="            startService(Intent(this, PlaybackService::class.java).setAction(PlaybackService.ACTION_ALARM_DISMISS))"
+        errorLine2="                                                                                             ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/playback/AlarmActivity.kt"
+            line="71"
+            column="94"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="                val svc = Intent(appContext, PlaybackService::class.java).setAction(PlaybackService.ACTION_ALARM)"
+        errorLine2="                                             ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/playback/AlarmScheduler.kt"
+            line="66"
+            column="46"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="                val svc = Intent(appContext, PlaybackService::class.java).setAction(PlaybackService.ACTION_ALARM)"
+        errorLine2="                                                                                    ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/playback/AlarmScheduler.kt"
+            line="66"
+            column="85"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="                val svc = Intent(appContext, PlaybackService::class.java).setAction(PlaybackService.ACTION_ALARM)"
+        errorLine2="                                                                                                    ~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/playback/AlarmScheduler.kt"
+            line="66"
+            column="101"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="            val intent = Intent(this, PlaybackService::class.java).setAction(PlaybackService.ACTION_PLAY_PAUSE)"
+        errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/widget/AuroraTileService.kt"
+            line="20"
+            column="39"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="            val intent = Intent(this, PlaybackService::class.java).setAction(PlaybackService.ACTION_PLAY_PAUSE)"
+        errorLine2="                                                                             ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/widget/AuroraTileService.kt"
+            line="20"
+            column="78"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="            val intent = Intent(this, PlaybackService::class.java).setAction(PlaybackService.ACTION_PLAY_PAUSE)"
+        errorLine2="                                                                                             ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/widget/AuroraTileService.kt"
+            line="20"
+            column="94"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="        Intent(context, PlaybackService::class.java).setAction(name),"
+        errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/widget/AuroraWidget.kt"
+            line="68"
+            column="25"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="        ControlIcon(android.R.drawable.ic_media_previous, white) { GlanceModifier.clickable(action(PlaybackService.ACTION_PREV)) }"
+        errorLine2="                                                                                                   ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/widget/AuroraWidget.kt"
+            line="108"
+            column="100"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="        ControlIcon(android.R.drawable.ic_media_previous, white) { GlanceModifier.clickable(action(PlaybackService.ACTION_PREV)) }"
+        errorLine2="                                                                                                                   ~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/widget/AuroraWidget.kt"
+            line="108"
+            column="116"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="        ) { GlanceModifier.clickable(action(PlaybackService.ACTION_PLAY_PAUSE)) }"
+        errorLine2="                                            ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/widget/AuroraWidget.kt"
+            line="111"
+            column="45"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="        ) { GlanceModifier.clickable(action(PlaybackService.ACTION_PLAY_PAUSE)) }"
+        errorLine2="                                                            ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/widget/AuroraWidget.kt"
+            line="111"
+            column="61"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="        ControlIcon(android.R.drawable.ic_media_next, white) { GlanceModifier.clickable(action(PlaybackService.ACTION_NEXT)) }"
+        errorLine2="                                                                                               ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/widget/AuroraWidget.kt"
+            line="112"
+            column="96"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="        ControlIcon(android.R.drawable.ic_media_next, white) { GlanceModifier.clickable(action(PlaybackService.ACTION_NEXT)) }"
+        errorLine2="                                                                                                               ~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/widget/AuroraWidget.kt"
+            line="112"
+            column="112"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="        val token = SessionToken(app, ComponentName(app, PlaybackService::class.java))"
+        errorLine2="                                                         ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/viewmodel/PlayerViewModel.kt"
+            line="168"
+            column="58"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="                SessionCommand(PlaybackService.CMD_SHUFFLE, android.os.Bundle().apply {"
+        errorLine2="                               ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/viewmodel/PlayerViewModel.kt"
+            line="277"
+            column="32"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="                SessionCommand(PlaybackService.CMD_SHUFFLE, android.os.Bundle().apply {"
+        errorLine2="                                               ~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/viewmodel/PlayerViewModel.kt"
+            line="277"
+            column="48"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="            SessionCommand(PlaybackService.CMD_SLEEP_FADE, android.os.Bundle().apply {"
+        errorLine2="                           ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/viewmodel/PlayerViewModel.kt"
+            line="328"
+            column="28"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="            SessionCommand(PlaybackService.CMD_SLEEP_FADE, android.os.Bundle().apply {"
+        errorLine2="                                           ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/viewmodel/PlayerViewModel.kt"
+            line="328"
+            column="44"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="            SessionCommand(PlaybackService.CMD_SHUFFLE, android.os.Bundle().apply {"
+        errorLine2="                           ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/viewmodel/PlayerViewModel.kt"
+            line="591"
+            column="28"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="            SessionCommand(PlaybackService.CMD_SHUFFLE, android.os.Bundle().apply {"
+        errorLine2="                                           ~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/viewmodel/PlayerViewModel.kt"
+            line="591"
+            column="44"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="            SessionCommand(PlaybackService.CMD_SHUFFLE, android.os.Bundle().apply { putInt(&quot;target&quot;, target) }),"
+        errorLine2="                           ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/viewmodel/PlayerViewModel.kt"
+            line="699"
+            column="28"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="            SessionCommand(PlaybackService.CMD_SHUFFLE, android.os.Bundle().apply { putInt(&quot;target&quot;, target) }),"
+        errorLine2="                                           ~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/viewmodel/PlayerViewModel.kt"
+            line="699"
+            column="44"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="            C.ENCODING_PCM_16BIT -> {"
+        errorLine2="              ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/playback/VisualizerController.kt"
+            line="115"
+            column="15"/>
+    </issue>
+
+    <issue
+        id="UnsafeOptInUsageError"
+        message="This declaration is opt-in and its usage should be marked with `@androidx.media3.common.util.UnstableApi` or `@OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)`"
+        errorLine1="            C.ENCODING_PCM_FLOAT -> {"
+        errorLine2="              ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/playback/VisualizerController.kt"
+            line="132"
+            column="15"/>
+    </issue>
+
+    <issue
+        id="ComposableNaming"
+        message="Composable functions with a return type should start with a lowercase letter"
+        errorLine1="private fun LocalContextApp() ="
+        errorLine2="            ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/screens/settings/StorageSettingsScreen.kt"
+            line="148"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DiscouragedApi"
+        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="46"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="ExportedService"
+        message="Exported service does not require permission"
+        errorLine1="        &lt;service"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="62"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var visibleCount by remember { mutableStateOf(20) }"
+        errorLine2="                                   ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/screens/settings/EqualizerScreen.kt"
+            line="305"
+            column="36"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var source by rememberSaveable { mutableStateOf(0) }   // 0 measured device library, 1 live squig.link"
+        errorLine2="                                     ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/screens/settings/EqualizerScreen.kt"
+            line="306"
+            column="38"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var railHeight by remember { mutableStateOf(0) }"
+        errorLine2="                                 ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/screens/library/LibraryScreen.kt"
+            line="721"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
+        errorLine1="    var dragAccum by remember { mutableStateOf(0f) }"
+        errorLine2="                                ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/screens/player/PlayerScreen.kt"
+            line="152"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
+        errorLine1="    var tick by remember { mutableStateOf(0L) }"
+        errorLine2="                           ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/screens/visualizer/VisualizerCanvas.kt"
+            line="23"
+            column="28"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
+        errorLine1="    var startNanos by remember { mutableStateOf(0L) }"
+        errorLine2="                                 ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/aurora/music/ui/screens/visualizer/VisualizerCanvas.kt"
+            line="24"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.aurora_rose` appears to be unused"
+        errorLine1="    &lt;color name=&quot;aurora_rose&quot;>#FF2E7E&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/colors.xml"
+            line="4"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.AuroraMediaRouteButton` appears to be unused"
+        errorLine1="    &lt;style name=&quot;AuroraMediaRouteButton&quot; parent=&quot;Widget.MediaRouter.MediaRouteButton&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/themes.xml"
+            line="11"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_Aurora_MediaRoute` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.Aurora.MediaRoute&quot; parent=&quot;Theme.MediaRouter&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/themes.xml"
+            line="14"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UseTomlInstead"
+        message="Use version catalog instead"
+        errorLine1="    coreLibraryDesugaring(&quot;com.android.tools:desugar_jdk_libs:2.0.4&quot;)"
+        errorLine2="                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="75"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="ByteOrderMark"
+        message="Found byte-order-mark in the middle of a file"
+        errorLine1="            val line = raw.trim().removePrefix(&quot;﻿&quot;)"
+        errorLine2="                                                ~">
+        <location
+            file="src/main/java/com/aurora/music/data/M3u.kt"
+            line="37"
+            column="49"/>
+    </issue>
+
+</issues>

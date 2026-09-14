@@ -11,7 +11,9 @@ android {
 
     defaultConfig {
         applicationId = "com.aurora.music"
-        minSdk = 26
+        // Classical fork: floor is API 24 (Android 7.0) per plan §2.1. API 26+ calls must be
+        // guarded with SDK_INT checks (plan §63); lint NewApi findings are tracked as follow-ups.
+        minSdk = 24
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
@@ -49,12 +51,18 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // Classical fork: java.time works on API 24 via desugaring (plan §63).
+        isCoreLibraryDesugaringEnabled = true
     }
     kotlinOptions {
         jvmTarget = "17"
     }
     buildFeatures {
         compose = true
+    }
+    lint {
+        // Classical fork regression baseline (plan §66 v0.1.0): pre-existing findings frozen here.
+        baseline = file("lint-baseline.xml")
     }
     packaging {
         resources {
@@ -64,6 +72,7 @@ android {
 }
 
 dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
