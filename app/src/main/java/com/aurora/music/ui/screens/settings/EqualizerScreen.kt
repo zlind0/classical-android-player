@@ -100,7 +100,6 @@ import kotlin.math.roundToInt
 fun EqualizerScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val store = container.settingsStore
-    val fx = container.audioEffects
     val prefs by store.audioPrefs.collectAsStateWithLifecycle(initialValue = AudioPrefs())
     val scope = rememberCoroutineScope()
 
@@ -118,32 +117,17 @@ fun EqualizerScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
         SettingsTopBar("Equalizer & effects", onBack)
         LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp)) {
 
-            item { SettingsSectionTitle("Tone engine") }
-            item { ToneEngineCard(prefs.dspMode) { i -> scope.launch { store.setDspMode(i) } } }
-
             collapsible("profiles", "Audio profiles", Icons.Filled.Person, "${audioProfiles.size} saved", expanded) {
                 AudioProfilesPanel(container, prefs, activeCorrectionId, audioProfiles, deviceProfiles, store, scope)
             }
 
-            if (prefs.dspMode == DspMode.CUSTOM) {
-                item {
-                    PillSelector(listOf("Correction", "User EQ", "Dynamics"), tab) { tab = it }
-                }
-                when (tab) {
-                    0 -> correctionTab(prefs, activeCorrection, corrections, activeCorrectionId, store, scope, container, expanded)
-                    1 -> userEqTab(prefs, activeCorrection, store, scope, container, expanded, activeCorrectionId)
-                    else -> dynamicsTab(prefs, store, scope, expanded, container)
-                }
-            } else if (prefs.dspMode == DspMode.SYSTEM) {
-                item { SettingsSectionTitle("System equalizer") }; systemEqSection(prefs, fx, store, scope, expanded)
-            } else {
-                item {
-                    Text(
-                        "Tone shaping is bypassed. Choose System or Custom above to enable the EQ.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                    )
-                }
+            item {
+                PillSelector(listOf("Correction", "User EQ", "Dynamics"), tab) { tab = it }
+            }
+            when (tab) {
+                0 -> correctionTab(prefs, activeCorrection, corrections, activeCorrectionId, store, scope, container, expanded)
+                1 -> userEqTab(prefs, activeCorrection, store, scope, container, expanded, activeCorrectionId)
+                else -> dynamicsTab(prefs, store, scope, expanded, container)
             }
 
             item { SettingsSectionTitle("Output") }
@@ -188,24 +172,6 @@ private fun LazyListScope.collapsible(
 ) = item(key = key) {
     val open = expanded[key] ?: defaultOpen
     CollapsibleSection(title, icon, summary, open, { expanded[key] = !open }, content)
-}
-
-@Composable
-private fun ToneEngineCard(mode: Int, onSelect: (Int) -> Unit) {
-    Column(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp).clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.5f)).padding(12.dp),
-    ) {
-        EngineDropdown(mode, onSelect)
-        Text(
-            when (mode) {
-                DspMode.SYSTEM -> "Android system effects — device-dependent."
-                DspMode.CUSTOM -> "Aurora software DSP — works on any device. Overrides bit-perfect output. Restart playback after switching engines."
-                else -> "All tone shaping bypassed."
-            },
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-        )
-    }
 }
 
 @Composable
@@ -499,61 +465,6 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
     }
 }
 
-private fun LazyListScope.systemEqSection(
-    prefs: AudioPrefs,
-    fx: com.aurora.music.data.AudioEffectsController,
-    store: SettingsStore,
-    scope: CoroutineScope,
-    expanded: SnapshotStateMap<String, Boolean>,
-) {
-    val bandCount = fx.bandCount
-    item {
-        SettingsGroup {
-            SettingsSwitchRow(Icons.Filled.GraphicEq, "Equalizer", if (fx.available) "${bandCount}-band graphic EQ" else "Not supported on this device", prefs.eqEnabled) { v ->
-                scope.launch { store.setEqEnabled(v) }
-            }
-        }
-    }
-
-    if (fx.presetNames.isNotEmpty()) {
-        val presetSummary = if (prefs.eqPreset >= 0) fx.presetNames.getOrElse(prefs.eqPreset) { "Custom" } else "Custom"
-        collapsible("s_presets", "Presets", Icons.Filled.AutoFixHigh, presetSummary, expanded) {
-            LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                item { PresetChip("Custom", selected = prefs.eqPreset < 0) { scope.launch { store.setEqPreset(-1) } } }
-                items(fx.presetNames.size) { i ->
-                    PresetChip(fx.presetNames[i], selected = prefs.eqPreset == i) {
-                        scope.launch {
-                            store.setEqPreset(i)
-                            store.setEqBands(fx.presetBandLevels(i))
-                            if (!prefs.eqEnabled) store.setEqEnabled(true)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    val bands = (0 until bandCount).map { prefs.eqBands.getOrElse(it) { 0 } }
-    collapsible("s_bands", "Bands", Icons.Filled.Tune, "$bandCount-band", expanded, defaultOpen = true) {
-        bands.forEachIndexed { i, mb ->
-            BandSlider(
-                freqHz = fx.bandFreqsHz.getOrElse(i) { 0 }, valueMb = mb, minMb = fx.minBandMb, maxMb = fx.maxBandMb,
-                onChange = { v ->
-                    val updated = bands.toMutableList().also { it[i] = v }
-                    scope.launch { store.setEqBands(updated); store.setEqPreset(-1); if (!prefs.eqEnabled) store.setEqEnabled(true) }
-                },
-            )
-        }
-    }
-
-    val enh = if (prefs.bassBoost > 0 || prefs.virtualizer > 0 || prefs.loudnessGain > 0) "On" else "Off"
-    collapsible("s_enh", "Enhancers", Icons.Filled.Whatshot, enh, expanded) {
-        EnhancerSlider("Bass boost", prefs.bassBoost, 0..1000) { v -> scope.launch { store.setBassBoost(v) } }
-        EnhancerSlider("Virtualizer (headphone widening)", prefs.virtualizer, 0..1000) { v -> scope.launch { store.setVirtualizer(v) } }
-        EnhancerSlider("Loudness", prefs.loudnessGain, 0..2000, unit = " mB") { v -> scope.launch { store.setLoudness(v) } }
-    }
-}
-
 private fun LazyListScope.correctionTab(
     prefs: AudioPrefs,
     activeCorrection: com.aurora.music.data.CorrectionProfile?,
@@ -811,38 +722,6 @@ private fun ParametricBandCard(band: ParamBand, onChange: (ParamBand) -> Unit, o
 }
 
 @Composable
-private fun EngineDropdown(selected: Int, onSelect: (Int) -> Unit) {
-    val labels = listOf("System effects", "Custom DSP", "Off")
-    var expanded by remember { mutableStateOf(false) }
-    Column(Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
-        Text("Engine", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
-        Spacer(Modifier.height(10.dp))
-        Box {
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .clickable { expanded = true }.padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(labels.getOrElse(selected) { labels[0] }, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Icon(Icons.Filled.ArrowDropDown, "Choose engine", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                labels.forEachIndexed { i, label ->
-                    DropdownMenuItem(
-                        text = { Text(label, fontWeight = if (i == selected) FontWeight.Bold else FontWeight.Normal) },
-                        onClick = { onSelect(i); expanded = false },
-                        trailingIcon = if (i == selected) {
-                            { Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary) }
-                        } else null,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun PresetChip(label: String, selected: Boolean, onClick: () -> Unit) {
     Box(
         Modifier.clip(RoundedCornerShape(50))
@@ -850,23 +729,6 @@ private fun PresetChip(label: String, selected: Boolean, onClick: () -> Unit) {
             .clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 9.dp),
     ) {
         Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
-    }
-}
-
-@Composable
-private fun BandSlider(freqHz: Int, valueMb: Int, minMb: Int, maxMb: Int, onChange: (Int) -> Unit) {
-    Column(Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(freqLabel(freqHz), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, modifier = Modifier.width(72.dp))
-            Slider(
-                value = valueMb.toFloat(),
-                onValueChange = { onChange(it.roundToInt()) },
-                valueRange = minMb.toFloat()..maxMb.toFloat(),
-                colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary),
-                modifier = Modifier.weight(1f),
-            )
-            Text("%+.1f".format(valueMb / 100f), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(52.dp))
-        }
     }
 }
 
@@ -904,22 +766,6 @@ private fun FloatSliderRow(title: String, value: Float, range: ClosedFloatingPoi
 }
 
 @Composable
-private fun EnhancerSlider(title: String, value: Int, range: IntRange, unit: String = "", onChange: (Int) -> Unit) {
-    Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
-        Row(Modifier.fillMaxWidth()) {
-            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
-            val pct = if (unit.isBlank()) "${(value * 100 / (range.last.coerceAtLeast(1)))}%" else "$value$unit"
-            Text(pct, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Slider(
-            value = value.toFloat(),
-            onValueChange = { onChange(it.roundToInt()) },
-            valueRange = range.first.toFloat()..range.last.toFloat(),
-            colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary),
-        )
-    }
-}
-
 private fun balanceLabel(b: Float): String = when {
     b < -0.01f -> "L ${(-b * 100).roundToInt()}%"
     b > 0.01f -> "R ${(b * 100).roundToInt()}%"
@@ -949,6 +795,41 @@ private fun CorrectionProfilesPanel(
     store: SettingsStore,
     scope: CoroutineScope,
 ) {
+    val ctx = LocalContext.current
+    var importMsg by remember { mutableStateOf<String?>(null) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val name = runCatching {
+                ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                    val i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (i >= 0 && c.moveToFirst()) c.getString(i) else null
+                }
+            }.getOrNull() ?: uri.lastPathSegment ?: "imported.txt"
+            val text = runCatching {
+                ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            }.getOrNull()
+            val imported = text?.let { com.aurora.music.data.EqTextImport.parse(name, it) }
+            scope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                if (imported == null) {
+                    importMsg = "Couldn't parse that file — need GraphicEQ or APO Filter lines"
+                } else {
+                    val profile = com.aurora.music.data.CorrectionProfile(
+                        id = "corr_${System.currentTimeMillis()}",
+                        name = imported.name,
+                        deviceName = imported.name,
+                        source = com.aurora.music.data.CorrectionSource.CUSTOM,
+                        preampDb = imported.preampDb,
+                        gains = imported.gains,
+                    )
+                    store.upsertCorrectionProfile(profile)
+                    store.setActiveCorrectionId(profile.id)
+                    store.setDspMode(DspMode.CUSTOM)
+                    store.setActiveEqProfile(profile.name)
+                    importMsg = null
+                }
+            }
+        }
+    }
     Column(Modifier.fillMaxWidth()) {
         CorrectionRow("Flat", "No correction", activeId == "flat", canDelete = false,
             onSelect = { scope.launch { store.setActiveCorrectionId("flat") } }, onDelete = {})
@@ -970,6 +851,25 @@ private fun CorrectionProfilesPanel(
             DbSliderRow("Correction trim", active.preampDb, -6f..6f) { v ->
                 scope.launch { store.upsertCorrectionProfile(active.copy(preampDb = v)) }
             }
+            FloatSliderRow(
+                "Strength", active.strengthPct, 0f..120f,
+                valueText = "%.0f%%".format(active.strengthPct),
+            ) { v ->
+                scope.launch { store.upsertCorrectionProfile(active.copy(strengthPct = v)) }
+            }
+            Text("100% is the measured correction; lower softens it, up to 120% pushes further. Applied in the log domain so the shape holds.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        }
+        Box(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
+                .clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .clickable { runCatching { picker.launch(arrayOf("text/plain", "*/*")) } }.padding(vertical = 12.dp),
+            contentAlignment = Alignment.Center,
+        ) { Text("Import correction (.txt)", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
+        if (importMsg != null) {
+            Text(importMsg!!, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         }
     }
 }

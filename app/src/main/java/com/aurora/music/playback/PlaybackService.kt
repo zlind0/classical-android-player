@@ -272,7 +272,7 @@ class PlaybackService : MediaLibraryService() {
     // correction convolver. Runs off the audio thread; setImpulse swaps atomically.
     private fun applyCorrectionProfile(profile: com.aurora.music.data.CorrectionProfile?) {
         val id = profile?.id ?: "flat"
-        val gains = profile?.gains.orEmpty()
+        val gains = profile?.scaledGains().orEmpty()
         val on = profile?.enabled == true && !CorrectionCompiler.isFlat(gains) && id != "flat"
         correctionMaxGainDb = if (on) gains.maxOrNull() ?: 0f else 0f
         correctionTrimDb = if (on) profile?.preampDb ?: 0f else 0f
@@ -294,8 +294,7 @@ class PlaybackService : MediaLibraryService() {
             if (taps != null) {
                 val ir = ImpulseResponse(taps, taps, rate)
                 correctionConv.setImpulse(ir, 0f)
-                val custom = (lastAudioPrefs?.dspMode == DspMode.CUSTOM)
-                correctionConv.enabled = custom
+                correctionConv.enabled = true
             } else {
                 correctionConv.enabled = false
             }
@@ -306,7 +305,8 @@ class PlaybackService : MediaLibraryService() {
     // runtime-switchable via volatile flags no rebuild the two eq engines are mutually exclusive so they never stack
     private fun applyAudioEngine() {
         val ap = lastAudioPrefs ?: return
-        val mode = ap.dspMode
+        // v0.5.1: engine selector removed — the software DSP chain is always on
+        // (bit-perfect USB keeps its own bypass chain).
         val layout = DspCoeffBuilder.GRAPHIC_LAYOUTS.getOrElse(ap.dspGraphicLayout) { DspCoeffBuilder.GRAPHIC_LAYOUTS[0] }
         val graphic = FloatArray(layout.freqs.size) { ap.dspGraphicBands.getOrElse(it) { 0f } }
         // v0.5 auto headroom (plan §28): preamp covers the max positive gain of
@@ -332,7 +332,7 @@ class PlaybackService : MediaLibraryService() {
             parametric = ap.dspParametric.map { DspBand(it.freqHz, it.gainDb, it.q, it.type) },
             preampDb = ap.dspPreampDb + correctionTrimDb + autoPre,
             balance = ap.dspBalance,
-            width = if (monoAudioPref) 0f else ap.dspWidth,
+            width = ap.dspWidth,
             crossfeed = ap.dspCrossfeed,
             saturation = ap.dspSaturation,
             delayLeftMs = ap.dspDelayLeftMs,
@@ -352,9 +352,9 @@ class PlaybackService : MediaLibraryService() {
             driveGainDb = driveGainDb,
         )
         auroraDsp.update(params)
-        auroraDsp.enabled = mode == DspMode.CUSTOM
-        audioEffects?.setMasterEnabled(mode == DspMode.SYSTEM)
-        correctionConv.enabled = correctionActive && mode == DspMode.CUSTOM
+        auroraDsp.enabled = true
+        audioEffects?.setMasterEnabled(false)
+        correctionConv.enabled = correctionActive
 
         convolver.enabled = ap.dspConvEnabled
         convolver.setMakeup(ap.dspConvMakeupDb)
@@ -366,8 +366,8 @@ class PlaybackService : MediaLibraryService() {
                 convolver.setImpulse(ir, ap.dspConvMakeupDb)
             }
         }
-        // mono in system/off runs in monoprocessor in custom its width=0 above
-        monoProcessor.enabled = monoAudioPref && mode != DspMode.CUSTOM
+        // mono runs in the dedicated pre-processor now (no engine switch anymore)
+        monoProcessor.enabled = monoAudioPref
         updateSignalPath()
         updateDriveGain()
     }
@@ -446,11 +446,8 @@ class PlaybackService : MediaLibraryService() {
             C.ENCODING_PCM_32BIT -> 32; C.ENCODING_PCM_FLOAT -> 32
             else -> 0
         }
-        // anything that alters samples breaks bit-perfect
-        val modifying = (ap?.dspMode == DspMode.CUSTOM) || (ap?.dspMode == DspMode.SYSTEM) ||
-            monoAudioPref || (ap?.replayGain ?: 0) != 0 || (ap?.dspConvEnabled == true) ||
-            correctionActive ||
-            kotlin.math.abs(player.playbackParameters.speed - 1f) > 0.001f
+        // anything that alters samples breaks bit-perfect; the DSP chain is always on now
+        val modifying = true
         val isBt = device != null && (
             device.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
             device.type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET ||

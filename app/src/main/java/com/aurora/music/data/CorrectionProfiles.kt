@@ -37,17 +37,27 @@ data class CorrectionProfile(
     // 128 log-spaced gains 20Hz..20kHz, dB
     val gains: List<Float> = emptyList(),
     val enabled: Boolean = true,
+    // v0.5.1: application strength 0..120%. Applied in the LOG domain
+    // (dB gains are multiplied), which keeps the curve shape perceptually
+    // consistent; scaling linear amplitude instead would warp it.
+    val strengthPct: Float = 100f,
 ) {
-    val maxGain: Float get() = gains.maxOrNull() ?: 0f
+    val maxGain: Float get() = scaledGains().maxOrNull() ?: 0f
+    fun scaledGains(): List<Float> {
+        val s = (strengthPct / 100f).coerceIn(0f, 1.2f)
+        if (s == 1f) return gains
+        return gains.map { it * s }
+    }
     fun gainAt(freqHz: Float, freqs: FloatArray = correctionFreqs()): Float {
-        if (gains.isEmpty()) return 0f
-        if (freqHz <= freqs.first()) return gains.first()
-        if (freqHz >= freqs.last()) return gains.last()
+        val g = scaledGains()
+        if (g.isEmpty()) return 0f
+        if (freqHz <= freqs.first()) return g.first()
+        if (freqHz >= freqs.last()) return g.last()
         var lo = 0
         while (lo < freqs.size - 2 && freqs[lo + 1] < freqHz) lo++
         val f0 = freqs[lo]; val f1 = freqs[lo + 1]
         val t = (Math.log((freqHz / f0).toDouble()) / Math.log((f1 / f0).toDouble())).toFloat()
-        return gains[lo] + (gains[lo + 1] - gains[lo]) * t
+        return g[lo] + (g[lo + 1] - g[lo]) * t
     }
 }
 
