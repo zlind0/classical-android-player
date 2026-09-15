@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurora.music.AuroraApplication
+import com.aurora.music.R
 import com.aurora.music.data.SmartPlaylist
 import com.aurora.music.data.SmartRule
 import java.util.UUID
@@ -41,7 +42,7 @@ class SmartPlaylistViewModel(app: Application) : AndroidViewModel(app) {
         val sp = _state.value
         if (sp.id.isNullOrBlank()) return
         viewModelScope.launch {
-            container.settingsStore.saveSmartPlaylist(sp.copy(name = sp.name?.trim()?.ifBlank { "Smart playlist" }))
+            container.settingsStore.saveSmartPlaylist(sp.copy(name = sp.name?.trim()?.ifBlank { getApplication<Application>().getString(R.string.smart_default_name) }))
             onDone()
         }
     }

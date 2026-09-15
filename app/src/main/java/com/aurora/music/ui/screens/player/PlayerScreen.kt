@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -90,6 +91,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.aurora.music.R
 import com.aurora.music.data.MockData
 import com.aurora.music.model.LyricLine
 import androidx.compose.material3.LocalContentColor
@@ -123,6 +126,7 @@ fun PlayerScreen(
     onOpenOutput: () -> Unit,
     onOpenSleep: () -> Unit,
     onOpenVisualizer: () -> Unit,
+    onOpenEqualizer: () -> Unit,
     onSonicRadio: () -> Unit,
     onAutoDj: () -> Unit,
     gestures: com.aurora.music.data.GesturePrefs = com.aurora.music.data.GesturePrefs(),
@@ -198,61 +202,66 @@ fun PlayerScreen(
                 Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        Icons.Filled.KeyboardArrowDown, "Collapse",
+                        Icons.Filled.KeyboardArrowDown, stringResource(R.string.player_collapse),
                         modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onCollapse).padding(6.dp),
                     )
                     // balances trailing icons so PLAYING FROM stays centered
                     Spacer(Modifier.width(80.dp))
                     Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("PLAYING FROM", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f), maxLines = 1)
-                        Text(song.album.ifBlank { "Aurora" }, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, maxLines = 1, color = MaterialTheme.colorScheme.onSurface)
+                        Text(stringResource(R.string.player_playing_from), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f), maxLines = 1)
+                        Text(song.album.ifBlank { stringResource(R.string.app_name) }, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, maxLines = 1, color = MaterialTheme.colorScheme.onSurface)
                     }
                     // output device sheet covers local device choice
                     PlayerCastButton(Modifier.size(40.dp))
                     Icon(
-                        Icons.Filled.Speaker, "Output device",
+                        Icons.Filled.Speaker, stringResource(R.string.player_output_device),
                         modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onOpenOutput).padding(8.dp),
                     )
                     Box {
                         Icon(
-                            Icons.Filled.MoreVert, "More",
+                            Icons.Filled.MoreVert, stringResource(R.string.player_more),
                             modifier = Modifier.size(40.dp).clip(CircleShape).clickable { showMenu = true }.padding(8.dp),
                         )
                         DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                             DropdownMenuItem(
-                                text = { Text("Sonic radio") },
+                                text = { Text(stringResource(R.string.menu_sonic_radio)) },
                                 onClick = { showMenu = false; onSonicRadio() },
                                 leadingIcon = { Icon(Icons.Filled.Radio, null) },
                             )
                             DropdownMenuItem(
-                                text = { Text("Auto-DJ") },
+                                text = { Text(stringResource(R.string.menu_auto_dj)) },
                                 onClick = { showMenu = false; onAutoDj() },
                                 leadingIcon = { Icon(Icons.Filled.AutoAwesome, null) },
                             )
                             DropdownMenuItem(
-                                text = { Text("Visualizer") },
+                                text = { Text(stringResource(R.string.menu_equalizer_effects)) },
+                                onClick = { showMenu = false; onOpenEqualizer() },
+                                leadingIcon = { Icon(Icons.Filled.Tune, null) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.menu_visualizer)) },
                                 onClick = { showMenu = false; onOpenVisualizer() },
                                 leadingIcon = { Icon(Icons.Filled.GraphicEq, null) },
                             )
                             DropdownMenuItem(
-                                text = { Text("Sleep timer") },
+                                text = { Text(stringResource(R.string.menu_sleep_timer)) },
                                 onClick = { showMenu = false; onOpenSleep() },
                                 leadingIcon = { Icon(Icons.Filled.Bedtime, null) },
                             )
                             DropdownMenuItem(
-                                text = { Text("Go to album") },
+                                text = { Text(stringResource(R.string.menu_go_to_album)) },
                                 enabled = song.albumId.isNotBlank(),
                                 onClick = { showMenu = false; onGoToAlbum() },
                                 leadingIcon = { Icon(Icons.Filled.Album, null) },
                             )
                             DropdownMenuItem(
-                                text = { Text("Go to artist") },
+                                text = { Text(stringResource(R.string.menu_go_to_artist)) },
                                 enabled = song.artistId.isNotBlank(),
                                 onClick = { showMenu = false; onGoToArtist() },
                                 leadingIcon = { Icon(Icons.Filled.Person, null) },
                             )
                             DropdownMenuItem(
-                                text = { Text("View queue") },
+                                text = { Text(stringResource(R.string.menu_view_queue)) },
                                 onClick = { showMenu = false; onOpenQueue() },
                                 leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) },
                             )
@@ -321,7 +330,7 @@ fun PlayerScreen(
                     if (state.bpm > 0) {
                         Spacer(Modifier.height(3.dp))
                         Text(
-                            "${state.keyName} · ${state.camelot} · ${state.bpm} BPM",
+                            stringResource(R.string.player_tempo_fmt, state.keyName, state.camelot, state.bpm),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary, maxLines = 1,
                         )
@@ -332,7 +341,7 @@ fun PlayerScreen(
                 )
                 Icon(
                     imageVector = if (state.isCurrentLiked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                    contentDescription = "Like",
+                    contentDescription = stringResource(R.string.player_like),
                     tint = likeTint,
                     modifier = Modifier.size(48.dp).clip(CircleShape).clickable(onClick = onToggleLike).padding(8.dp),
                 )
@@ -352,10 +361,10 @@ fun PlayerScreen(
                         ) { Text(source, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         Spacer(Modifier.width(8.dp))
                     }
-                    if (isLossless(song.suffix)) {
+                    if (isLossless(song)) {
                         Box(
                             Modifier.clip(if (classic) RoundedCornerShape(50) else MaterialTheme.shapes.extraSmall).background(playerAccent).padding(horizontal = 8.dp, vertical = 3.dp),
-                        ) { Text("LOSSLESS", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black, color = onPlayerAccent) }
+                        ) { Text(stringResource(R.string.player_lossless), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black, color = onPlayerAccent) }
                         Spacer(Modifier.width(8.dp))
                     }
                     if (badge.isNotEmpty()) {
@@ -392,12 +401,12 @@ fun PlayerScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
-                    Icons.Filled.Shuffle, "Shuffle",
+                    Icons.Filled.Shuffle, stringResource(R.string.player_shuffle),
                     tint = if (state.shuffle) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(44.dp).clip(CircleShape).clickable(onClick = onToggleShuffle).padding(8.dp),
                 )
                 Icon(
-                    Icons.Filled.SkipPrevious, "Previous",
+                    Icons.Filled.SkipPrevious, stringResource(R.string.player_previous),
                     tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(56.dp).clip(CircleShape).clickable(onClick = onPrevious).padding(6.dp),
                 )
@@ -411,19 +420,19 @@ fun PlayerScreen(
                 ) {
                     Icon(
                         if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        contentDescription = "Play/pause",
+                        contentDescription = stringResource(R.string.player_play_pause),
                         tint = onPlayerAccent,
                         modifier = Modifier.size(36.dp),
                     )
                 }
                 Icon(
-                    Icons.Filled.SkipNext, "Next",
+                    Icons.Filled.SkipNext, stringResource(R.string.player_next),
                     tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(56.dp).clip(CircleShape).clickable(onClick = onNext).padding(6.dp),
                 )
                 Icon(
                     imageVector = if (state.repeat == RepeatMode.ONE) Icons.Filled.RepeatOne else Icons.Filled.Repeat,
-                    contentDescription = "Repeat",
+                    contentDescription = stringResource(R.string.player_repeat),
                     tint = if (state.repeat != RepeatMode.OFF) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(44.dp).clip(CircleShape).clickable(onClick = onCycleRepeat).padding(8.dp),
                 )
@@ -437,14 +446,14 @@ fun PlayerScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    BottomUtil(Icons.Filled.Speed, "Speed ${"%.1f".format(state.speed)}x", onOpenSpeedPitch)
+                    BottomUtil(Icons.Filled.Speed, stringResource(R.string.player_speed, state.speed), onOpenSpeedPitch)
                     BottomUtil(
                         Icons.Filled.Lyrics,
-                        "Lyrics",
+                        stringResource(R.string.player_lyrics),
                         { showLyrics = !showLyrics },
                         active = showLyrics,
                     )
-                    BottomUtil(Icons.AutoMirrored.Filled.QueueMusic, "Queue", onOpenQueue)
+                    BottomUtil(Icons.AutoMirrored.Filled.QueueMusic, stringResource(R.string.player_queue), onOpenQueue)
                 }
             } else {
                 Spacer(Modifier.height(12.dp))
@@ -454,11 +463,12 @@ fun PlayerScreen(
     }
 }
 
+@Composable
 private fun sourceLabel(song: com.aurora.music.model.Song): String? = when {
     song.streamUrl.isBlank() -> null
-    song.streamUrl.startsWith("content://") -> "Local"
-    song.streamUrl.startsWith("file://") -> "Downloaded"
-    else -> "Streaming"
+    song.streamUrl.startsWith("content://") -> stringResource(R.string.player_source_local)
+    song.streamUrl.startsWith("file://") -> stringResource(R.string.player_source_downloaded)
+    else -> stringResource(R.string.player_source_streaming)
 }
 
 private fun formatBadge(song: com.aurora.music.model.Song): String {
@@ -470,8 +480,18 @@ private fun formatBadge(song: com.aurora.music.model.Song): String {
     return parts.joinToString(" · ")
 }
 
-private fun isLossless(suffix: String): Boolean =
-    suffix.lowercase() in setOf("flac", "alac", "wav", "aiff", "aif", "ape", "wv", "dsf", "dff", "m4a")
+// m4a/mp4 are containers: only a lossless codec proves lossless. Anything
+// unproven shows no badge rather than a wrong LOSSLESS one.
+private fun isLossless(song: com.aurora.music.model.Song): Boolean {
+    val s = song.suffix.lowercase()
+    if (s in setOf("flac", "alac", "wav", "aiff", "aif", "ape", "wv", "dsf", "dff")) return true
+    if (s in setOf("m4a", "mp4", "mov")) {
+        val mime = song.codecMime.lowercase()
+        return mime.contains("alac") || mime.contains("flac") || mime.contains("raw") ||
+            mime.contains("wav") || mime.contains("pcm") || mime.contains("aiff") || mime.contains("ape")
+    }
+    return false
+}
 
 @Composable
 private fun BottomUtil(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit, active: Boolean = false) {
@@ -496,7 +516,7 @@ private fun SeekBar(progress: Float, positionSec: Int, durationSec: Int, accent:
             Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(8.dp).clip(CircleShape).background(accent))
                 Spacer(Modifier.width(8.dp))
-                Text("LIVE", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Black, color = accent)
+                Text(stringResource(R.string.player_live), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Black, color = accent)
                 Spacer(Modifier.weight(1f))
                 Text(formatTime(positionSec), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -556,15 +576,15 @@ private fun LyricsPanel(song: com.aurora.music.model.Song, positionSec: Float, d
             l == null || l.lines.isEmpty() -> Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Icon(Icons.Filled.Lyrics, null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(48.dp))
                 Spacer(Modifier.height(10.dp))
-                Text("No lyrics found", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text("Tried the server & LRCLIB", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.player_no_lyrics), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.player_no_lyrics_sub), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             else -> {
                 Box(
                     Modifier.align(Alignment.TopEnd).padding(12.dp).clip(RoundedCornerShape(50))
                         .background(accent.copy(alpha = 0.85f)).padding(horizontal = 10.dp, vertical = 4.dp),
                 ) {
-                    Text(if (l.synced) l.source else "${l.source} · text", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black, color = if (accent.luminance() > 0.6f) Color.Black else Color.White)
+                    Text(if (l.synced) l.source else stringResource(R.string.player_lyrics_via, l.source), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black, color = if (accent.luminance() > 0.6f) Color.Black else Color.White)
                 }
                 if (l.synced) SyncedLyrics(l.lines, positionSec, durationSec, accent, onSeek)
                 else PlainLyrics(l.lines)
@@ -671,7 +691,7 @@ private fun SyncedLyrics(lines: List<LyricLine>, positionSec: Float, durationSec
         ) {
             val onAccent = if (accent.luminance() > 0.6f) Color.Black else Color.White
             Text(
-                "Back to current line",
+                stringResource(R.string.player_back_to_current),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Black,
                 color = onAccent,

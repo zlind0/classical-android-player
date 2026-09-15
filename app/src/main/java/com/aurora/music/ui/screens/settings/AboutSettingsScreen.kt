@@ -24,11 +24,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
+import com.aurora.music.R
 
 @Composable
 fun AboutSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
@@ -36,7 +38,7 @@ fun AboutSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val session by container.settingsStore.session.collectAsStateWithLifecycle(initialValue = null)
 
     Column(Modifier.fillMaxWidth()) {
-        SettingsTopBar("About Aurora", onBack)
+        SettingsTopBar(stringResource(R.string.about_title), onBack)
         Column(
             Modifier.fillMaxWidth().padding(bottom = contentPadding.calculateBottomPadding() + 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -48,18 +50,18 @@ fun AboutSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                 contentAlignment = Alignment.Center,
             ) { Icon(Icons.Filled.GraphicEq, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(44.dp)) }
             Spacer(Modifier.height(14.dp))
-            Text("Aurora", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
-            Text("Version 1.0  •  Local music player", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(R.string.about_app), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+            Text(stringResource(R.string.about_version), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(24.dp))
 
-            InfoRow("Library", "On this device")
-            InfoRow("Signed in as", session?.username ?: "—")
-            InfoRow("Client name", "Aurora")
-            InfoRow("Playback engine", "AndroidX Media3 (ExoPlayer)")
+            InfoRow(stringResource(R.string.about_library), stringResource(R.string.about_library_value))
+            InfoRow(stringResource(R.string.about_signed_in), session?.username ?: "—")
+            InfoRow(stringResource(R.string.about_client), stringResource(R.string.about_app))
+            InfoRow(stringResource(R.string.about_engine), stringResource(R.string.about_engine_value))
 
             Spacer(Modifier.height(20.dp))
             Text(
-                "Built with Jetpack Compose & Material 3.\nPlays music stored on this device — no account needed.",
+                stringResource(R.string.about_footer),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,

@@ -35,10 +35,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aurora.music.data.HomeSection
+import com.aurora.music.R
 import com.aurora.music.model.Album
 import com.aurora.music.model.Song
 import com.aurora.music.ui.components.AlbumCard
@@ -67,6 +69,18 @@ fun HomeScreen(
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val data = state.data
     val hidden = com.aurora.music.ui.theme.LocalUiPrefs.current.hiddenHomeSections
+    // Hoisted: stringResource is @Composable-only and illegal in LazyColumn DSL / plain lambdas.
+    val strAvatarFallback = stringResource(R.string.avatar_fallback)
+    val strGreeting = stringResource(R.string.home_greeting)
+    val strAlerts = stringResource(R.string.home_alerts)
+    val strJumpBack = stringResource(R.string.home_jump_back)
+    val strPlaylists = stringResource(R.string.home_playlists)
+    val strFavourites = stringResource(R.string.home_favourites)
+    val strMost = stringResource(R.string.home_most)
+    val strArtists = stringResource(R.string.home_artists)
+    val strNew = stringResource(R.string.home_new)
+    val strStarred = stringResource(R.string.home_starred)
+    val strNewRelease = stringResource(R.string.home_new_release)
     LazyColumn(
         Modifier.fillMaxWidth(),
         contentPadding = PaddingValues(
@@ -89,17 +103,17 @@ fun HomeScreen(
                     if (avatarUrl.isNotBlank()) {
                         com.aurora.music.ui.components.Artwork(avatarUrl, MaterialTheme.colorScheme.primary, Modifier.matchParentSize(), corner = 22.dp)
                     } else {
-                        Text(username.take(2).uppercase().ifBlank { "ME" }, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onPrimary)
+                        Text(username.take(2).uppercase().ifBlank { strAvatarFallback }, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onPrimary)
                     }
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Eyebrow(greeting(), MaterialTheme.colorScheme.primary)
-                    Text(username.ifBlank { "Listener" }, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+                    Eyebrow(strGreeting, MaterialTheme.colorScheme.primary)
+                    Text(username.ifBlank { stringResource(R.string.common_listener) }, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
                 }
-                IconPill(Icons.Outlined.Notifications, "Alerts") {}
+                IconPill(Icons.Outlined.Notifications, strAlerts) {}
                 Spacer(Modifier.width(8.dp))
-                IconPill(Icons.Outlined.Settings, "Settings", onClick = onOpenSettings)
+                IconPill(Icons.Outlined.Settings, stringResource(R.string.profile_settings), onClick = onOpenSettings)
             }
         }
 
@@ -143,7 +157,7 @@ fun HomeScreen(
 
         if (data.recentlyPlayed.isNotEmpty() && HomeSection.RECENT !in hidden) {
             item {
-                SectionHeader("Jump back in", Modifier.padding(horizontal = 16.dp))
+                SectionHeader(strJumpBack, Modifier.padding(horizontal = 16.dp))
                 Spacer(Modifier.height(12.dp))
                 LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     items(data.recentlyPlayed.size) { i ->
@@ -156,7 +170,7 @@ fun HomeScreen(
 
         if (data.playlists.isNotEmpty() && HomeSection.PLAYLISTS !in hidden) {
             item {
-                SectionHeader("Your playlists", Modifier.padding(horizontal = 16.dp))
+                SectionHeader(strPlaylists, Modifier.padding(horizontal = 16.dp))
                 Spacer(Modifier.height(10.dp))
                 LazyRow(contentPadding = PaddingValues(horizontal = 8.dp)) {
                     items(data.playlists.size) { i ->
@@ -170,7 +184,7 @@ fun HomeScreen(
         if (featured != null && HomeSection.FAVOURITE !in hidden) {
             item {
                 Column(Modifier.padding(horizontal = 16.dp)) {
-                    SectionHeader("From your favourites")
+                    SectionHeader(strFavourites)
                     Spacer(Modifier.height(12.dp))
                     Box(
                         Modifier
@@ -185,13 +199,13 @@ fun HomeScreen(
                                 Artwork(featured.artworkUrl, featured.accent, Modifier.size(56.dp), corner = 14.dp)
                                 Spacer(Modifier.width(14.dp))
                                 Column(Modifier.weight(1f)) {
-                                    Eyebrow("STARRED", featured.accent)
+                                    Eyebrow(strStarred, featured.accent)
                                     Spacer(Modifier.height(2.dp))
                                     Text(featured.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     Text(featured.artist, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                                 }
                                 Box(Modifier.size(46.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Filled.PlayArrow, "Play", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(24.dp))
+                                    Icon(Icons.Filled.PlayArrow, stringResource(R.string.home_play), tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(24.dp))
                                 }
                             }
                             Spacer(Modifier.height(14.dp))
@@ -209,7 +223,7 @@ fun HomeScreen(
 
         if (data.mostPlayed.isNotEmpty() && HomeSection.MOST !in hidden) {
             item {
-                SectionHeader("Most played", Modifier.padding(horizontal = 16.dp))
+                SectionHeader(strMost, Modifier.padding(horizontal = 16.dp))
                 Spacer(Modifier.height(10.dp))
                 LazyRow(contentPadding = PaddingValues(horizontal = 8.dp)) {
                     items(data.mostPlayed.size) { i ->
@@ -221,7 +235,7 @@ fun HomeScreen(
 
         if (data.artists.isNotEmpty() && HomeSection.ARTISTS !in hidden) {
             item {
-                SectionHeader("Artists", Modifier.padding(horizontal = 16.dp))
+                SectionHeader(strArtists, Modifier.padding(horizontal = 16.dp))
                 Spacer(Modifier.height(10.dp))
                 LazyRow(contentPadding = PaddingValues(horizontal = 8.dp)) {
                     items(data.artists.size) { i ->
@@ -233,7 +247,7 @@ fun HomeScreen(
 
         if (data.newReleases.isNotEmpty() && HomeSection.NEW !in hidden) {
             item {
-                SectionHeader("New releases", Modifier.padding(horizontal = 16.dp))
+                SectionHeader(strNew, Modifier.padding(horizontal = 16.dp))
                 Spacer(Modifier.height(10.dp))
                 LazyRow(contentPadding = PaddingValues(horizontal = 8.dp)) {
                     items(data.newReleases.size) { i ->
@@ -262,7 +276,7 @@ private fun HeroCard(album: Album, onOpenDetail: (String, String) -> Unit, onPla
             )
         )
         Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
-            Eyebrow("NEW RELEASE", accent)
+            Eyebrow(stringResource(R.string.home_new_release), accent)
             Spacer(Modifier.height(6.dp))
             Text(album.title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(album.artist, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.85f), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -273,7 +287,7 @@ private fun HeroCard(album: Album, onOpenDetail: (String, String) -> Unit, onPla
             ) {
                 Icon(Icons.Filled.PlayArrow, null, tint = Color.Black, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Play", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Black, color = Color.Black)
+                Text(stringResource(R.string.home_play), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Black, color = Color.Black)
             }
         }
     }
@@ -307,5 +321,3 @@ private fun IconPill(icon: androidx.compose.ui.graphics.vector.ImageVector, desc
         contentAlignment = Alignment.Center,
     ) { Icon(icon, desc, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(20.dp)) }
 }
-
-private fun greeting(): String = "GOOD EVENING"

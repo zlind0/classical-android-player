@@ -32,10 +32,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.aurora.music.model.Artist
 import com.aurora.music.model.Playlist
+import com.aurora.music.R
 import com.aurora.music.ui.components.Artwork
 import com.aurora.music.ui.components.ArtistCircle
 import com.aurora.music.ui.components.PlaylistCard
@@ -55,7 +57,14 @@ fun ProfileScreen(
     onOpenDetail: (String, String) -> Unit,
 ) {
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    val initials = username.take(2).uppercase().ifBlank { "ME" }
+    // Hoisted: stringResource is @Composable-only and illegal in plain ifBlank {} lambdas.
+    val strAvatarFallback = stringResource(R.string.avatar_fallback)
+    val strPlaylists = stringResource(R.string.profile_playlists)
+    val strArtists = stringResource(R.string.profile_artists)
+    val strServerFallback = stringResource(R.string.profile_server_label)
+    val strTopArtists = stringResource(R.string.profile_top_artists)
+    val strYourPlaylists = stringResource(R.string.profile_your_playlists)
+    val initials = username.take(2).uppercase().ifBlank { strAvatarFallback }
     LazyColumn(
         Modifier.fillMaxWidth(),
         contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp),
@@ -71,9 +80,9 @@ fun ProfileScreen(
                     Modifier.fillMaxWidth().padding(top = topInset + 6.dp, start = 8.dp, end = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onBack).padding(8.dp))
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.common_back), modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onBack).padding(8.dp))
                     Spacer(Modifier.weight(1f))
-                    Icon(Icons.Filled.MoreVert, "More", modifier = Modifier.size(40.dp).clip(CircleShape).padding(8.dp))
+                    Icon(Icons.Filled.MoreVert, stringResource(R.string.player_more), modifier = Modifier.size(40.dp).clip(CircleShape).padding(8.dp))
                 }
                 Column(
                     Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
@@ -91,7 +100,7 @@ fun ProfileScreen(
                         }
                     }
                     Spacer(Modifier.height(10.dp))
-                    Text(username.ifBlank { "Listener" }, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+                    Text(username.ifBlank { stringResource(R.string.common_listener) }, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
                     Text(serverLabel.ifBlank { server.removePrefix("http://").removePrefix("https://") }, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -102,9 +111,9 @@ fun ProfileScreen(
                 Modifier.fillMaxWidth().padding(horizontal = 24.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
-                Stat("${playlists.size}", "Playlists")
-                Stat("${artists.size}", "Artists")
-                Stat(serverLabel.ifBlank { "Server" }, "Server")
+                Stat("${playlists.size}", strPlaylists)
+                Stat("${artists.size}", strArtists)
+                Stat(serverLabel.ifBlank { strServerFallback }, strServerFallback)
             }
         }
 
@@ -117,7 +126,7 @@ fun ProfileScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.Edit, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Settings", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
+                        Text(stringResource(R.string.profile_settings), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
                     }
                 }
             }
@@ -125,7 +134,7 @@ fun ProfileScreen(
 
         if (artists.isNotEmpty()) {
             item {
-                SectionHeader("Top artists", Modifier.padding(horizontal = 16.dp))
+                SectionHeader(strTopArtists, Modifier.padding(horizontal = 16.dp))
                 Spacer(Modifier.height(10.dp))
                 LazyRow(contentPadding = PaddingValues(horizontal = 8.dp)) {
                     items(artists.size) { i -> ArtistCircle(artists[i], onClick = { onOpenDetail("artist", artists[i].id) }) }
@@ -135,7 +144,7 @@ fun ProfileScreen(
 
         if (playlists.isNotEmpty()) {
             item {
-                SectionHeader("Your playlists", Modifier.padding(horizontal = 16.dp))
+                SectionHeader(strYourPlaylists, Modifier.padding(horizontal = 16.dp))
                 Spacer(Modifier.height(10.dp))
                 LazyRow(contentPadding = PaddingValues(horizontal = 8.dp)) {
                     items(playlists.size) { i -> PlaylistCard(playlists[i], onClick = { onOpenDetail("playlist", playlists[i].id) }) }

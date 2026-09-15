@@ -14,6 +14,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import com.aurora.music.AuroraApplication
+import com.aurora.music.R
 import com.aurora.music.data.SavedQueue
 import com.aurora.music.data.toSavedTrack
 import com.aurora.music.model.Song
@@ -31,10 +32,10 @@ import kotlin.math.pow
 
 enum class RepeatMode { OFF, ALL, ONE }
 
-private val EMPTY_SONG = Song("", "Nothing playing", "", "", "", 0)
+private val BLANK_SONG = Song("", "", "", "", "", 0)
 
 data class PlayerUiState(
-    val current: Song = EMPTY_SONG,
+    val current: Song = BLANK_SONG,
     val queue: List<Song> = emptyList(),
     val isPlaying: Boolean = false,
     val positionSec: Float = 0f,
@@ -58,11 +59,14 @@ data class PlayerUiState(
     val hasTrack: Boolean get() = current.id.isNotEmpty()
 }
 
-class PlayerViewModel(app: Application) : AndroidViewModel(app) {
+class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val container = (app as AuroraApplication).container
 
-    private val _state = MutableStateFlow(PlayerUiState())
+    private val emptySong: Song
+        get() = Song("", app.getString(com.aurora.music.R.string.vm_nothing_playing), "", "", "", 0)
+
+    private val _state = MutableStateFlow(PlayerUiState(current = emptySong))
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
 
     private var controller: MediaController? = null
@@ -197,7 +201,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         lastRecordedId = null
         lastNowPlayingId = null
         _state.update {
-            it.copy(current = EMPTY_SONG, queue = emptyList(), isPlaying = false, positionSec = 0f, currentIndex = 0, expanded = false)
+            it.copy(current = emptySong, queue = emptyList(), isPlaying = false, positionSec = 0f, currentIndex = 0, expanded = false)
         }
     }
 
@@ -488,15 +492,15 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             val sonic = runCatching { container.sonicEngine.buildRadio(seed) }.getOrDefault(emptyList())
             if (sonic.size >= 2) {
                 playAll(sonic, 0)
-                onResult("Sonic radio · ${sonic.size - 1} similar tracks")
+                onResult(app.getString(R.string.msg_sonic_radio, sonic.size - 1))
             } else {
                 val more = runCatching { container.repository.radio(seed.id) }.getOrDefault(emptyList())
                     .filter { it.id != seed.id }
                 if (more.isNotEmpty()) {
                     playAll(listOf(seed) + more, 0)
-                    onResult("Radio started")
+                    onResult(app.getString(R.string.msg_radio_started))
                 } else {
-                    onResult("Not enough analyzed tracks — run Sonic analysis in Settings")
+                    onResult(app.getString(R.string.msg_radio_needs_analysis))
                 }
             }
             loadingRadio = false
@@ -510,7 +514,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             val set = runCatching { container.sonicEngine.buildAutoDj(seed) }.getOrDefault(emptyList())
             if (set.size >= 2) {
                 playAll(set, 0)
-                onResult("Auto-DJ · ${set.size} tracks, key & tempo matched")
+                onResult(app.getString(R.string.msg_autodj, set.size))
             } else {
                 loadingRadio = false
                 startSonicRadio(seed, onResult)
@@ -604,10 +608,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             .map { it.id }
             .filter { it.isNotEmpty() }
             .distinct()
-        if (ids.isEmpty()) { onResult("Nothing to save"); return }
+        if (ids.isEmpty()) { onResult(app.getString(R.string.msg_nothing_to_save)); return }
         viewModelScope.launch {
             val ok = runCatching { container.repository.createPlaylistFromSongs(title, ids) }.getOrDefault(false)
-            onResult(if (ok) "Saved “$title”" else "Couldn't save playlist")
+            onResult(if (ok) app.getString(R.string.msg_playlist_saved, title) else app.getString(R.string.msg_playlist_save_failed))
         }
     }
 

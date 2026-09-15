@@ -49,6 +49,7 @@ data class DownloadRow(
 
 // server-agnostic facade online delegates to backend offline serves downloaded files
 class MusicRepository(
+    private val context: android.content.Context,
     private val backendProvider: () -> MediaBackend?,
     private val downloadManager: DownloadManager,
     private val offlineProvider: () -> Boolean = { false },
@@ -226,8 +227,9 @@ class MusicRepository(
         if (kind == "smart") {
             val sp = smartPlaylistsProvider().firstOrNull { it.id == id } ?: return null
             val tracks = smartEngine?.evaluate(sp, librarySongs()).orEmpty()
+            val fallback = context.getString(com.aurora.music.R.string.smart_default_name)
             return DetailData(
-                DetailInfo(sp.name ?: "Smart playlist", "Smart playlist • ${tracks.size} songs", tracks.firstOrNull()?.artworkUrl ?: "", accentFor(id), false, tracks.size, "Smart playlist"),
+                DetailInfo(sp.name ?: fallback, context.getString(com.aurora.music.R.string.lib_smart_rules_fmt, tracks.size), tracks.firstOrNull()?.artworkUrl ?: "", accentFor(id), false, tracks.size, fallback),
                 tracks,
             )
         }

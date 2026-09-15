@@ -26,11 +26,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
+import com.aurora.music.R
 import kotlinx.coroutines.launch
 
 @Composable
@@ -42,8 +44,19 @@ fun SonicSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val auto by app.settingsStore.sonicAutoAnalyze.collectAsStateWithLifecycle(initialValue = false)
     val scope = rememberCoroutineScope()
 
+    // Hoisted for the non-composable when/ifBlank branches below.
+    val strAnalyzed = stringResource(R.string.sonic_analyzed_fmt, analyzed)
+    val strPowers = stringResource(R.string.sonic_powers)
+    val strAnalyzeSection = stringResource(R.string.sonic_analyze)
+    val strAnalyzeLib = stringResource(R.string.sonic_analyze_lib)
+    val strAnalyzing = stringResource(R.string.sonic_analyzing)
+    val strProgress = if (progress.running) stringResource(R.string.sonic_progress_fmt, progress.done, progress.total, progress.current) else ""
+    val strDoneTap = stringResource(R.string.sonic_done_tap, analyzed)
+    val strExtracting = stringResource(R.string.sonic_extracting)
+    val strAutomation = stringResource(R.string.sonic_automation)
+
     Column(Modifier.fillMaxWidth()) {
-        SettingsTopBar("Sonic discovery", onBack)
+        SettingsTopBar(stringResource(R.string.sonic_title), onBack)
         Column(Modifier.fillMaxWidth().padding(bottom = contentPadding.calculateBottomPadding() + 24.dp)) {
 
             Row(
@@ -54,12 +67,12 @@ fun SonicSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                 Icon(Icons.Filled.AutoAwesome, null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("$analyzed tracks analyzed", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("Powers “Sonic radio” from the player menu", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(strAnalyzed, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(strPowers, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
-            SettingsSectionTitle("Analyze")
+            SettingsSectionTitle(strAnalyzeSection)
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
                     .clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
@@ -75,14 +88,14 @@ fun SonicSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        if (progress.running) "Analyzing library…" else "Analyze library",
+                        if (progress.running) strAnalyzing else strAnalyzeLib,
                         style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium,
                     )
                     Text(
                         when {
-                            progress.running -> "${progress.done} / ${progress.total} • ${progress.current}"
-                            analyzed > 0 -> "$analyzed analyzed — tap to scan new tracks"
-                            else -> "Extract audio features from on-device & downloaded tracks"
+                            progress.running -> strProgress
+                            analyzed > 0 -> strDoneTap
+                            else -> strExtracting
                         },
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -90,24 +103,22 @@ fun SonicSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                 }
                 if (progress.running) {
                     Text(
-                        "Cancel", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+                        stringResource(R.string.common_cancel), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.clip(RoundedCornerShape(50)).clickable { app.sonicEngine.cancel() }.padding(horizontal = 10.dp, vertical = 6.dp),
                     )
                 }
             }
 
-            SettingsSectionTitle("Automation")
+            SettingsSectionTitle(strAutomation)
             SettingsGroup {
                 SettingsSwitchRow(
-                    Icons.Filled.AutoAwesome, "Auto-analyze on launch",
-                    "Quietly analyze new local & downloaded tracks when the app starts", auto,
+                    Icons.Filled.AutoAwesome, stringResource(R.string.sonic_auto),
+                    stringResource(R.string.sonic_auto_sub), auto,
                 ) { v -> scope.launch { app.settingsStore.setSonicAutoAnalyze(v) } }
             }
 
             Text(
-                "Sonic radio compares the actual sound of your tracks (timbre, harmony, energy, tempo) " +
-                    "fully on-device — no account or internet needed. Only on-device tracks " +
-                    "can be analyzed.",
+                stringResource(R.string.sonic_hint),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
             )

@@ -95,7 +95,7 @@ private fun WidgetContent(np: NowPlaying, art: Bitmap?) {
         Spacer(GlanceModifier.width(12.dp))
         Column(modifier = GlanceModifier.defaultWeight()) {
             Text(
-                if (np.hasTrack) np.title.ifBlank { "Unknown title" } else "Nothing playing",
+                if (np.hasTrack) np.title.ifBlank { context.getString(R.string.widget_unknown_title) } else context.getString(R.string.widget_nothing),
                 style = TextStyle(color = white, fontSize = 15.sp, fontWeight = FontWeight.Bold),
                 maxLines = 1,
             )

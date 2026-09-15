@@ -61,6 +61,7 @@ class RootScanner(
                                 path = path, size = size, lastModified = mtime,
                                 title = meta.title, artist = meta.artist, album = meta.album,
                                 durationSec = meta.durationSec, artworkUrl = folderCover(f),
+                                codec = sniffCodec(f),
                             )
                         )
                         if (old == null) added++ else updated++
@@ -119,6 +120,23 @@ class RootScanner(
         return if (parts.size == 2) Meta(parts[1].trim(), parts[0].trim(), "", 0)
         else Meta(base, "", "", 0)
     }
+
+    // definitive codec id (KEY_MIME of the first audio track): tells ALAC-in-m4a
+    // apart from AAC-in-m4a. Header-only read, no decode.
+    private fun sniffCodec(f: File): String = runCatching {
+        val ex = android.media.MediaExtractor()
+        try {
+            ex.setDataSource(f.absolutePath)
+            for (i in 0 until ex.trackCount) {
+                val fmt = ex.getTrackFormat(i)
+                val mime = fmt.getString(android.media.MediaFormat.KEY_MIME).orEmpty()
+                if (mime.startsWith("audio/")) return mime
+            }
+            ""
+        } finally {
+            runCatching { ex.release() }
+        }
+    }.getOrDefault("")
 
     // plan §82 artwork priority (v0.3 subset): directory cover files
     private fun folderCover(f: File): String {

@@ -55,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -65,6 +66,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.aurora.music.AuroraApplication
+import com.aurora.music.R
 import com.aurora.music.navigation.Routes
 import com.aurora.music.navigation.topLevelDestinations
 import com.aurora.music.ui.components.AmbientBackground
@@ -122,9 +124,9 @@ fun AuroraApp() {
     val onDownload: (com.aurora.music.model.Song) -> Unit = {
         val already = container.downloadManager.isDownloaded(it.id)
         container.downloadManager.downloadSong(it)
-        confirm(if (already) "Already downloaded" else "Downloading “${it.title}”")
+        confirm(if (already) context.getString(R.string.msg_already_downloaded) else context.getString(R.string.msg_downloading, it.title))
     }
-    val onRemoveDownload: (String) -> Unit = { container.downloadManager.removeDownload(it); confirm("Removed download") }
+    val onRemoveDownload: (String) -> Unit = { container.downloadManager.removeDownload(it); confirm(context.getString(R.string.msg_removed_download)) }
 
     // re-pull likes on foreground so stars from other devices show up
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
@@ -152,7 +154,7 @@ fun AuroraApp() {
             hadActiveDownloads = false
             val failed = downloadStates.values.count { it is com.aurora.music.data.DownloadState.Failed }
             snackbarHostState.showSnackbar(
-                if (failed > 0) "Download finished — $failed failed" else "Download complete",
+                if (failed > 0) context.getString(R.string.msg_download_finished_failed, failed) else context.getString(R.string.msg_download_complete),
                 duration = androidx.compose.material3.SnackbarDuration.Short,
             )
         }
@@ -313,8 +315,8 @@ fun AuroraApp() {
                             isPlaying = playerState.isPlaying,
                             onQuery = searchVM::onQuery,
                             onPlayAll = { songs, index -> playerVM.playAll(songs, index) },
-                            onAddToQueue = { playerVM.addToQueue(it); confirm("Added to queue") },
-                            onPlayNext = { playerVM.playNext(it); confirm("Playing next") },
+                            onAddToQueue = { playerVM.addToQueue(it); confirm(context.getString(R.string.msg_added_to_queue)) },
+                            onPlayNext = { playerVM.playNext(it); confirm(context.getString(R.string.msg_playing_next)) },
                             onToggleLike = { playerVM.toggleLike(it) },
                             onOpenDetail = { kind, id -> openDetail(kind, id) },
                             downloadedIds = downloadedIds,
@@ -341,7 +343,7 @@ fun AuroraApp() {
                                     val ok = runCatching {
                                         context.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) } != null
                                     }.getOrDefault(false)
-                                    confirm(if (ok) "Playlist exported" else "Export failed")
+                                    confirm(if (ok) context.getString(R.string.msg_playlist_exported) else context.getString(R.string.msg_export_failed))
                                 }
                             }
                         }
@@ -359,12 +361,12 @@ fun AuroraApp() {
                                     t to n
                                 }
                                 val entries = text?.let { com.aurora.music.data.M3u.parse(it) }.orEmpty()
-                                if (entries.isEmpty()) { confirm("No tracks found in that file") } else {
-                                    val name = displayName?.substringBeforeLast('.')?.takeIf { it.isNotBlank() } ?: "Imported playlist"
-                                    confirm("Importing ${entries.size} tracks…")
+                                if (entries.isEmpty()) { confirm(context.getString(R.string.msg_no_tracks_in_file)) } else {
+                                    val name = displayName?.substringBeforeLast('.')?.takeIf { it.isNotBlank() } ?: context.getString(R.string.app_import_default)
+                                    confirm(context.getString(R.string.msg_importing, entries.size))
                                     val result = container.repository.importPlaylist(name, entries)
-                                    if (result == null) confirm("Import failed") else {
-                                        confirm("Matched ${result.first} of ${result.second} tracks")
+                                    if (result == null) confirm(context.getString(R.string.msg_import_failed)) else {
+                                        confirm(context.getString(R.string.msg_matched, result.first, result.second))
                                         libraryVM.load()
                                     }
                                 }
@@ -382,8 +384,8 @@ fun AuroraApp() {
                             onToggleLayout = libraryVM::toggleLayout,
                             onOpenDrawer = { openDrawer() },
                             onPlayAll = { songs, index -> playerVM.playAll(songs, index) },
-                            onAddToQueue = { playerVM.addToQueue(it); confirm("Added to queue") },
-                            onPlayNext = { playerVM.playNext(it); confirm("Playing next") },
+                            onAddToQueue = { playerVM.addToQueue(it); confirm(context.getString(R.string.msg_added_to_queue)) },
+                            onPlayNext = { playerVM.playNext(it); confirm(context.getString(R.string.msg_playing_next)) },
                             onToggleLike = { playerVM.toggleLike(it) },
                             onOpenDetail = { kind, id -> openDetail(kind, id) },
                             downloadedIds = downloadedIds,
@@ -397,7 +399,7 @@ fun AuroraApp() {
                             onImportM3u = { importM3uLauncher.launch(arrayOf("*/*")) },
                             onExportPlaylist = { id, kind, title -> scope.launch {
                                 val text = container.repository.exportPlaylist(kind, id)
-                                if (text == null) confirm("Nothing to export") else {
+                                if (text == null) confirm(context.getString(R.string.msg_nothing_to_export)) else {
                                     pendingM3u = text
                                     exportM3uLauncher.launch("$title.m3u8")
                                 }
@@ -408,7 +410,7 @@ fun AuroraApp() {
                             onQueueCollection = { id, kind -> scope.launch {
                                 val tracks = container.repository.detail(kind, id)?.tracks.orEmpty()
                                 tracks.forEach { playerVM.addToQueue(it) }
-                                if (tracks.isNotEmpty()) confirm("Added ${tracks.size} to queue")
+                                if (tracks.isNotEmpty()) confirm(context.getString(R.string.msg_added_n_to_queue, tracks.size))
                             } },
                             onToggleLikeKind = { id, kind -> playerVM.toggleLike(id, kind) },
                             onDeletePlaylist = { id -> scope.launch { container.repository.deletePlaylist(id); libraryVM.load() } },
@@ -461,8 +463,8 @@ fun AuroraApp() {
                             onOpenFolder = { id, name -> navController.navigate(Routes.folders(id, name)) },
                             onPlayAll = { songs, index -> playerVM.playAll(songs, index) },
                             onShufflePlay = { songs -> playerVM.shufflePlay(songs) },
-                            onAddToQueue = { playerVM.addToQueue(it); confirm("Added to queue") },
-                            onPlayNext = { playerVM.playNext(it); confirm("Playing next") },
+                            onAddToQueue = { playerVM.addToQueue(it); confirm(context.getString(R.string.msg_added_to_queue)) },
+                            onPlayNext = { playerVM.playNext(it); confirm(context.getString(R.string.msg_playing_next)) },
                             onToggleLike = { playerVM.toggleLike(it) },
                             onOpenDetail = { k, i -> openDetail(k, i) },
                             downloadedIds = downloadedIds,
@@ -525,8 +527,8 @@ fun AuroraApp() {
                             onBack = { navController.popBackStack() },
                             onPlayAll = { songs, index -> playerVM.playCollection(kind, id, songs, index, detailState.data?.info?.songCount ?: songs.size) },
                             onShufflePlay = { songs -> playerVM.shuffleCollection(kind, id, songs, detailState.data?.info?.songCount ?: songs.size) },
-                            onAddToQueue = { playerVM.addToQueue(it); confirm("Added to queue") },
-                            onPlayNext = { playerVM.playNext(it); confirm("Playing next") },
+                            onAddToQueue = { playerVM.addToQueue(it); confirm(context.getString(R.string.msg_added_to_queue)) },
+                            onPlayNext = { playerVM.playNext(it); confirm(context.getString(R.string.msg_playing_next)) },
                             onToggleLike = { playerVM.toggleLike(it) },
                             onOpenDetail = { k, i -> openDetail(k, i) },
                             itemKind = kind,
@@ -544,7 +546,7 @@ fun AuroraApp() {
                                         container.downloadManager.downloadAll(d.tracks)
                                     }
                                     val n = d.tracks.count { !container.downloadManager.isDownloaded(it.id) }
-                                    confirm(if (n > 0) "Downloading $n song${if (n == 1) "" else "s"}" else "Already downloaded")
+                                    confirm(if (n > 0) context.getString(R.string.msg_downloading_n, n, if (n == 1) "" else "s") else context.getString(R.string.msg_already_downloaded))
                                 }
                             },
                             onRemoveDownloads = {
@@ -656,7 +658,7 @@ fun AuroraApp() {
                             onPlayRoot = { id ->
                                 scope.launch {
                                     val songs = container.musicRoots.songsOf(id)
-                                    if (songs.isEmpty()) confirm("No scanned tracks in this source — run Scan first")
+                                    if (songs.isEmpty()) confirm(context.getString(R.string.msg_no_scanned_tracks))
                                     else playerVM.playAll(songs, 0)
                                 }
                             },
@@ -722,6 +724,7 @@ fun AuroraApp() {
                     onOpenOutput = { showOutput = true },
                     onOpenSleep = { showSleep = true },
                     onOpenVisualizer = { showVisualizer = true },
+                    onOpenEqualizer = { playerVM.setExpanded(false); navController.navigate(Routes.SETTINGS_EQ) },
                     onSonicRadio = { playerVM.startSonicRadio(onResult = { confirm(it) }) },
                     onAutoDj = { playerVM.startAutoDj(onResult = { confirm(it) }) },
                     gestures = gesturePrefs,
@@ -817,7 +820,7 @@ private fun DownloadProgressBanner(count: Int, progress: Float) {
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                if (count == 1) "Downloading 1 song" else "Downloading $count songs",
+                stringResource(R.string.msg_downloading_n, count, if (count == 1) "" else "s"),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,

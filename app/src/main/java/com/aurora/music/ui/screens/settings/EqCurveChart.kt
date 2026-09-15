@@ -15,6 +15,8 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.aurora.music.R
 import com.aurora.music.data.CorrectionProfile
 import com.aurora.music.data.ParamBand
 import com.aurora.music.playback.DspCoeffBuilder
@@ -36,7 +38,7 @@ fun EqCurveChart(
         buildCurvePoints(correction, graphicFreqs, graphicQ, graphicGains, parametric, preampDb)
     }
     Column(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Text("Frequency response", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
+        Text(stringResource(R.string.eq_curve_title), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
         Canvas(Modifier.fillMaxWidth().height(170.dp).padding(top = 4.dp)) {
             val w = size.width
             val h = size.height
@@ -80,7 +82,7 @@ fun EqCurveChart(
             pathOf({ it.combined }, primary, 4f)
         }
         Text(
-            "Pink: combined · Cyan: correction · Grey: user EQ",
+            stringResource(R.string.eq_curve_legend),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

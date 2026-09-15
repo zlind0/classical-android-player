@@ -32,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -39,6 +40,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aurora.music.AuroraApplication
+import com.aurora.music.R
 import com.aurora.music.data.StorageType
 import com.aurora.music.data.StorageVolume
 import com.aurora.music.data.hasStorageRead
@@ -62,6 +64,9 @@ fun FolderPickerScreen(
     // plan §64-65: listing needs read permission, and browsing shared folders on
     // API 30+ additionally needs All-files access
     val ctx = LocalContext.current
+    // Hoisted: used inside non-composable ifBlank {} / remember {} lambdas below.
+    val strNoRoot = stringResource(R.string.picker_no_root)
+    val strRootLabel = stringResource(R.string.picker_root_label)
     var resumeTick by remember { mutableIntStateOf(0) }
     val owner = LocalLifecycleOwner.current
     DisposableEffect(owner) {
@@ -82,22 +87,22 @@ fun FolderPickerScreen(
     }
 
     Column(Modifier.fillMaxWidth()) {
-        SettingsTopBar("Select music folder", onBack)
+        SettingsTopBar(stringResource(R.string.picker_title), onBack)
         if (!hasRead) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
                 Text(
-                    "Storage permission not granted — the folder list will be empty.",
+                    stringResource(R.string.picker_no_permission),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.error,
                 )
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = { readLauncher.launch(storageReadPermission()) }) {
-                    Text("Grant read access")
+                    Text(stringResource(R.string.picker_grant))
                 }
             }
         }
         LazyColumn(Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(bottom = 8.dp)) {
-            item { SettingsSectionTitle("Storage") }
+            item { SettingsSectionTitle(stringResource(R.string.picker_storage)) }
             items(volumes, key = { it.id }) { v ->
                 Row(
                     Modifier.fillMaxWidth().clickable {
@@ -109,7 +114,7 @@ fun FolderPickerScreen(
                     Column(Modifier.weight(1f)) {
                         Text(v.label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                         Text(
-                            v.rootPath + if (!v.available) " (unavailable)" else "",
+                            v.rootPath + if (!v.available) stringResource(R.string.picker_unavailable) else "",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -118,14 +123,14 @@ fun FolderPickerScreen(
                     if (v.id == volume?.id) Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary)
                 }
             }
-            item { SettingsSectionTitle("Folder") }
+            item { SettingsSectionTitle(stringResource(R.string.picker_folder)) }
             item {
                 // breadcrumb: jump to any ancestor (never above the volume root)
                 val root = volume?.rootPath.orEmpty()
-                val crumbs = remember(current) { crumbs(current, root) }
+                val crumbs = remember(current) { crumbs(current, root, strRootLabel) }
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
                     Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack, "Up",
+                        Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.picker_up),
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.clickable(enabled = current != root) {
                             current = File(current).parent ?: root
@@ -134,7 +139,7 @@ fun FolderPickerScreen(
                     Spacer(Modifier.width(4.dp))
                     Column(Modifier.weight(1f)) {
                         Text(
-                            current.ifBlank { "(no storage found)" },
+                            current.ifBlank { strNoRoot },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -152,8 +157,8 @@ fun FolderPickerScreen(
             if (dirs.isEmpty()) {
                 item {
                     Text(
-                        if (current.isBlank()) "No readable storage volumes found."
-                        else "No subfolders — you can select this folder itself.",
+                        if (current.isBlank()) stringResource(R.string.picker_no_storage)
+                        else stringResource(R.string.picker_no_subfolders),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
@@ -184,17 +189,17 @@ fun FolderPickerScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
                 .padding(bottom = contentPadding.calculateBottomPadding()),
         ) {
-            Text("Select this folder")
+            Text(stringResource(R.string.picker_select_this))
         }
     }
 }
 
-private fun crumbs(current: String, root: String): List<String> {
+private fun crumbs(current: String, root: String, rootLabel: String): List<String> {
     if (current.isBlank() || root.isBlank()) return emptyList()
     val out = ArrayList<String>()
     var f: File? = File(current)
     while (f != null && f.absolutePath.startsWith(root)) {
-        out.add(if (f.absolutePath == root) "(root)" else f.name)
+        out.add(if (f.absolutePath == root) rootLabel else f.name)
         if (f.absolutePath == root) break
         f = f.parentFile
     }

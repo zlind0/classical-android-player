@@ -27,6 +27,7 @@ import com.google.common.util.concurrent.SettableFuture
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.aurora.music.AuroraApplication
+import com.aurora.music.R
 import com.aurora.music.data.AudioEffectsController
 import com.aurora.music.data.AudioPrefs
 import com.aurora.music.data.DspMode
@@ -430,10 +431,10 @@ class PlaybackService : MediaLibraryService() {
         val device = currentOutputDevice()
         val outName = device?.productName?.toString()?.trim()?.ifBlank { null }
             ?: when {
-                device == null -> "Speaker"
-                isUsb(device.type) -> "USB DAC"
-                device.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "Bluetooth"
-                else -> "Output"
+                device == null -> getString(R.string.common_speaker)
+                isUsb(device.type) -> getString(R.string.sheet_output_usb_generic)
+                device.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> getString(R.string.sheet_output_bluetooth)
+                else -> getString(R.string.sheet_output_other)
             }
 
         val wantBitPerfect = useFloatOut && device != null && isUsb(device.type)
@@ -454,13 +455,13 @@ class PlaybackService : MediaLibraryService() {
             device.type == android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER)
         // truly bit-perfect needs an exclusive mixer grant float passthrough alone may still get sample-rate-converted by the mixer bluetooth is always re-encoded
         val (bitPerfect, note) = when {
-            isBt -> false to "Bluetooth — re-encoded by the system codec (LDAC/aptX/AAC/SBC)"
-            modifying -> false to "DSP / effects active — not bit-perfect"
-            useFloatOut && grantedBitPerfect -> true to "Exclusive bit-perfect to DAC"
-            useFloatOut && deviceSupportsBitPerfect -> false to "Hi-res float — exclusive not granted (try replug / restart)"
-            useFloatOut -> false to "Hi-res float passthrough — this device has no exclusive bit-perfect path"
-            preferHighResPref -> false to "Restart playback to engage hi-res float output"
-            else -> false to "Through Android mixer — enable Hi-res output for bit-perfect"
+            isBt -> false to getString(R.string.signal_bt)
+            modifying -> false to getString(R.string.signal_dsp)
+            useFloatOut && grantedBitPerfect -> true to getString(R.string.signal_bp_exclusive)
+            useFloatOut && deviceSupportsBitPerfect -> false to getString(R.string.signal_hires_denied)
+            useFloatOut -> false to getString(R.string.signal_hires_float)
+            preferHighResPref -> false to getString(R.string.signal_restart_hires)
+            else -> false to getString(R.string.signal_mixer)
         }
         container.signalPath.value = SignalPath(
             active = true, codec = codec, sampleRateHz = fmt.sampleRate.takeIf { it > 0 } ?: 0,
@@ -794,7 +795,7 @@ class PlaybackService : MediaLibraryService() {
         val shuffleBtn = CommandButton.Builder(
             if (player.shuffleModeEnabled) CommandButton.ICON_SHUFFLE_ON else CommandButton.ICON_SHUFFLE_OFF
         )
-            .setDisplayName("Shuffle")
+            .setDisplayName(getString(R.string.player_shuffle))
             .setSessionCommand(SessionCommand(CMD_SHUFFLE, Bundle.EMPTY))
             .build()
         val repeatIcon = when (player.repeatMode) {
@@ -803,7 +804,7 @@ class PlaybackService : MediaLibraryService() {
             else -> CommandButton.ICON_REPEAT_OFF
         }
         val repeatBtn = CommandButton.Builder(repeatIcon)
-            .setDisplayName("Repeat")
+            .setDisplayName(getString(R.string.player_repeat))
             .setSessionCommand(SessionCommand(CMD_REPEAT, Bundle.EMPTY))
             .build()
         return listOf(shuffleBtn, repeatBtn)
@@ -931,7 +932,7 @@ class PlaybackService : MediaLibraryService() {
         val nm = getSystemService(NotificationManager::class.java) ?: return
         if (android.os.Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(
-                NotificationChannel("aurora_alarm", "Alarm", NotificationManager.IMPORTANCE_HIGH)
+                NotificationChannel("aurora_alarm", getString(R.string.alarm_title), NotificationManager.IMPORTANCE_HIGH)
             )
         }
         val piFlags = android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
@@ -942,15 +943,15 @@ class PlaybackService : MediaLibraryService() {
         )
         val notif = androidx.core.app.NotificationCompat.Builder(this, "aurora_alarm")
             .setSmallIcon(com.aurora.music.R.drawable.ic_launcher_monochrome)
-            .setContentTitle("Aurora alarm")
-            .setContentText("Tap to dismiss")
+            .setContentTitle(getString(R.string.alarm_notif_title))
+            .setContentText(getString(R.string.alarm_dismiss_action))
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_MAX)
             .setCategory(androidx.core.app.NotificationCompat.CATEGORY_ALARM)
             .setOngoing(true)
             .setAutoCancel(true)
             .setContentIntent(fsPending)
             .setFullScreenIntent(fsPending, true)
-            .addAction(0, "Dismiss", dismissPending)
+            .addAction(0, getString(R.string.alarm_dismiss), dismissPending)
             .build()
         nm.notify(ALARM_NOTIF_ID, notif)
     }

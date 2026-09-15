@@ -48,10 +48,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.aurora.music.R
 import com.aurora.music.data.SearchResults
 import com.aurora.music.model.Song
 import com.aurora.music.ui.components.AlbumCard
@@ -62,8 +65,8 @@ import com.aurora.music.ui.components.SectionHeader
 import com.aurora.music.ui.components.SongRow
 import com.aurora.music.viewmodel.SearchUiState
 
-private enum class SearchFilter(val label: String) {
-    ALL("All"), SONGS("Songs"), ALBUMS("Albums"), ARTISTS("Artists"), PLAYLISTS("Playlists")
+private enum class SearchFilter {
+    ALL, SONGS, ALBUMS, ARTISTS, PLAYLISTS
 }
 
 private fun sectionNonEmpty(f: SearchFilter, r: SearchResults): Boolean = when (f) {
@@ -72,6 +75,15 @@ private fun sectionNonEmpty(f: SearchFilter, r: SearchResults): Boolean = when (
     SearchFilter.ALBUMS -> r.albums.isNotEmpty()
     SearchFilter.ARTISTS -> r.artists.isNotEmpty()
     SearchFilter.PLAYLISTS -> r.playlists.isNotEmpty()
+}
+
+@Composable
+private fun filterLabel(f: SearchFilter): String = when (f) {
+    SearchFilter.ALL -> stringResource(R.string.search_filter_all)
+    SearchFilter.SONGS -> stringResource(R.string.search_filter_songs)
+    SearchFilter.ALBUMS -> stringResource(R.string.search_filter_albums)
+    SearchFilter.ARTISTS -> stringResource(R.string.search_filter_artists)
+    SearchFilter.PLAYLISTS -> stringResource(R.string.search_filter_playlists)
 }
 
 @Composable
@@ -100,6 +112,7 @@ fun SearchScreen(
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val results = state.results
     val keyboard = LocalSoftwareKeyboardController.current
+    val context = LocalContext.current
     var filter by remember { mutableStateOf(SearchFilter.ALL) }
     // reset filter on new query so it can't strand on an empty section
     androidx.compose.runtime.LaunchedEffect(state.query) { filter = SearchFilter.ALL }
@@ -111,7 +124,7 @@ fun SearchScreen(
     fun launchVoice() {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to search")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, context.getString(R.string.search_voice_prompt))
         }
         runCatching { voiceLauncher.launch(intent) }
     }
@@ -119,22 +132,22 @@ fun SearchScreen(
 
     Column(Modifier.fillMaxWidth().padding(top = topInset)) {
         Column(Modifier.padding(start = 16.dp, top = 14.dp, bottom = 12.dp)) {
-            Eyebrow("DISCOVER", MaterialTheme.colorScheme.primary)
+            Eyebrow(stringResource(R.string.search_discover), MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(2.dp))
-            Text("Search", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Black)
+            Text(stringResource(R.string.search_title), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Black)
         }
         TextField(
             value = state.query,
             onValueChange = onQuery,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            placeholder = { Text("Artists, albums, or songs") },
+            placeholder = { Text(stringResource(R.string.search_hint)) },
             leadingIcon = { Icon(Icons.Filled.Search, null, tint = MaterialTheme.colorScheme.primary) },
             trailingIcon = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (state.query.isNotEmpty()) {
-                        Icon(Icons.Filled.Close, "Clear", modifier = Modifier.size(36.dp).clip(CircleShape).clickable { onQuery("") }.padding(7.dp))
+                        Icon(Icons.Filled.Close, stringResource(R.string.search_clear), modifier = Modifier.size(36.dp).clip(CircleShape).clickable { onQuery("") }.padding(7.dp))
                     }
-                    Icon(Icons.Filled.Mic, "Voice search", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(40.dp).clip(CircleShape).clickable { launchVoice() }.padding(8.dp))
+                    Icon(Icons.Filled.Mic, stringResource(R.string.search_voice), tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(40.dp).clip(CircleShape).clickable { launchVoice() }.padding(8.dp))
                 }
             },
             singleLine = true,
@@ -155,13 +168,13 @@ fun SearchScreen(
         val empty = results.songs.isEmpty() && results.albums.isEmpty() && results.artists.isEmpty() && results.playlists.isEmpty()
         when {
             state.query.isBlank() ->
-                if (recentSearches.isEmpty()) EmptyHint("Search your library", "Find any artist, album, song, or playlist")
+                if (recentSearches.isEmpty()) EmptyHint(stringResource(R.string.search_empty_title), stringResource(R.string.search_empty_sub))
                 else RecentSearches(recentSearches, onRecentClick, onRemoveRecent, onClearRecents, contentPadding)
             state.loading && empty ->
                 Box(Modifier.fillMaxWidth().height(240.dp), contentAlignment = Alignment.Center) {
                     com.aurora.music.ui.components.LottieLoader(modifier = Modifier.size(72.dp))
                 }
-            empty -> EmptyHint("No results", "Nothing matched \"${state.query}\"")
+            empty -> EmptyHint(stringResource(R.string.search_no_results), stringResource(R.string.search_no_match_fmt, state.query))
             else -> {
                 // fall back to ALL when chosen type has no results
                 val effective = if (sectionNonEmpty(filter, results)) filter else SearchFilter.ALL
@@ -196,7 +209,7 @@ private fun FilterChips(selected: SearchFilter, results: SearchResults, onSelect
             val f = available[i]
             val on = f == selected
             Text(
-                f.label,
+                filterLabel(f),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
@@ -234,7 +247,7 @@ private fun Results(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (show(SearchFilter.ARTISTS) && results.artists.isNotEmpty()) {
-            item { SectionHeader("Artists", Modifier.padding(horizontal = 16.dp)) }
+            item { SectionHeader(stringResource(R.string.search_sec_artists), Modifier.padding(horizontal = 16.dp)) }
             item {
                 LazyRow(contentPadding = PaddingValues(horizontal = 8.dp)) {
                     items(results.artists.size) { i -> ArtistCircle(results.artists[i], onClick = { onOpenDetail("artist", results.artists[i].id) }) }
@@ -242,7 +255,7 @@ private fun Results(
             }
         }
         if (show(SearchFilter.ALBUMS) && results.albums.isNotEmpty()) {
-            item { SectionHeader("Albums", Modifier.padding(horizontal = 16.dp)) }
+            item { SectionHeader(stringResource(R.string.search_sec_albums), Modifier.padding(horizontal = 16.dp)) }
             item {
                 LazyRow(contentPadding = PaddingValues(horizontal = 8.dp)) {
                     items(results.albums.size) { i -> AlbumCard(results.albums[i], onClick = { onOpenDetail("album", results.albums[i].id) }) }
@@ -250,7 +263,7 @@ private fun Results(
             }
         }
         if (show(SearchFilter.PLAYLISTS) && results.playlists.isNotEmpty()) {
-            item { SectionHeader("Playlists", Modifier.padding(horizontal = 16.dp)) }
+            item { SectionHeader(stringResource(R.string.search_sec_playlists), Modifier.padding(horizontal = 16.dp)) }
             item {
                 LazyRow(contentPadding = PaddingValues(horizontal = 8.dp)) {
                     items(results.playlists.size) { i -> PlaylistCard(results.playlists[i], onClick = { onOpenDetail("playlist", results.playlists[i].id) }) }
@@ -258,7 +271,7 @@ private fun Results(
             }
         }
         if (show(SearchFilter.SONGS) && results.songs.isNotEmpty()) {
-            item { SectionHeader("Songs", Modifier.padding(horizontal = 16.dp)) }
+            item { SectionHeader(stringResource(R.string.search_sec_songs), Modifier.padding(horizontal = 16.dp)) }
             items(results.songs.size) { i ->
                 val song = results.songs[i]
                 SongRow(
@@ -295,8 +308,8 @@ private fun RecentSearches(
     ) {
         item {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Recent", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Text("Clear", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+                Text(stringResource(R.string.search_recent), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(stringResource(R.string.search_clear), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.clip(RoundedCornerShape(50)).clickable(onClick = onClear).padding(horizontal = 10.dp, vertical = 6.dp))
             }
         }
@@ -309,7 +322,7 @@ private fun RecentSearches(
                 Icon(Icons.Filled.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(14.dp))
                 Text(q, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                Icon(Icons.Filled.Close, "Remove", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(30.dp).clip(CircleShape).clickable { onRemove(q) }.padding(6.dp))
+                Icon(Icons.Filled.Close, stringResource(R.string.common_remove), tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(30.dp).clip(CircleShape).clickable { onRemove(q) }.padding(6.dp))
             }
         }
     }

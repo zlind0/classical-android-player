@@ -169,6 +169,7 @@ class AppContainer(context: Context) {
     val smartEngine = SmartPlaylistEngine(playHistory, downloadManager)
 
     val repository = MusicRepository(
+        appContext,
         backendProvider = { backend },
         downloadManager = downloadManager,
         offlineProvider = { false },

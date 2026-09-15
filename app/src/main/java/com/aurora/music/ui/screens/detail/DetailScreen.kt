@@ -61,6 +61,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.aurora.music.R
 import com.aurora.music.model.Song
 import com.aurora.music.ui.components.Artwork
 import com.aurora.music.ui.components.Eyebrow
@@ -112,11 +114,11 @@ fun DetailScreen(
     if (data == null) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             Row(Modifier.fillMaxWidth().padding(top = topInset + 6.dp, start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onBack).padding(8.dp))
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.common_back), modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onBack).padding(8.dp))
             }
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 if (state.loading) com.aurora.music.ui.components.LottieLoader(modifier = Modifier.size(72.dp))
-                else Text("Couldn't load", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                else Text(stringResource(R.string.detail_load_failed), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         return
@@ -167,23 +169,23 @@ fun DetailScreen(
                     Modifier.fillMaxWidth().padding(top = topInset + 6.dp, start = 8.dp, end = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White, modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onBack).padding(8.dp))
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.common_back), tint = Color.White, modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onBack).padding(8.dp))
                     Spacer(Modifier.weight(1f))
                     Box {
-                        Icon(Icons.Filled.MoreVert, "More", tint = Color.White, modifier = Modifier.size(40.dp).clip(CircleShape).clickable { headerMenu = true }.padding(8.dp))
+                        Icon(Icons.Filled.MoreVert, stringResource(R.string.player_more), tint = Color.White, modifier = Modifier.size(40.dp).clip(CircleShape).clickable { headerMenu = true }.padding(8.dp))
                         val isPlaylist = info.typeLabel.equals("Playlist", true)
                         DropdownMenu(expanded = headerMenu, onDismissRequest = { headerMenu = false }) {
-                            DropdownMenuItem(text = { Text("Play") }, enabled = tracks.isNotEmpty(), onClick = { headerMenu = false; onPlayAll(tracks, 0) }, leadingIcon = { Icon(Icons.Filled.PlayArrow, null) })
-                            DropdownMenuItem(text = { Text("Shuffle") }, enabled = tracks.isNotEmpty(), onClick = { headerMenu = false; onShufflePlay(tracks) }, leadingIcon = { Icon(Icons.Filled.Shuffle, null) })
-                            DropdownMenuItem(text = { Text("Add all to queue") }, enabled = tracks.isNotEmpty(), onClick = { headerMenu = false; tracks.forEach { onAddToQueue(it) } }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.detail_play)) }, enabled = tracks.isNotEmpty(), onClick = { headerMenu = false; onPlayAll(tracks, 0) }, leadingIcon = { Icon(Icons.Filled.PlayArrow, null) })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.detail_shuffle)) }, enabled = tracks.isNotEmpty(), onClick = { headerMenu = false; onShufflePlay(tracks) }, leadingIcon = { Icon(Icons.Filled.Shuffle, null) })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.detail_add_all)) }, enabled = tracks.isNotEmpty(), onClick = { headerMenu = false; tracks.forEach { onAddToQueue(it) } }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) })
                             DropdownMenuItem(
-                                text = { Text(if (isPinned) "Unpin from Library" else "Pin to Library") },
+                                text = { Text(if (isPinned) stringResource(R.string.detail_unpin) else stringResource(R.string.detail_pin)) },
                                 onClick = { headerMenu = false; onTogglePin() },
                                 leadingIcon = { Icon(if (isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin, null) },
                             )
                             if (isPlaylist) {
-                                DropdownMenuItem(text = { Text("Edit playlist") }, onClick = { headerMenu = false; showEdit = true }, leadingIcon = { Icon(Icons.Filled.Edit, null) })
-                                DropdownMenuItem(text = { Text("Delete playlist") }, onClick = { headerMenu = false; onDeletePlaylist() }, leadingIcon = { Icon(Icons.Filled.Delete, null, tint = MaterialTheme.colorScheme.error) })
+                                DropdownMenuItem(text = { Text(stringResource(R.string.detail_edit_playlist)) }, onClick = { headerMenu = false; showEdit = true }, leadingIcon = { Icon(Icons.Filled.Edit, null) })
+                                DropdownMenuItem(text = { Text(stringResource(R.string.detail_delete_playlist)) }, onClick = { headerMenu = false; onDeletePlaylist() }, leadingIcon = { Icon(Icons.Filled.Delete, null, tint = MaterialTheme.colorScheme.error) })
                             }
                         }
                     }
@@ -212,13 +214,13 @@ fun DetailScreen(
                         .padding(horizontal = 28.dp, vertical = 13.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Filled.PlayArrow, "Play", tint = onAccent, modifier = Modifier.size(20.dp))
+                    Icon(Icons.Filled.PlayArrow, stringResource(R.string.detail_play), tint = onAccent, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Play", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Black, color = onAccent)
+                    Text(stringResource(R.string.detail_play), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Black, color = onAccent)
                 }
                 Spacer(Modifier.width(10.dp))
                 Icon(
-                    Icons.Filled.Shuffle, "Shuffle",
+                    Icons.Filled.Shuffle, stringResource(R.string.detail_shuffle),
                     tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(46.dp).clip(CircleShape).clickable(enabled = tracks.isNotEmpty()) { onShufflePlay(tracks) }.padding(11.dp),
                 )
@@ -226,7 +228,7 @@ fun DetailScreen(
                 if (itemKind == "album" || itemKind == "playlist" || itemKind == "artist") {
                     Icon(
                         if (isItemLiked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                        if (isItemLiked) "Unlike" else "Like",
+                        if (isItemLiked) stringResource(R.string.detail_unlike) else stringResource(R.string.player_like),
                         tint = if (isItemLiked) accent else MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(44.dp).clip(CircleShape).clickable { onToggleItemLike() }.padding(9.dp),
                     )
@@ -235,7 +237,7 @@ fun DetailScreen(
                     val allDownloaded = tracks.isNotEmpty() && tracks.all { downloadedIds.contains(it.id) }
                     Icon(
                         if (allDownloaded) Icons.Filled.DownloadDone else Icons.Filled.Download,
-                        if (allDownloaded) "Remove downloads" else "Download",
+                        if (allDownloaded) stringResource(R.string.list_remove_download) else stringResource(R.string.list_download),
                         tint = if (allDownloaded) accent else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(44.dp).clip(CircleShape).clickable {
                             if (allDownloaded) onRemoveDownloads() else onDownloadAll()
@@ -257,7 +259,7 @@ fun DetailScreen(
             val (short, full) = data.albums.partition { it.typeLabel == "EP" || it.typeLabel == "Single" }
             if (full.isNotEmpty()) {
                 item {
-                    SectionHeader("Albums", Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+                    SectionHeader(stringResource(R.string.detail_albums), Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
                     Spacer(Modifier.height(6.dp))
                     androidx.compose.foundation.lazy.LazyRow(contentPadding = PaddingValues(horizontal = 8.dp)) {
                         items(full.size) { i ->
@@ -269,7 +271,7 @@ fun DetailScreen(
             }
             if (short.isNotEmpty()) {
                 item {
-                    SectionHeader("EPs & Singles", Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+                    SectionHeader(stringResource(R.string.detail_eps), Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
                     Spacer(Modifier.height(6.dp))
                     androidx.compose.foundation.lazy.LazyRow(contentPadding = PaddingValues(horizontal = 8.dp)) {
                         items(short.size) { i ->
@@ -287,7 +289,7 @@ fun DetailScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    if (info.isArtist) "Popular" else "Tracks",
+                    if (info.isArtist) stringResource(R.string.detail_popular) else stringResource(R.string.detail_tracks),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
@@ -295,7 +297,7 @@ fun DetailScreen(
                 if (tracks.size > 5) {
                     Icon(
                         if (searchOpen) Icons.Filled.Close else Icons.Filled.Search,
-                        if (searchOpen) "Close search" else "Search tracks",
+                        if (searchOpen) stringResource(R.string.detail_close_search) else stringResource(R.string.detail_search_tracks),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(40.dp).clip(CircleShape)
                             .clickable { searchOpen = !searchOpen; if (!searchOpen) query = "" }.padding(8.dp),
@@ -314,9 +316,9 @@ fun DetailScreen(
                         value = query,
                         onValueChange = { query = it },
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).focusRequester(searchFocus),
-                        placeholder = { Text("Search in ${info.typeLabel.lowercase()}") },
+                        placeholder = { Text(stringResource(R.string.detail_search_in, info.typeLabel.lowercase())) },
                         leadingIcon = { Icon(Icons.Filled.Search, null, tint = MaterialTheme.colorScheme.primary) },
-                        trailingIcon = { if (query.isNotEmpty()) Icon(Icons.Filled.Close, "Clear", modifier = Modifier.clip(CircleShape).clickable { query = "" }.padding(4.dp)) },
+                        trailingIcon = { if (query.isNotEmpty()) Icon(Icons.Filled.Close, stringResource(R.string.common_clear), modifier = Modifier.clip(CircleShape).clickable { query = "" }.padding(4.dp)) },
                         singleLine = true,
                         shape = RoundedCornerShape(14.dp),
                         colors = TextFieldDefaults.colors(
@@ -341,7 +343,7 @@ fun DetailScreen(
                     horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
                 ) {
                     items(genres.size + 1) { i ->
-                        val label = if (i == 0) "All" else genres[i - 1]
+                        val label = if (i == 0) stringResource(R.string.detail_all) else genres[i - 1]
                         val selected = if (i == 0) genreFilter == null else genreFilter.equals(label, true)
                         Text(
                             label,
@@ -409,7 +411,7 @@ fun DetailScreen(
 private fun ArtistAbout(info: com.aurora.music.data.remote.ArtistInfo, accent: Color) {
     var expanded by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
-        SectionHeader("About")
+        SectionHeader(stringResource(R.string.detail_about))
         Spacer(Modifier.height(10.dp))
         val meta = listOf(info.country, info.yearsActive).filter { it.isNotBlank() }.joinToString("  •  ")
         if (meta.isNotBlank()) {
@@ -426,7 +428,7 @@ private fun ArtistAbout(info: com.aurora.music.data.remote.ArtistInfo, accent: C
                 modifier = Modifier.clickable { expanded = !expanded },
             )
             Text(
-                if (expanded) "Show less" else "Show more",
+                if (expanded) stringResource(R.string.detail_show_less) else stringResource(R.string.detail_show_more),
                 style = MaterialTheme.typography.labelLarge,
                 color = accent,
                 modifier = Modifier.clip(RoundedCornerShape(50)).clickable { expanded = !expanded }.padding(vertical = 4.dp),
@@ -456,15 +458,15 @@ private fun EditPlaylistDialog(initialName: String, initialDesc: String, onSave:
     var desc by remember { mutableStateOf(initialDesc) }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Edit playlist", fontWeight = FontWeight.Bold) },
+        title = { Text(stringResource(R.string.detail_edit_playlist), fontWeight = FontWeight.Bold) },
         text = {
             Column {
-                androidx.compose.material3.OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") }, singleLine = true)
+                androidx.compose.material3.OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text(stringResource(R.string.detail_name)) }, singleLine = true)
                 Spacer(Modifier.height(10.dp))
-                androidx.compose.material3.OutlinedTextField(value = desc, onValueChange = { desc = it }, label = { Text("Description") })
+                androidx.compose.material3.OutlinedTextField(value = desc, onValueChange = { desc = it }, label = { Text(stringResource(R.string.detail_description)) })
             }
         },
-        confirmButton = { androidx.compose.material3.TextButton(onClick = { if (name.isNotBlank()) onSave(name.trim(), desc.trim()) }, enabled = name.isNotBlank()) { Text("Save") } },
-        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { if (name.isNotBlank()) onSave(name.trim(), desc.trim()) }, enabled = name.isNotBlank()) { Text(stringResource(R.string.detail_save)) } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text(stringResource(R.string.detail_cancel)) } },
     )
 }

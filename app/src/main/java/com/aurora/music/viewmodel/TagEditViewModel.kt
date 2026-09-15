@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurora.music.AuroraApplication
+import com.aurora.music.R
 import com.aurora.music.data.AudioTags
 import com.aurora.music.data.remote.MetadataMatch
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -66,7 +67,7 @@ class TagEditViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val results = runCatching { container.musicBrainz.search(t.title, t.artist, t.album) }.getOrDefault(emptyList())
             _state.update {
-                it.copy(matching = false, matches = results, matchError = if (results.isEmpty()) "No matches found" else null)
+                it.copy(matching = false, matches = results, matchError = if (results.isEmpty()) getApplication<Application>().getString(R.string.tagedit_no_match) else null)
             }
         }
     }
@@ -80,14 +81,14 @@ class TagEditViewModel(app: Application) : AndroidViewModel(app) {
             val fingerprint = runCatching { container.acoustId.fingerprint(path) }.getOrNull()
             android.util.Log.i("AuroraFp", "fingerprint(${path.substringAfterLast('/')}) len=${fingerprint?.length ?: -1}")
             when {
-                fingerprint == null -> _state.update { it.copy(identifying = false, matchError = "Couldn't fingerprint this file") }
+                fingerprint == null -> _state.update { it.copy(identifying = false, matchError = getApplication<Application>().getString(R.string.tagedit_no_fingerprint)) }
                 !container.acoustId.configured -> _state.update {
-                    it.copy(identifying = false, matchError = "Fingerprint ready (${fingerprint.length} chars). Add an AcoustID API key to fetch matches.")
+                    it.copy(identifying = false, matchError = getApplication<Application>().getString(R.string.tagedit_fp_ready_fmt, fingerprint.length))
                 }
                 else -> {
                     val results = runCatching { container.acoustId.lookup(fingerprint, durationSec) }.getOrDefault(emptyList())
                     _state.update {
-                        it.copy(identifying = false, matches = results, matchError = if (results.isEmpty()) "No AcoustID match" else null)
+                        it.copy(identifying = false, matches = results, matchError = if (results.isEmpty()) getApplication<Application>().getString(R.string.tagedit_no_acoustid) else null)
                     }
                 }
             }

@@ -29,9 +29,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.aurora.music.AuroraApplication
+import com.aurora.music.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -44,11 +46,21 @@ fun BackupScreen(contentPadding: PaddingValues, onBack: () -> Unit, confirm: (St
     val scope = rememberCoroutineScope()
     var pending by remember { mutableStateOf<String?>(null) }
 
+    // Hoisted: confirm() lambdas below run in non-composable coroutine scopes.
+    val strExported = ctx.getString(R.string.backup_exported)
+    val strRestored = ctx.getString(R.string.backup_restored)
+    val strReadFailed = ctx.getString(R.string.backup_read_failed)
+    val strExport = stringResource(R.string.backup_export)
+    val strExportSub = stringResource(R.string.backup_export_sub)
+    val strRestore = stringResource(R.string.backup_restore)
+    val strRestoreSub = stringResource(R.string.backup_restore_sub)
+    val strNoAudioNote = stringResource(R.string.backup_no_audio_note)
+
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         val text = pending; pending = null
         if (uri != null && text != null) scope.launch(Dispatchers.IO) {
             val ok = runCatching { ctx.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) } != null }.getOrDefault(false)
-            confirm(if (ok) "Backup exported" else "Export failed")
+            confirm(if (ok) strExported else ctx.getString(R.string.msg_export_failed))
         }
     }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -57,27 +69,27 @@ fun BackupScreen(contentPadding: PaddingValues, onBack: () -> Unit, confirm: (St
                 runCatching { ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } }.getOrNull()
             }
             val ok = json != null && container.backupManager.import(json)
-            confirm(if (ok) "Backup restored" else "Couldn't read that backup")
+            confirm(if (ok) strRestored else strReadFailed)
         }
     }
 
     Column(Modifier.fillMaxWidth()) {
-        SettingsTopBar("Backup & restore", onBack)
+        SettingsTopBar(stringResource(R.string.settings_backup), onBack)
         Column(Modifier.fillMaxWidth().padding(bottom = contentPadding.calculateBottomPadding() + 24.dp)) {
             SettingsGroup {
-                ActionRow(Icons.Filled.Backup, "Export backup", "Settings, playlists, likes & listening history") {
+                ActionRow(Icons.Filled.Backup, strExport, strExportSub) {
                     scope.launch {
                         pending = container.backupManager.export(System.currentTimeMillis())
                         exportLauncher.launch("aurora-backup.json")
                     }
                 }
                 SettingsRowDivider()
-                ActionRow(Icons.Filled.Restore, "Restore backup", "Overwrites current settings & playlists") {
+                ActionRow(Icons.Filled.Restore, strRestore, strRestoreSub) {
                     importLauncher.launch(arrayOf("application/json", "*/*"))
                 }
             }
             Text(
-                "Downloaded audio files aren't included (they can be re-downloaded). Restoring replaces your current settings, on-device playlists, likes and history.",
+                strNoAudioNote,
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
             )

@@ -37,8 +37,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.aurora.music.R
 
 private data class OutputDevice(val id: Int, val label: String, val icon: ImageVector)
 
@@ -52,17 +54,18 @@ fun PlayerCastButton(modifier: Modifier = Modifier) {
 @Composable
 fun OutputDeviceSheet(currentId: Int, onSelect: (Int) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val devices = remember {
+    val automaticLabel = stringResource(R.string.sheet_output_automatic)
+    val devices = remember(automaticLabel) {
         val am = context.getSystemService(android.content.Context.AUDIO_SERVICE) as AudioManager
-        val list = mutableListOf(OutputDevice(0, "Automatic", Icons.Filled.Check))
+        val list = mutableListOf(OutputDevice(0, automaticLabel, Icons.Filled.Check))
         am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
             .filter { it.type in USEFUL_TYPES }
-            .forEach { list.add(OutputDevice(it.id, deviceLabel(it), deviceIcon(it.type))) }
+            .forEach { list.add(OutputDevice(it.id, deviceLabel(context, it), deviceIcon(it.type))) }
         list
     }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp).padding(bottom = 28.dp)) {
-            Text("Play on", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
+            Text(stringResource(R.string.sheet_play_on), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
             devices.forEach { d ->
                 val selected = d.id == currentId
                 Row(
@@ -90,15 +93,22 @@ fun SleepTimerSheet(
     onEndOfTrack: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val options = listOf(0 to "Off", 5 to "5 min", 15 to "15 min", 30 to "30 min", 45 to "45 min", 60 to "1 hour")
+    val options = listOf(
+        0 to stringResource(R.string.sheet_sleep_off),
+        5 to stringResource(R.string.sheet_sleep_5),
+        15 to stringResource(R.string.sheet_sleep_15),
+        30 to stringResource(R.string.sheet_sleep_30),
+        45 to stringResource(R.string.sheet_sleep_45),
+        60 to stringResource(R.string.sheet_sleep_60),
+    )
     val status = when {
-        endOfTrack -> "Pausing at the end of this track"
-        currentMinutes > 0 -> "Pausing in $currentMinutes min · fades out"
-        else -> "Pause playback after a set time"
+        endOfTrack -> stringResource(R.string.sheet_sleep_end_of_track)
+        currentMinutes > 0 -> stringResource(R.string.sheet_sleep_in, currentMinutes)
+        else -> stringResource(R.string.sheet_sleep_hint)
     }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp)) {
-            Text("Sleep timer", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, modifier = Modifier.padding(bottom = 4.dp))
+            Text(stringResource(R.string.sheet_sleep_timer), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, modifier = Modifier.padding(bottom = 4.dp))
             Text(status, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(16.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -117,7 +127,7 @@ fun SleepTimerSheet(
                         .background(if (endOfTrack) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
                         .clickable { onEndOfTrack(); onDismiss() }.padding(horizontal = 20.dp, vertical = 12.dp),
                 ) {
-                    Text("End of track", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = if (endOfTrack) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
+                    Text(stringResource(R.string.sheet_end_of_track), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = if (endOfTrack) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
                 }
             }
         }
@@ -137,17 +147,17 @@ private val USEFUL_TYPES = setOf(
     AudioDeviceInfo.TYPE_DOCK,
 )
 
-private fun deviceLabel(d: AudioDeviceInfo): String {
+private fun deviceLabel(context: android.content.Context, d: AudioDeviceInfo): String {
     val product = d.productName?.toString()?.trim().orEmpty()
     return when (d.type) {
-        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "Phone speaker"
-        AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_WIRED_HEADSET -> "Wired headphones"
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> context.getString(R.string.sheet_output_speaker)
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_WIRED_HEADSET -> context.getString(R.string.sheet_output_wired)
         AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_USB_HEADSET, AudioDeviceInfo.TYPE_USB_ACCESSORY ->
-            if (product.isNotBlank()) "USB · $product" else "USB DAC"
-        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLE_HEADSET -> product.ifBlank { "Bluetooth" }
-        AudioDeviceInfo.TYPE_HEARING_AID -> "Hearing aid"
-        AudioDeviceInfo.TYPE_DOCK -> "Dock"
-        else -> product.ifBlank { "Output" }
+            if (product.isNotBlank()) context.getString(R.string.sheet_output_usb, product) else context.getString(R.string.sheet_output_usb_generic)
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLE_HEADSET -> product.ifBlank { context.getString(R.string.sheet_output_bluetooth) }
+        AudioDeviceInfo.TYPE_HEARING_AID -> context.getString(R.string.sheet_output_hearing_aid)
+        AudioDeviceInfo.TYPE_DOCK -> context.getString(R.string.sheet_output_dock)
+        else -> product.ifBlank { context.getString(R.string.sheet_output_other) }
     }
 }
 

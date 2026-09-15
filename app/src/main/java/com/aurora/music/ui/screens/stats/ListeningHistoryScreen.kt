@@ -33,7 +33,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.aurora.music.R
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.PlayEvent
 import com.aurora.music.ui.components.Artwork
@@ -46,28 +48,29 @@ import java.util.Locale
 @Composable
 fun ListeningHistoryScreen(contentPadding: PaddingValues, onBack: () -> Unit, onPlay: (String) -> Unit) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
+    val context = LocalContext.current
     val history by container.playHistory.history.collectAsStateWithLifecycle()
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val timeFmt = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
 
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth().padding(top = topInset + 6.dp, start = 8.dp, end = 16.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onBack).padding(8.dp))
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.common_back), modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onBack).padding(8.dp))
             Spacer(Modifier.width(8.dp))
-            Text("Listening history", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.history_title), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         }
         if (history.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Filled.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(56.dp))
                     Spacer(Modifier.size(12.dp))
-                    Text("Nothing played yet", style = MaterialTheme.typography.titleMedium)
-                    Text("Your recently played tracks will appear here", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.history_empty), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.history_empty_sub), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             return@Column
         }
-        val grouped = history.groupBy { dayLabel(it.timestamp) }
+        val grouped = history.groupBy { dayLabel(it.timestamp, context.getString(R.string.hist_today), context.getString(R.string.hist_yesterday)) }
         LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp)) {
             grouped.forEach { (day, events) ->
                 item {
@@ -93,15 +96,15 @@ fun ListeningHistoryScreen(contentPadding: PaddingValues, onBack: () -> Unit, on
     }
 }
 
-private fun dayLabel(ts: Long): String {
+private fun dayLabel(ts: Long, today: String, yesterdayLabel: String): String {
     val now = Calendar.getInstance()
     val then = Calendar.getInstance().apply { timeInMillis = ts }
     val sameDay = now.get(Calendar.YEAR) == then.get(Calendar.YEAR) && now.get(Calendar.DAY_OF_YEAR) == then.get(Calendar.DAY_OF_YEAR)
     now.add(Calendar.DAY_OF_YEAR, -1)
     val yesterday = now.get(Calendar.YEAR) == then.get(Calendar.YEAR) && now.get(Calendar.DAY_OF_YEAR) == then.get(Calendar.DAY_OF_YEAR)
     return when {
-        sameDay -> "Today"
-        yesterday -> "Yesterday"
+        sameDay -> today
+        yesterday -> yesterdayLabel
         else -> SimpleDateFormat("EEEE, MMM d", Locale.getDefault()).format(Date(ts))
     }
 }

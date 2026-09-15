@@ -67,10 +67,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
+import com.aurora.music.R
 import com.aurora.music.data.AppContainer
 import com.aurora.music.data.describe
 import com.aurora.music.data.AudioPrefs
@@ -90,6 +92,7 @@ import com.aurora.music.playback.DspBand
 import com.aurora.music.playback.DspCoeffBuilder
 import com.aurora.music.playback.DspParams
 import androidx.compose.ui.graphics.Color
+import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -98,7 +101,8 @@ import kotlin.math.roundToInt
 
 @Composable
 fun EqualizerScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
-    val container = (LocalContext.current.applicationContext as AuroraApplication).container
+    val ctx = LocalContext.current
+    val container = (ctx.applicationContext as AuroraApplication).container
     val store = container.settingsStore
     val prefs by store.audioPrefs.collectAsStateWithLifecycle(initialValue = AudioPrefs())
     val scope = rememberCoroutineScope()
@@ -111,27 +115,27 @@ fun EqualizerScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val deviceProfiles by store.deviceProfiles.collectAsStateWithLifecycle(initialValue = emptyMap())
     val activeCorrection = corrections.firstOrNull { it.id == activeCorrectionId }
     var tab by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(0) }
-    val rgLabels = listOf("Off", "Track", "Album")
+    val rgLabels = listOf(stringResource(R.string.eq_rg_off), stringResource(R.string.eq_rg_track), stringResource(R.string.eq_rg_album))
 
     Column(Modifier.fillMaxWidth()) {
-        SettingsTopBar("Equalizer & effects", onBack)
+        SettingsTopBar(stringResource(R.string.eq_title), onBack)
         LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp)) {
 
-            collapsible("profiles", "Audio profiles", Icons.Filled.Person, "${audioProfiles.size} saved", expanded) {
+            collapsible("profiles", ctx.getString(R.string.eq_profiles), Icons.Filled.Person, "${audioProfiles.size} saved", expanded) {
                 AudioProfilesPanel(container, prefs, activeCorrectionId, audioProfiles, deviceProfiles, store, scope)
             }
 
             item {
-                PillSelector(listOf("Correction", "User EQ", "Dynamics"), tab) { tab = it }
+                PillSelector(listOf(stringResource(R.string.eq_tab_correction), stringResource(R.string.eq_tab_user), stringResource(R.string.eq_tab_dynamics)), tab) { tab = it }
             }
             when (tab) {
-                0 -> correctionTab(prefs, activeCorrection, corrections, activeCorrectionId, store, scope, container, expanded)
-                1 -> userEqTab(prefs, activeCorrection, store, scope, container, expanded, activeCorrectionId)
-                else -> dynamicsTab(prefs, store, scope, expanded, container)
+                0 -> correctionTab(ctx, prefs, activeCorrection, corrections, activeCorrectionId, store, scope, container, expanded)
+                1 -> userEqTab(ctx, prefs, activeCorrection, store, scope, container, expanded, activeCorrectionId)
+                else -> dynamicsTab(ctx, prefs, store, scope, expanded, container)
             }
 
-            item { SettingsSectionTitle("Output") }
-            collapsible("rg", "Volume leveling", Icons.Filled.VolumeUp, "ReplayGain — ${rgLabels[prefs.replayGain.coerceIn(0, 2)]}", expanded) {
+            item { SettingsSectionTitle(stringResource(R.string.playback_section_output)) }
+            collapsible("rg", ctx.getString(R.string.eq_volume_leveling), Icons.Filled.VolumeUp, ctx.getString(R.string.eq_rg_fmt, rgLabels[prefs.replayGain.coerceIn(0, 2)]), expanded) {
                 SegmentedRow("Mode", rgLabels, prefs.replayGain) { i -> scope.launch { store.setReplayGain(i) } }
             }
         }
@@ -181,12 +185,12 @@ private fun HeadroomRow(peak: Float, preamp: Float, onAuto: () -> Unit) {
     val color = if (clip) Color(0xFFFF6B6B) else MaterialTheme.colorScheme.onSurfaceVariant
     Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text("Headroom", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
+            Text(stringResource(R.string.eq_headroom_title), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
             Text(
                 when {
-                    peak <= 0.1f -> "EQ curve stays below 0 dB — no preamp needed"
-                    clip -> "EQ peak +%.1f dB · clipping by %.1f dB".format(peak, over)
-                    else -> "EQ peak +%.1f dB · %.1f dB headroom".format(peak, -over)
+                    peak <= 0.1f -> stringResource(R.string.eq_headroom_ok_none)
+                    clip -> stringResource(R.string.eq_headroom_clipping, peak, over)
+                    else -> stringResource(R.string.eq_headroom_ok, peak, -over)
                 },
                 style = MaterialTheme.typography.bodySmall, color = color,
             )
@@ -195,7 +199,7 @@ private fun HeadroomRow(peak: Float, preamp: Float, onAuto: () -> Unit) {
             Modifier.clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.primary)
                 .clickable(onClick = onAuto).padding(horizontal = 16.dp, vertical = 8.dp),
             contentAlignment = Alignment.Center,
-        ) { Text("Auto", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary) }
+        ) { Text(stringResource(R.string.eq_auto), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary) }
     }
 }
 
@@ -216,18 +220,18 @@ private fun ConvolutionPanel(prefs: AudioPrefs, store: SettingsStore, scope: Cor
                 ctx.contentResolver.openInputStream(uri)?.use { input -> dest.outputStream().use { input.copyTo(it) } }
                 store.setDspConvIr(dest.absolutePath, name)
                 store.setDspConvEnabled(true)
-                scope.launch(Dispatchers.Main) { android.widget.Toast.makeText(ctx, "Loaded IR: $name", android.widget.Toast.LENGTH_SHORT).show() }
+                scope.launch(Dispatchers.Main) { android.widget.Toast.makeText(ctx, ctx.getString(R.string.eq_toast_ir_loaded, name), android.widget.Toast.LENGTH_SHORT).show() }
             }.onFailure {
-                scope.launch(Dispatchers.Main) { android.widget.Toast.makeText(ctx, "Couldn't load that file", android.widget.Toast.LENGTH_SHORT).show() }
+                scope.launch(Dispatchers.Main) { android.widget.Toast.makeText(ctx, ctx.getString(R.string.eq_toast_ir_failed), android.widget.Toast.LENGTH_SHORT).show() }
             }
         }
     }
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Enable convolution", style = MaterialTheme.typography.bodyLarge)
+                Text(stringResource(R.string.eq_conv_enable), style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    if (prefs.dspConvIrName.isNotBlank()) "IR: ${prefs.dspConvIrName}" else "Linear-phase EQ / room / headphone correction from a WAV",
+                    if (prefs.dspConvIrName.isNotBlank()) "IR: ${prefs.dspConvIrName}" else stringResource(R.string.eq_conv_hint),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -238,16 +242,16 @@ private fun ConvolutionPanel(prefs: AudioPrefs, store: SettingsStore, scope: Cor
                 Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
                     .clickable { runCatching { picker.launch(arrayOf("*/*")) } }.padding(vertical = 12.dp),
                 contentAlignment = Alignment.Center,
-            ) { Text(if (prefs.dspConvIrName.isBlank()) "Load IR (.wav)" else "Replace IR", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
+            ) { Text(if (prefs.dspConvIrName.isBlank()) stringResource(R.string.eq_conv_load) else stringResource(R.string.eq_conv_replace), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
             if (prefs.dspConvIrName.isNotBlank()) {
                 Box(
                     Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
                         .clickable { scope.launch { store.setDspConvIr("", ""); store.setDspConvEnabled(false) } }.padding(horizontal = 16.dp, vertical = 12.dp),
                     contentAlignment = Alignment.Center,
-                ) { Text("Remove", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error) }
+                ) { Text(stringResource(R.string.eq_conv_remove), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error) }
             }
         }
-        DbSliderRow("Make-up gain", prefs.dspConvMakeupDb, -12f..12f) { v -> scope.launch { store.setDspConvMakeup(v) } }
+        DbSliderRow(stringResource(R.string.eq_conv_makeup), prefs.dspConvMakeupDb, -12f..12f) { v -> scope.launch { store.setDspConvMakeup(v) } }
     }
 }
 
@@ -314,15 +318,15 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
     }
 
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-        PillSelector(listOf("Device library", "Live squig.link"), source) { source = it }
+        PillSelector(listOf(stringResource(R.string.eq_source_device), stringResource(R.string.eq_source_squig)), source) { source = it }
         if (source == 0) {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(vertical = 6.dp)) {
                 items(EqDeviceKind.entries.size) { i ->
                     val kind = EqDeviceKind.entries[i]
-                    PresetChip(kind.label, selected = kind == category) { categoryName = kind.name }
+                    PresetChip(eqKindLabel(kind), selected = kind == category) { categoryName = kind.name }
                 }
             }
-            Text(category.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Text(eqKindDescription(category), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(vertical = 6.dp))
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 8.dp)) {
                 items(category.examples.size) { i ->
@@ -337,7 +341,7 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
             val tgtIdx = SQUIG_TARGETS.indexOfFirst { it.second == squigTargetName }.coerceAtLeast(0)
             PillSelector(SQUIG_TARGETS.map { it.first }, tgtIdx) { i -> scope.launch { store.setSquigTarget(SQUIG_TARGETS[i].second) } }
             Text(
-                "Corrections are generated on-device from live squig.link measurements toward the ${SQUIG_TARGETS.getOrNull(tgtIdx)?.first ?: "Harman"} target.",
+                stringResource(R.string.eq_squig_hint, SQUIG_TARGETS.getOrNull(tgtIdx)?.first ?: "Harman"),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(vertical = 4.dp),
             )
@@ -347,9 +351,9 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 6.dp)) {
                 Icon(Icons.Filled.Headset, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.width(20.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Applied: $active", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.eq_applied_prefix, active), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.weight(1f))
-                Text("Clear", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary,
+                Text(stringResource(R.string.eq_clear), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.clip(RoundedCornerShape(50)).clickable {
                         scope.launch { store.setActiveCorrectionId("flat"); store.setDspPreamp(0f); store.setActiveEqProfile("") }
                     }.padding(horizontal = 8.dp, vertical = 4.dp))
@@ -359,9 +363,9 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
             value = query,
             onValueChange = { query = it },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text(if (source == 0) "Search brand or model" else "Search live IEM measurements") },
+            placeholder = { Text(if (source == 0) stringResource(R.string.eq_search_device) else stringResource(R.string.eq_search_squig)) },
             leadingIcon = { Icon(Icons.Filled.Search, null, tint = MaterialTheme.colorScheme.primary) },
-            trailingIcon = { if (query.isNotEmpty()) Icon(Icons.Filled.Close, "Clear", modifier = Modifier.clip(RoundedCornerShape(50)).clickable { query = "" }.padding(4.dp)) },
+            trailingIcon = { if (query.isNotEmpty()) Icon(Icons.Filled.Close, stringResource(R.string.eq_clear), modifier = Modifier.clip(RoundedCornerShape(50)).clickable { query = "" }.padding(4.dp)) },
             singleLine = true,
             shape = RoundedCornerShape(14.dp),
             colors = TextFieldDefaults.colors(
@@ -379,10 +383,10 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
         if (!searching) {
             Text(
                 when {
-                    searchFailed -> "Could not load presets. Try another search."
-                    source == 1 && query.trim().length < 2 -> "Enter at least two characters to search squig.link."
-                    results.isEmpty() -> "No measured presets found. Try another model name or device category."
-                    else -> "${results.size} presets · showing ${minOf(visibleCount, results.size)}"
+                    searchFailed -> stringResource(R.string.eq_no_presets)
+                    source == 1 && query.trim().length < 2 -> stringResource(R.string.eq_squig_min_chars)
+                    results.isEmpty() -> stringResource(R.string.eq_no_results)
+                    else -> stringResource(R.string.eq_results_fmt, results.size, minOf(visibleCount, results.size))
                 },
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(vertical = 8.dp),
@@ -411,9 +415,9 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
                             store.setDspMode(DspMode.CUSTOM)
                             store.setActiveEqProfile(p.name)
                             query = ""
-                            toast("Applied ${p.name} · 128-band correction, ${"%.1f".format(eq.preampDb)} dB preamp")
+                            toast(ctx.getString(R.string.eq_toast_applied, p.name, eq.preampDb))
                         } else {
-                            toast("Couldn't load a supported correction — check your connection or try another measurement")
+                            toast(ctx.getString(R.string.eq_toast_apply_failed))
                         }
                         working = false
                     }
@@ -422,20 +426,20 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(p.name, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
-                    Text("${p.source} · ${p.kind.label}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                    Text("${p.source} · ${eqKindLabel(p.kind)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
                 }
-                Icon(Icons.Filled.Add, "Apply", tint = MaterialTheme.colorScheme.primary)
+                Icon(Icons.Filled.Add, stringResource(R.string.common_apply), tint = MaterialTheme.colorScheme.primary)
             }
         }
         if (results.size > visibleCount) {
-            TextLink("Show 20 more") { visibleCount += 20 }
+            TextLink(stringResource(R.string.eq_show_more)) { visibleCount += 20 }
         }
 
         Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Auto-switch per output", style = MaterialTheme.typography.bodyLarge)
-                Text("Apply each device's bound profile when it connects", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.eq_autoswitch), style = MaterialTheme.typography.bodyLarge)
+                Text(stringResource(R.string.eq_autoswitch_sub), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Switch(checked = autoSwitch, onCheckedChange = { v -> scope.launch { store.setAutoEqAutoSwitch(v) } })
         }
@@ -450,7 +454,7 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
                         }
                     }.padding(vertical = 12.dp),
                 contentAlignment = Alignment.Center,
-            ) { Text("Bind \"$active\" to $outLabel", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
+            ) { Text(stringResource(R.string.eq_bind_to, active, outLabel), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
         }
         bindings.forEach { b ->
             Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -466,6 +470,7 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
 }
 
 private fun LazyListScope.correctionTab(
+    ctx: Context,
     prefs: AudioPrefs,
     activeCorrection: com.aurora.music.data.CorrectionProfile?,
     corrections: List<com.aurora.music.data.CorrectionProfile>,
@@ -484,19 +489,20 @@ private fun LazyListScope.correctionTab(
             parametric = prefs.dspParametric, preampDb = prefs.dspPreampDb,
         )
     }
-    collapsible("corr_list", "Correction profile", Icons.Filled.Headset,
-        activeCorrection?.name?.ifBlank { "Flat" } ?: "Flat", expanded, defaultOpen = true) {
+    collapsible("corr_list", ctx.getString(R.string.eq_correction_profile), Icons.Filled.Headset,
+        activeCorrection?.name?.ifBlank { ctx.getString(R.string.eq_flat) } ?: ctx.getString(R.string.eq_flat), expanded, defaultOpen = true) {
         CorrectionProfilesPanel(corrections, activeCorrectionId, activeCorrection, store, scope)
     }
-    collapsible("autoeq", "Device presets", Icons.Filled.Headset, "AutoEQ · squig.link", expanded) {
+    collapsible("autoeq", ctx.getString(R.string.eq_device_presets), Icons.Filled.Headset, ctx.getString(R.string.eq_device_presets_sub), expanded) {
         AutoEqPanel(container, prefs, store, scope)
     }
-    collapsible("conv", "Convolution (IR)", Icons.Filled.GraphicEq, if (prefs.dspConvEnabled && prefs.dspConvIrName.isNotBlank()) prefs.dspConvIrName else "Off", expanded) {
+    collapsible("conv", ctx.getString(R.string.eq_convolution), Icons.Filled.GraphicEq, if (prefs.dspConvEnabled && prefs.dspConvIrName.isNotBlank()) prefs.dspConvIrName else ctx.getString(R.string.eq_conv_off), expanded) {
         ConvolutionPanel(prefs, store, scope)
     }
 }
 
 private fun LazyListScope.userEqTab(
+    ctx: Context,
     prefs: AudioPrefs,
     activeCorrection: com.aurora.music.data.CorrectionProfile?,
     store: SettingsStore,
@@ -519,14 +525,20 @@ private fun LazyListScope.userEqTab(
     val graphic = (0 until nBands).map { prefs.dspGraphicBands.getOrElse(it) { 0f } }
     val anyGraphic = graphic.any { it != 0f }
 
-    collapsible("c_graphic", "Graphic EQ", Icons.Filled.Tune, "${layout.name}${if (anyGraphic) " · active" else ""}", expanded, defaultOpen = true) {
+    collapsible("c_graphic", ctx.getString(R.string.eq_graphic), Icons.Filled.Tune, "${layout.name}${if (anyGraphic) ctx.getString(R.string.eq_active_suffix) else ""}", expanded, defaultOpen = true) {
         SegmentedRow("Bands", DspCoeffBuilder.GRAPHIC_LAYOUTS.map { it.name }, prefs.dspGraphicLayout) { i ->
             scope.launch { store.setDspGraphicLayout(i); store.setDspGraphicBands(List(DspCoeffBuilder.GRAPHIC_LAYOUTS[i].freqs.size) { 0f }) }
         }
         if (prefs.dspGraphicLayout == DspCoeffBuilder.USER_EQ_LAYOUT) {
             LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(USER_EQ_PRESETS.size) { i ->
-                    PresetChip(USER_EQ_PRESETS[i].first, selected = false) {
+                    val presetName = when (i) {
+                        1 -> stringResource(R.string.eq_preset_classical)
+                        2 -> stringResource(R.string.eq_preset_warm)
+                        3 -> stringResource(R.string.eq_preset_bright)
+                        else -> stringResource(R.string.eq_preset_flat)
+                    }
+                    PresetChip(presetName, selected = false) {
                         scope.launch { store.setDspGraphicBands(USER_EQ_PRESETS[i].second) }
                     }
                 }
@@ -538,10 +550,10 @@ private fun LazyListScope.userEqTab(
                 scope.launch { store.setDspGraphicBands(updated) }
             }
         }
-        TextLink("Reset graphic EQ") { scope.launch { store.setDspGraphicBands(List(nBands) { 0f }) } }
+        TextLink(stringResource(R.string.eq_reset_graphic)) { scope.launch { store.setDspGraphicBands(List(nBands) { 0f }) } }
     }
 
-    collapsible("c_param", "Parametric EQ", Icons.Filled.GraphicEq, "${prefs.dspParametric.size} band${if (prefs.dspParametric.size == 1) "" else "s"}", expanded) {
+    collapsible("c_param", ctx.getString(R.string.eq_parametric), Icons.Filled.GraphicEq, ctx.getString(R.string.eq_bands_unit, prefs.dspParametric.size, if (prefs.dspParametric.size == 1) "" else "s"), expanded) {
         prefs.dspParametric.forEachIndexed { i, band ->
             ParametricBandCard(
                 band = band,
@@ -550,43 +562,44 @@ private fun LazyListScope.userEqTab(
             )
         }
         if (prefs.dspParametric.size < DspCoeffBuilder.MAX_PARAMETRIC) {
-            TextLink("+ Add band") { scope.launch { store.setDspParametric(prefs.dspParametric + ParamBand(1000f, 0f, 1f)) } }
+            TextLink(stringResource(R.string.eq_add_band)) { scope.launch { store.setDspParametric(prefs.dspParametric + ParamBand(1000f, 0f, 1f)) } }
         }
     }
 
-    collapsible("c_gain", "Gain & headroom", Icons.Filled.VolumeUp, "Pre-amp ${"%+.0f".format(prefs.dspPreampDb)} dB", expanded) {
-        SettingsSwitchRow(Icons.Filled.VolumeUp, "Auto headroom", "Automatic preamp covers the max EQ + correction boost", prefs.dspAutoHeadroom) { v ->
+    collapsible("c_gain", ctx.getString(R.string.eq_gain_headroom), Icons.Filled.VolumeUp, ctx.getString(R.string.eq_preamp_fmt, prefs.dspPreampDb), expanded) {
+        SettingsSwitchRow(Icons.Filled.VolumeUp, stringResource(R.string.eq_auto_headroom), stringResource(R.string.eq_auto_headroom_sub), prefs.dspAutoHeadroom) { v ->
             scope.launch { store.setDspAutoHeadroom(v) }
         }
-        DbSliderRow("Pre-amp trim", prefs.dspPreampDb, -12f..12f) { v -> scope.launch { store.setDspPreamp(v) } }
+        DbSliderRow(stringResource(R.string.eq_preamp_trim), prefs.dspPreampDb, -12f..12f) { v -> scope.launch { store.setDspPreamp(v) } }
         val peak = androidx.compose.runtime.remember(prefs.dspGraphicBands, prefs.dspParametric, prefs.dspGraphicLayout, activeCorrection) {
             val base = DspCoeffBuilder.eqPeakDb(DspParams(graphic = graphic.toFloatArray(), graphicFreqs = layout.freqs, graphicQ = layout.q, parametric = prefs.dspParametric.map { DspBand(it.freqHz, it.gainDb, it.q, it.type) }))
             maxOf(base, activeCorrection?.takeIf { it.enabled }?.maxGain ?: 0f)
         }
         HeadroomRow(peak = peak, preamp = prefs.dspPreampDb) { scope.launch { store.setDspPreamp((-peak).coerceIn(-12f, 0f)) } }
-        FloatSliderRow("Balance", prefs.dspBalance, -1f..1f, valueText = balanceLabel(prefs.dspBalance)) { v -> scope.launch { store.setDspBalance(v) } }
+        FloatSliderRow(stringResource(R.string.eq_balance), prefs.dspBalance, -1f..1f, valueText = balanceLabel(prefs.dspBalance)) { v -> scope.launch { store.setDspBalance(v) } }
     }
 
-    val spatial = buildList { if (prefs.dspWidth != 1f) add("Width %.2f×".format(prefs.dspWidth)); if (prefs.dspCrossfeed > 0f) add("Crossfeed ${(prefs.dspCrossfeed * 100).roundToInt()}%") }.joinToString(" · ").ifBlank { "Off" }
-    collapsible("c_spatial", "Spatial", Icons.Filled.SurroundSound, spatial, expanded) {
-        FloatSliderRow("Stereo width", prefs.dspWidth, 0f..2f, valueText = "%.2f×".format(prefs.dspWidth)) { v -> scope.launch { store.setDspWidth(v) } }
-        FloatSliderRow("Crossfeed", prefs.dspCrossfeed, 0f..1f, valueText = if (prefs.dspCrossfeed <= 0f) "Off" else "${(prefs.dspCrossfeed * 100).roundToInt()}%") { v -> scope.launch { store.setDspCrossfeed(v) } }
+    val spatial = buildList { if (prefs.dspWidth != 1f) add("Width %.2f×".format(prefs.dspWidth)); if (prefs.dspCrossfeed > 0f) add("Crossfeed ${(prefs.dspCrossfeed * 100).roundToInt()}%") }.joinToString(" · ").ifBlank { ctx.getString(R.string.eq_spatial_off) }
+    collapsible("c_spatial", ctx.getString(R.string.eq_spatial), Icons.Filled.SurroundSound, spatial, expanded) {
+        FloatSliderRow(stringResource(R.string.eq_width), prefs.dspWidth, 0f..2f, valueText = "%.2f×".format(prefs.dspWidth)) { v -> scope.launch { store.setDspWidth(v) } }
+        FloatSliderRow(stringResource(R.string.eq_crossfeed), prefs.dspCrossfeed, 0f..1f, valueText = if (prefs.dspCrossfeed <= 0f) stringResource(R.string.eq_crossfeed_off) else "${(prefs.dspCrossfeed * 100).roundToInt()}%") { v -> scope.launch { store.setDspCrossfeed(v) } }
     }
 
-    collapsible("c_harm", "Harmonics", Icons.Filled.Whatshot, if (prefs.dspSaturation > 0f) "Tube ${(prefs.dspSaturation * 100).roundToInt()}%" else "Off", expanded) {
-        FloatSliderRow("Tube saturation", prefs.dspSaturation, 0f..1f, valueText = if (prefs.dspSaturation <= 0f) "Off" else "${(prefs.dspSaturation * 100).roundToInt()}%") { v -> scope.launch { store.setDspSaturation(v) } }
+    collapsible("c_harm", ctx.getString(R.string.eq_harmonics), Icons.Filled.Whatshot, if (prefs.dspSaturation > 0f) ctx.getString(R.string.eq_tube_fmt, (prefs.dspSaturation * 100).roundToInt()) else ctx.getString(R.string.eq_harm_off), expanded) {
+        FloatSliderRow(stringResource(R.string.eq_tube), prefs.dspSaturation, 0f..1f, valueText = if (prefs.dspSaturation <= 0f) stringResource(R.string.eq_harm_off) else "${(prefs.dspSaturation * 100).roundToInt()}%") { v -> scope.launch { store.setDspSaturation(v) } }
     }
 
     val aligned = prefs.dspDelayLeftMs > 0f || prefs.dspDelayRightMs > 0f || prefs.dspTrimLeftDb != 0f || prefs.dspTrimRightDb != 0f
-    collapsible("c_align", "Channel alignment", Icons.Filled.SwapHoriz, if (aligned) "Adjusted" else "Off", expanded) {
-        FloatSliderRow("Left delay", prefs.dspDelayLeftMs, 0f..20f, valueText = "%.1f ms".format(prefs.dspDelayLeftMs)) { v -> scope.launch { store.setDspDelayLeft(v) } }
-        FloatSliderRow("Right delay", prefs.dspDelayRightMs, 0f..20f, valueText = "%.1f ms".format(prefs.dspDelayRightMs)) { v -> scope.launch { store.setDspDelayRight(v) } }
-        DbSliderRow("Left trim", prefs.dspTrimLeftDb, -12f..0f) { v -> scope.launch { store.setDspTrimLeft(v) } }
-        DbSliderRow("Right trim", prefs.dspTrimRightDb, -12f..0f) { v -> scope.launch { store.setDspTrimRight(v) } }
+    collapsible("c_align", ctx.getString(R.string.eq_alignment), Icons.Filled.SwapHoriz, if (aligned) ctx.getString(R.string.eq_align_adjusted) else ctx.getString(R.string.eq_align_off), expanded) {
+        FloatSliderRow(stringResource(R.string.eq_delay_left), prefs.dspDelayLeftMs, 0f..20f, valueText = "%.1f ms".format(prefs.dspDelayLeftMs)) { v -> scope.launch { store.setDspDelayLeft(v) } }
+        FloatSliderRow(stringResource(R.string.eq_delay_right), prefs.dspDelayRightMs, 0f..20f, valueText = "%.1f ms".format(prefs.dspDelayRightMs)) { v -> scope.launch { store.setDspDelayRight(v) } }
+        DbSliderRow(stringResource(R.string.eq_trim_left), prefs.dspTrimLeftDb, -12f..0f) { v -> scope.launch { store.setDspTrimLeft(v) } }
+        DbSliderRow(stringResource(R.string.eq_trim_right), prefs.dspTrimRightDb, -12f..0f) { v -> scope.launch { store.setDspTrimRight(v) } }
     }
 }
 
 private fun LazyListScope.dynamicsTab(
+    ctx: Context,
     prefs: AudioPrefs,
     store: SettingsStore,
     scope: CoroutineScope,
@@ -594,8 +607,8 @@ private fun LazyListScope.dynamicsTab(
     container: AppContainer,
 ) {
     // v0.6 driving loudness (plan §35, §38)
-    collapsible("c_drive", "Driving mode", Icons.Filled.DirectionsCar,
-        DrivingMode.label(prefs.dspDriveMode) + if (prefs.dspDriveMode != DrivingMode.OFF) " · ${"%+.0f".format(prefs.dspDriveTargetDb)} LUFS" else "",
+    collapsible("c_drive", ctx.getString(R.string.eq_driving), Icons.Filled.DirectionsCar,
+        DrivingMode.label(prefs.dspDriveMode) + if (prefs.dspDriveMode != DrivingMode.OFF) ctx.getString(R.string.eq_drive_target_fmt, prefs.dspDriveTargetDb) else "",
         expanded, defaultOpen = true) {
         val modes = listOf(DrivingMode.OFF, DrivingMode.NATURAL, DrivingMode.BALANCED, DrivingMode.STRONG, DrivingMode.CUSTOM)
         SegmentedRow("Mode", modes.map { DrivingMode.label(it) }, modes.indexOf(prefs.dspDriveMode).coerceAtLeast(0)) { i ->
@@ -603,54 +616,54 @@ private fun LazyListScope.dynamicsTab(
         }
         Text(
             when (prefs.dspDriveMode) {
-                DrivingMode.NATURAL -> "Gentle: target −16 LUFS, light compression. Keeps the most dynamics."
-                DrivingMode.BALANCED -> "Target −15 LUFS, 2:1. For mixed road noise."
-                DrivingMode.STRONG -> "Target −14 LUFS, up to ~3.5:1. Quiet passages stay audible."
-                DrivingMode.CUSTOM -> "Every parameter below is live."
-                else -> "Off. Use the manual compressor below if you want static dynamics."
+                DrivingMode.NATURAL -> stringResource(R.string.eq_drive_natural_hint)
+                DrivingMode.BALANCED -> stringResource(R.string.eq_drive_balanced_hint)
+                DrivingMode.STRONG -> stringResource(R.string.eq_drive_strong_hint)
+                DrivingMode.CUSTOM -> stringResource(R.string.eq_drive_custom_hint)
+                else -> stringResource(R.string.eq_drive_off_hint)
             },
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
         )
         if (prefs.dspDriveMode == DrivingMode.CUSTOM) {
-            FloatSliderRow("Target loudness", prefs.dspDriveTargetDb, -24f..-8f, valueText = "%.0f LUFS".format(prefs.dspDriveTargetDb)) { v -> scope.launch { store.setDspDriveTarget(v) } }
+            FloatSliderRow(stringResource(R.string.eq_target_loudness), prefs.dspDriveTargetDb, -24f..-8f, valueText = "%.0f LUFS".format(prefs.dspDriveTargetDb)) { v -> scope.launch { store.setDspDriveTarget(v) } }
         }
     }
 
     val dyn = buildList {
         if (prefs.dspDriveMode != DrivingMode.OFF) add(DrivingMode.label(prefs.dspDriveMode))
-        if (prefs.dspLimiterEnabled) add("Limiter")
-        if (prefs.dspCompEnabled && prefs.dspDriveMode == DrivingMode.OFF) add("Compressor")
-    }.joinToString(" · ").ifBlank { "Off" }
-    collapsible("c_dyn", "Compressor", Icons.Filled.Compress, dyn, expanded) {
+        if (prefs.dspLimiterEnabled) add(ctx.getString(R.string.eq_lim))
+        if (prefs.dspCompEnabled && prefs.dspDriveMode == DrivingMode.OFF) add(ctx.getString(R.string.eq_compressor))
+    }.joinToString(" · ").ifBlank { ctx.getString(R.string.eq_mode_off) }
+    collapsible("c_dyn", ctx.getString(R.string.eq_compressor), Icons.Filled.Compress, dyn, expanded) {
         if (prefs.dspDriveMode == DrivingMode.OFF) {
-            SettingsSwitchRow(Icons.Filled.GraphicEq, "Compressor", "Even out loud/quiet passages", prefs.dspCompEnabled) { v -> scope.launch { store.setDspCompEnabled(v) } }
+            SettingsSwitchRow(Icons.Filled.GraphicEq, stringResource(R.string.eq_compressor), stringResource(R.string.eq_comp_on_sub), prefs.dspCompEnabled) { v -> scope.launch { store.setDspCompEnabled(v) } }
         } else {
-            Text("Driven by Driving mode above — switch it Off for manual control.",
+            Text(stringResource(R.string.eq_driven_note),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
         }
         val showParams = prefs.dspCompEnabled && prefs.dspDriveMode == DrivingMode.OFF || prefs.dspDriveMode == DrivingMode.CUSTOM
         if (showParams) {
-            FloatSliderRow("Threshold", prefs.dspCompThreshDb, -40f..0f, valueText = "%.0f dB".format(prefs.dspCompThreshDb)) { v -> scope.launch { store.setDspCompThresh(v) } }
-            FloatSliderRow("Ratio", prefs.dspCompRatio, 1f..10f, valueText = "%.1f:1".format(prefs.dspCompRatio)) { v -> scope.launch { store.setDspCompRatio(v) } }
-            FloatSliderRow("Attack", prefs.dspCompAttackMs, 1f..200f, valueText = "%.0f ms".format(prefs.dspCompAttackMs)) { v -> scope.launch { store.setDspCompAttack(v) } }
-            FloatSliderRow("Release", prefs.dspCompReleaseMs, 50f..1000f, valueText = "%.0f ms".format(prefs.dspCompReleaseMs)) { v -> scope.launch { store.setDspCompRelease(v) } }
-            FloatSliderRow("Knee", prefs.dspCompKneeDb, 0f..12f, valueText = "%.0f dB".format(prefs.dspCompKneeDb)) { v -> scope.launch { store.setDspCompKnee(v) } }
-            SettingsSwitchRow(Icons.Filled.GraphicEq, "Auto makeup", "Restore level lost to compression automatically", prefs.dspMakeupAuto) { v -> scope.launch { store.setDspMakeupAuto(v) } }
+            FloatSliderRow(stringResource(R.string.eq_threshold), prefs.dspCompThreshDb, -40f..0f, valueText = "%.0f dB".format(prefs.dspCompThreshDb)) { v -> scope.launch { store.setDspCompThresh(v) } }
+            FloatSliderRow(stringResource(R.string.eq_ratio), prefs.dspCompRatio, 1f..10f, valueText = "%.1f:1".format(prefs.dspCompRatio)) { v -> scope.launch { store.setDspCompRatio(v) } }
+            FloatSliderRow(stringResource(R.string.eq_attack), prefs.dspCompAttackMs, 1f..200f, valueText = "%.0f ms".format(prefs.dspCompAttackMs)) { v -> scope.launch { store.setDspCompAttack(v) } }
+            FloatSliderRow(stringResource(R.string.eq_release), prefs.dspCompReleaseMs, 50f..1000f, valueText = "%.0f ms".format(prefs.dspCompReleaseMs)) { v -> scope.launch { store.setDspCompRelease(v) } }
+            FloatSliderRow(stringResource(R.string.eq_knee), prefs.dspCompKneeDb, 0f..12f, valueText = "%.0f dB".format(prefs.dspCompKneeDb)) { v -> scope.launch { store.setDspCompKnee(v) } }
+            SettingsSwitchRow(Icons.Filled.GraphicEq, stringResource(R.string.eq_makeup_auto), stringResource(R.string.eq_makeup_auto_sub), prefs.dspMakeupAuto) { v -> scope.launch { store.setDspMakeupAuto(v) } }
             if (!prefs.dspMakeupAuto) {
-                DbSliderRow("Makeup gain", prefs.dspCompMakeupDb, -6f..12f) { v -> scope.launch { store.setDspCompMakeup(v) } }
+                DbSliderRow(stringResource(R.string.eq_makeup), prefs.dspCompMakeupDb, -6f..12f) { v -> scope.launch { store.setDspCompMakeup(v) } }
             }
         }
         GainReductionMeter(container)
     }
 
-    collapsible("c_lim", "Limiter", Icons.Filled.VerticalAlignBottom,
-        if (prefs.dspLimiterEnabled) "%.1f dBTP".format(prefs.dspLimiterCeilingDb) else "Off", expanded) {
-        SettingsSwitchRow(Icons.Filled.GraphicEq, "Limiter", "Brick-wall clip protection, always last in chain (recommended)", prefs.dspLimiterEnabled) { v -> scope.launch { store.setDspLimiterEnabled(v) } }
+    collapsible("c_lim", ctx.getString(R.string.eq_lim), Icons.Filled.VerticalAlignBottom,
+        if (prefs.dspLimiterEnabled) "%.1f dBTP".format(prefs.dspLimiterCeilingDb) else ctx.getString(R.string.eq_mode_off), expanded) {
+        SettingsSwitchRow(Icons.Filled.GraphicEq, stringResource(R.string.eq_lim), stringResource(R.string.eq_lim_sub), prefs.dspLimiterEnabled) { v -> scope.launch { store.setDspLimiterEnabled(v) } }
         if (prefs.dspLimiterEnabled) {
-            FloatSliderRow("True peak ceiling", prefs.dspLimiterCeilingDb, -6f..0f, valueText = "%.1f dBTP".format(prefs.dspLimiterCeilingDb)) { v -> scope.launch { store.setDspCeiling(v) } }
-            Text("Sample-peak ceiling; inter-sample peaks stay ≈0.3 dB below it. Keep −1 dBTP for lossy/car playback.",
+            FloatSliderRow(stringResource(R.string.eq_tp_ceiling), prefs.dspLimiterCeilingDb, -6f..0f, valueText = "%.1f dBTP".format(prefs.dspLimiterCeilingDb)) { v -> scope.launch { store.setDspCeiling(v) } }
+            Text(stringResource(R.string.eq_tp_hint),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
         }
@@ -662,9 +675,9 @@ private fun LazyListScope.dynamicsTab(
 private fun GainReductionMeter(container: AppContainer) {
     val meters by container.dspMeters.collectAsStateWithLifecycle(initialValue = com.aurora.music.data.DspMeters())
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
-        GrBar("Gain reduction", meters.compGrDb)
+        GrBar(stringResource(R.string.eq_gr), meters.compGrDb)
         Spacer(Modifier.height(6.dp))
-        GrBar("Limiter", meters.limGrDb)
+        GrBar(stringResource(R.string.eq_lim), meters.limGrDb)
     }
 }
 
@@ -708,16 +721,16 @@ private fun ParametricBandCard(band: ParamBand, onChange: (ParamBand) -> Unit, o
     ) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(freqLabel(band.freqHz.toInt()), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            Text("%+.1f dB · Q%.1f".format(band.gainDb, band.q), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(R.string.eq_band_fmt, band.gainDb, band.q), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Icon(
-                Icons.Filled.Close, "Remove band",
+                Icons.Filled.Close, stringResource(R.string.eq_remove_band),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.width(28.dp).clip(RoundedCornerShape(50)).clickable(onClick = onRemove).padding(start = 8.dp),
             )
         }
-        FloatSliderRow("Freq", band.freqHz, 20f..20000f, valueText = freqLabel(band.freqHz.toInt())) { v -> onChange(band.copy(freqHz = v)) }
-        DbSliderRow("Gain", band.gainDb, -15f..15f) { v -> onChange(band.copy(gainDb = v)) }
-        FloatSliderRow("Q", band.q, 0.3f..8f, valueText = "%.2f".format(band.q)) { v -> onChange(band.copy(q = v)) }
+        FloatSliderRow(stringResource(R.string.eq_freq_label), band.freqHz, 20f..20000f, valueText = freqLabel(band.freqHz.toInt())) { v -> onChange(band.copy(freqHz = v)) }
+        DbSliderRow(stringResource(R.string.eq_gain_label), band.gainDb, -15f..15f) { v -> onChange(band.copy(gainDb = v)) }
+        FloatSliderRow(stringResource(R.string.eq_q_label), band.q, 0.3f..8f, valueText = "%.2f".format(band.q)) { v -> onChange(band.copy(q = v)) }
     }
 }
 
@@ -811,7 +824,7 @@ private fun CorrectionProfilesPanel(
             val imported = text?.let { com.aurora.music.data.EqTextImport.parse(name, it) }
             scope.launch(kotlinx.coroutines.Dispatchers.Main) {
                 if (imported == null) {
-                    importMsg = "Couldn't parse that file — need GraphicEQ or APO Filter lines"
+                    importMsg = ctx.getString(R.string.eq_import_failed)
                 } else {
                     val profile = com.aurora.music.data.CorrectionProfile(
                         id = "corr_${System.currentTimeMillis()}",
@@ -831,7 +844,7 @@ private fun CorrectionProfilesPanel(
         }
     }
     Column(Modifier.fillMaxWidth()) {
-        CorrectionRow("Flat", "No correction", activeId == "flat", canDelete = false,
+        CorrectionRow(stringResource(R.string.eq_flat), stringResource(R.string.eq_no_correction), activeId == "flat", canDelete = false,
             onSelect = { scope.launch { store.setActiveCorrectionId("flat") } }, onDelete = {})
         corrections.forEach { p ->
             CorrectionRow(
@@ -848,16 +861,16 @@ private fun CorrectionProfilesPanel(
             )
         }
         if (active != null && active.id != "flat") {
-            DbSliderRow("Correction trim", active.preampDb, -6f..6f) { v ->
+            DbSliderRow(stringResource(R.string.eq_correction_trim), active.preampDb, -6f..6f) { v ->
                 scope.launch { store.upsertCorrectionProfile(active.copy(preampDb = v)) }
             }
             FloatSliderRow(
-                "Strength", active.strengthPct, 0f..120f,
+                stringResource(R.string.eq_strength), active.strengthPct, 0f..120f,
                 valueText = "%.0f%%".format(active.strengthPct),
             ) { v ->
                 scope.launch { store.upsertCorrectionProfile(active.copy(strengthPct = v)) }
             }
-            Text("100% is the measured correction; lower softens it, up to 120% pushes further. Applied in the log domain so the shape holds.",
+            Text(stringResource(R.string.eq_strength_hint),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         }
@@ -866,7 +879,7 @@ private fun CorrectionProfilesPanel(
                 .clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .clickable { runCatching { picker.launch(arrayOf("text/plain", "*/*")) } }.padding(vertical = 12.dp),
             contentAlignment = Alignment.Center,
-        ) { Text("Import correction (.txt)", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
+        ) { Text(stringResource(R.string.eq_import), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
         if (importMsg != null) {
             Text(importMsg!!, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
@@ -890,7 +903,7 @@ private fun CorrectionRow(
         }
         if (selected) Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary)
         if (canDelete) {
-            Icon(Icons.Filled.Close, "Delete", tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            Icon(Icons.Filled.Close, stringResource(R.string.common_delete), tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.clip(RoundedCornerShape(50)).clickable(onClick = onDelete).padding(4.dp))
         }
     }
@@ -915,7 +928,7 @@ private fun AudioProfilesPanel(
             TextField(
                 value = name, onValueChange = { name = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("New profile name") }, singleLine = true, shape = RoundedCornerShape(14.dp),
+                placeholder = { Text(stringResource(R.string.eq_new_profile_hint)) }, singleLine = true, shape = RoundedCornerShape(14.dp),
                 colors = TextFieldDefaults.colors(
                     focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                     unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -932,7 +945,7 @@ private fun AudioProfilesPanel(
                         }
                     }.padding(horizontal = 16.dp, vertical = 12.dp),
                 contentAlignment = Alignment.Center,
-            ) { Text("Save", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary) }
+            ) { Text(stringResource(R.string.eq_save), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary) }
         }
         profiles.forEach { p ->
             val bound = deviceProfiles[outKey] == p.id
@@ -947,21 +960,43 @@ private fun AudioProfilesPanel(
                     Text(p.describe() + if (bound) " · bound to $outLabel" else "",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                 }
-                Text("Bind", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary,
+                Text(stringResource(R.string.eq_bind), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.clip(RoundedCornerShape(50)).clickable {
                         scope.launch {
                             store.bindDeviceProfile(outKey, if (bound) "" else p.id)
                             store.setAutoEqAutoSwitch(true)
                         }
                     }.padding(horizontal = 8.dp, vertical = 4.dp))
-                Icon(Icons.Filled.Close, "Delete", tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                Icon(Icons.Filled.Close, stringResource(R.string.common_delete), tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.clip(RoundedCornerShape(50)).clickable { scope.launch { store.removeAudioProfile(p.id) } }.padding(4.dp))
             }
         }
         if (profiles.isEmpty()) {
-            Text("Save the current chain — correction, 16-band, dynamics — as one profile, then bind it to an output.",
+            Text(stringResource(R.string.eq_profile_save_hint),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
         }
     }
 }
+
+@Composable
+private fun eqKindLabel(kind: EqDeviceKind): String = stringResource(
+    when (kind) {
+        EqDeviceKind.HEADPHONES -> R.string.eq_kind_headphones
+        EqDeviceKind.IN_EAR -> R.string.eq_kind_inear
+        EqDeviceKind.EARBUDS -> R.string.eq_kind_earbuds
+        EqDeviceKind.SPEAKERS -> R.string.eq_kind_speakers
+        else -> R.string.eq_kind_all
+    }
+)
+
+@Composable
+private fun eqKindDescription(kind: EqDeviceKind): String = stringResource(
+    when (kind) {
+        EqDeviceKind.HEADPHONES -> R.string.eq_kind_headphones_sub
+        EqDeviceKind.IN_EAR -> R.string.eq_kind_inear_sub
+        EqDeviceKind.EARBUDS -> R.string.eq_kind_earbuds_sub
+        EqDeviceKind.SPEAKERS -> R.string.eq_kind_speakers_sub
+        else -> R.string.eq_kind_all_sub
+    }
+)

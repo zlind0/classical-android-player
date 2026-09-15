@@ -6,6 +6,7 @@ import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import androidx.core.content.ContextCompat
+import com.aurora.music.R
 import com.aurora.music.playback.NowPlaying
 import com.aurora.music.playback.NowPlayingStore
 import com.aurora.music.playback.PlaybackService
@@ -29,8 +30,8 @@ class AuroraTileService : TileService() {
         val np = NowPlayingStore.read(this)
         val playing = playingOverride ?: np.isPlaying
         tile.state = if (playing) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-        tile.label = if (np.hasTrack && np.title.isNotBlank()) np.title else "Aurora"
-        if (Build.VERSION.SDK_INT >= 29) tile.subtitle = if (np.hasTrack) (if (playing) "Playing" else "Paused") else "Aurora"
+        tile.label = if (np.hasTrack && np.title.isNotBlank()) np.title else getString(R.string.app_name)
+        if (Build.VERSION.SDK_INT >= 29) tile.subtitle = if (np.hasTrack) (if (playing) getString(R.string.tile_playing) else getString(R.string.tile_paused)) else getString(R.string.app_name)
         runCatching {
             tile.icon = Icon.createWithResource(
                 this, if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,

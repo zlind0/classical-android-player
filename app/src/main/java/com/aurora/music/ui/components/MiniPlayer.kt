@@ -30,9 +30,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.aurora.music.R
 import com.aurora.music.data.MiniProgress
 import com.aurora.music.data.MiniStyle
 import com.aurora.music.data.ThemeStyle
@@ -100,20 +102,20 @@ fun MiniPlayer(
             if (showLike) {
                 Icon(
                     imageVector = if (state.isCurrentLiked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                    contentDescription = "Like",
+                    contentDescription = stringResource(R.string.player_like),
                     tint = likeTint,
                     modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onToggleLike).padding(8.dp),
                 )
             }
             Icon(
                 imageVector = if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                contentDescription = "Play/pause",
+                contentDescription = stringResource(R.string.player_play_pause),
                 tint = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onTogglePlay).padding(6.dp),
             )
             Icon(
                 imageVector = Icons.Filled.SkipNext,
-                contentDescription = "Next",
+                contentDescription = stringResource(R.string.player_next),
                 tint = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onNext).padding(6.dp),
             )

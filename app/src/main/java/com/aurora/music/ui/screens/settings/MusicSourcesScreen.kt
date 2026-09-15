@@ -37,11 +37,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
+import com.aurora.music.R
 import com.aurora.music.data.MusicRoot
 import com.aurora.music.data.ScanProgress
 import com.aurora.music.data.StorageType
@@ -92,15 +94,15 @@ fun MusicSourcesScreen(
                 scope.launch {
                     val added = container.musicRoots.addRoot(path, name, type)
                     if (added == null) {
-                        confirm("That folder is already a music source")
+                        confirm(ctx.getString(R.string.msg_source_exists))
                     } else {
                         picking = false
-                        confirm("Added — scanning…")
+                        confirm(ctx.getString(R.string.msg_source_added))
                         scanJob?.cancel()
                         scanJob = scope.launch {
                             container.rootScanner.scan(added) { container.musicRoots.progress.value = it }
                             val n = container.musicRoots.songsOf(added.id).size
-                            confirm(if (n > 0) "Found $n tracks" else "No audio files in that folder")
+                            confirm(if (n > 0) ctx.getString(R.string.msg_found_n_tracks, n) else ctx.getString(R.string.msg_no_audio_in_folder))
                         }
                     }
                 }
@@ -110,7 +112,7 @@ fun MusicSourcesScreen(
     }
 
     Column(Modifier.fillMaxWidth()) {
-        SettingsTopBar("Music sources", onBack)
+        SettingsTopBar(stringResource(R.string.sources_title), onBack)
         LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp)) {
             // plan §64: permission first — without it the picker lists nothing and scans find nothing
             if (!fullOk) {
@@ -118,13 +120,13 @@ fun MusicSourcesScreen(
                     SettingsGroup {
                         Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
                             Text(
-                                if (!readOk) "Storage permission needed"
-                                else "All-files access needed",
+                                if (!readOk) stringResource(R.string.sources_need_read_title)
+                                else stringResource(R.string.sources_need_full_title),
                                 style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
                             )
                             Text(
-                                if (!readOk) "Allow Aurora to read audio files on this device."
-                                else "Android 11+ also requires All-files access for folder browsing.",
+                                if (!readOk) stringResource(R.string.sources_need_read_sub)
+                                else stringResource(R.string.sources_need_full_sub),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -132,13 +134,13 @@ fun MusicSourcesScreen(
                             Row(Modifier.fillMaxWidth()) {
                                 if (!readOk) {
                                     Button(onClick = { readLauncher.launch(com.aurora.music.data.storageReadPermission()) }) {
-                                        Text("Grant read access")
+                                        Text(stringResource(R.string.sources_grant_read))
                                     }
                                     Spacer(Modifier.width(8.dp))
                                 }
                                 if (com.aurora.music.data.needsAllFilesRow()) {
                                     Button(onClick = { com.aurora.music.data.openAllFilesSettings(ctx) }) {
-                                        Text("Open all-files settings")
+                                        Text(stringResource(R.string.sources_open_full))
                                     }
                                 }
                             }
@@ -146,12 +148,11 @@ fun MusicSourcesScreen(
                     }
                 }
             }
-            item { SettingsSectionTitle("Scan roots") }
+            item { SettingsSectionTitle(stringResource(R.string.sources_scan_roots)) }
             if (roots.isEmpty()) {
                 item {
                     Text(
-                        "No folders yet. Add the directories holding your music — " +
-                            "internal storage, SD card or USB — and only those will be scanned.",
+                        stringResource(R.string.sources_empty_hint),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
@@ -169,7 +170,7 @@ fun MusicSourcesScreen(
                         scanJob?.cancel()
                         scanJob = scope.launch {
                             container.rootScanner.scan(root) { container.musicRoots.progress.value = it }
-                            confirm("Scan finished")
+                            confirm(ctx.getString(R.string.msg_scan_finished))
                         }
                     },
                     onToggle = { v -> scope.launch { container.musicRoots.setEnabled(root.id, v) } },
@@ -177,13 +178,13 @@ fun MusicSourcesScreen(
                         scanJob?.cancel()
                         scope.launch {
                             container.musicRoots.removeRoot(root.id)
-                            confirm("Removed")
+                            confirm(ctx.getString(R.string.msg_source_removed))
                         }
                     },
                     onClean = {
                         scope.launch {
                             val n = container.musicRoots.cleanMissing(root.id)
-                            confirm(if (n > 0) "Removed $n missing files" else "Nothing missing")
+                            confirm(if (n > 0) ctx.getString(R.string.msg_cleaned_n, n) else ctx.getString(R.string.msg_nothing_missing))
                         }
                     },
                 )
@@ -191,12 +192,12 @@ fun MusicSourcesScreen(
             item { Spacer(Modifier.height(8.dp)) }
             item {
                 SettingsGroup {
-                    SettingsNavRow(Icons.Filled.Add, "Add music folder", "Internal, SD card or USB") { picking = true }
+                    SettingsNavRow(Icons.Filled.Add, stringResource(R.string.sources_add), stringResource(R.string.sources_add_sub)) { picking = true }
                 }
             }
             item {
                 Text(
-                    "Scanning stays inside the folders above. Files elsewhere on the device are ignored.",
+                    stringResource(R.string.sources_footnote),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
@@ -234,7 +235,7 @@ private fun RootCard(
                     Text(root.displayName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                     Text(root.rootPath, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                     Text(
-                        "$count tracks" + if (root.lastScanTime > 0) " · " + fmtTime(root.lastScanTime) else "",
+                        stringResource(R.string.sources_tracks, count) + if (root.lastScanTime > 0) " · " + fmtTime(root.lastScanTime) else "",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -243,18 +244,18 @@ private fun RootCard(
             if (progress != null) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp))
                 Text(
-                    "Scanning… ${progress.found} files · ${progress.current}",
+                    stringResource(R.string.sources_scanning, progress.found, progress.current),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
                 )
             }
             SettingsRowDivider()
             Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 2.dp)) {
-                RootAction(Icons.Filled.PlayArrow, "Play", Modifier.weight(1f), onPlay)
-                RootAction(Icons.Filled.Refresh, "Scan", Modifier.weight(1f), onScan)
-                RootAction(Icons.Filled.Delete, "Clean", Modifier.weight(1f), onClean)
+                RootAction(Icons.Filled.PlayArrow, stringResource(R.string.sources_play), Modifier.weight(1f), onPlay)
+                RootAction(Icons.Filled.Refresh, stringResource(R.string.sources_scan), Modifier.weight(1f), onScan)
+                RootAction(Icons.Filled.Delete, stringResource(R.string.sources_clean), Modifier.weight(1f), onClean)
                 Text(
-                    "Remove",
+                    stringResource(R.string.sources_remove),
                     style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.weight(1f).clickable(onClick = onRemove).padding(vertical = 12.dp),

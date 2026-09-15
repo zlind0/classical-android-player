@@ -57,8 +57,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import com.aurora.music.R
 import com.aurora.music.model.Song
 import com.aurora.music.ui.components.Artwork
 import com.aurora.music.ui.components.Eyebrow
@@ -108,18 +110,18 @@ fun QueueScreen(
                 Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars).padding(horizontal = 16.dp),
             ) {
                 Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.KeyboardArrowDown, "Close", modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onClose).padding(6.dp))
+                    Icon(Icons.Filled.KeyboardArrowDown, stringResource(R.string.queue_close), modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onClose).padding(6.dp))
                     Spacer(Modifier.weight(1f))
-                    Text("Queue", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+                    Text(stringResource(R.string.queue_title), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
                     Spacer(Modifier.weight(1f))
                     Icon(
-                        Icons.Filled.PlaylistAdd, "Save queue as playlist",
+                        Icons.Filled.PlaylistAdd, stringResource(R.string.queue_save_as),
                         tint = if (queue.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f) else MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(40.dp).clip(CircleShape)
                             .clickable(enabled = queue.isNotEmpty()) { showSaveDialog = true }.padding(8.dp),
                     )
                     Icon(
-                        Icons.Filled.DeleteSweep, "Clear queue",
+                        Icons.Filled.DeleteSweep, stringResource(R.string.queue_clear),
                         tint = if (upcoming.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f) else MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(40.dp).clip(CircleShape)
                             .clickable(enabled = upcoming.isNotEmpty(), onClick = onClear).padding(8.dp),
@@ -134,7 +136,7 @@ fun QueueScreen(
                         Artwork(current.artworkUrl, accent, Modifier.size(64.dp), corner = 14.dp)
                         Spacer(Modifier.width(14.dp))
                         Column(Modifier.weight(1f)) {
-                            Eyebrow("NOW PLAYING", accent)
+                            Eyebrow(stringResource(R.string.queue_now_playing), accent)
                             Spacer(Modifier.height(2.dp))
                             Text(current.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(current.artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -154,7 +156,7 @@ fun QueueScreen(
                                 Icon(Icons.Filled.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    "PREVIOUSLY PLAYED  •  ${played.size}",
+                                    stringResource(R.string.queue_previously, played.size),
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Black,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -179,7 +181,7 @@ fun QueueScreen(
 
                     item {
                         Text(
-                            if (upcoming.isEmpty()) "NOTHING UP NEXT" else "UP NEXT  •  ${upcoming.size} tracks",
+                            if (upcoming.isEmpty()) stringResource(R.string.queue_nothing_up_next) else stringResource(R.string.queue_up_next, upcoming.size),
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Black,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -270,14 +272,14 @@ private fun QueueTrackRow(
         Text(formatTime(song.durationSec), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 4.dp))
         if (onRemove != null) {
             Icon(
-                Icons.Filled.Close, "Remove",
+                Icons.Filled.Close, stringResource(R.string.queue_remove),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(32.dp).clip(CircleShape).clickable(onClick = onRemove).padding(7.dp),
             )
         }
         if (dragHandle != null) {
             Icon(
-                Icons.Filled.DragHandle, "Reorder",
+                Icons.Filled.DragHandle, stringResource(R.string.queue_reorder),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(34.dp).padding(6.dp).then(dragHandle),
             )
@@ -290,14 +292,14 @@ private fun SaveQueueDialog(onSave: (String) -> Unit, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Save queue as playlist", fontWeight = FontWeight.Bold) },
+        title = { Text(stringResource(R.string.queue_save_title), fontWeight = FontWeight.Bold) },
         text = {
             OutlinedTextField(
                 value = name, onValueChange = { name = it },
-                label = { Text("Playlist name") }, singleLine = true,
+                label = { Text(stringResource(R.string.queue_playlist_name)) }, singleLine = true,
             )
         },
-        confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onSave(name.trim()) }, enabled = name.isNotBlank()) { Text("Save") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onSave(name.trim()) }, enabled = name.isNotBlank()) { Text(stringResource(R.string.queue_save)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.queue_cancel)) } },
     )
 }

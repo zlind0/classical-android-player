@@ -6,6 +6,7 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
+import com.aurora.music.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -77,7 +78,7 @@ class AutoEqController(
         if (profile != null) {
             scope.launch {
                 applyAudioProfile(profile)
-                if (notify) toast("${profile.name} → ${currentOutputLabel()}")
+                if (notify) toast(appContext.getString(R.string.toast_profile_applied, profile.name, currentOutputLabel()))
             }
             return
         }
@@ -95,7 +96,7 @@ class AutoEqController(
                 settingsStore.setDspMode(DspMode.CUSTOM)
                 settingsStore.setActiveEqProfile(b.profileName)
             }
-            if (notify) toast("AutoEQ: ${b.profileName} → ${b.deviceLabel}")
+            if (notify) toast(appContext.getString(R.string.toast_autoeq_applied, b.profileName, b.deviceLabel))
         }
     }
 

@@ -53,7 +53,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.aurora.music.R
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.VisualizerPrefs
 import com.aurora.music.data.VisualizerStyle
@@ -177,12 +179,12 @@ fun VisualizerScreen(state: PlayerUiState, onClose: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
-                    Icons.Filled.Close, "Close",
+                    Icons.Filled.Close, stringResource(R.string.common_close),
                     tint = Color.White,
                     modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onClose).background(Color.White.copy(alpha = 0.12f)).padding(8.dp),
                 )
                 Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                    Text(song.title.ifBlank { "Aurora" }, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
+                    Text(song.title.ifBlank { stringResource(R.string.app_name) }, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
                     if (song.artist.isNotBlank()) Text(song.artist, color = Color.White.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
                 }
             }

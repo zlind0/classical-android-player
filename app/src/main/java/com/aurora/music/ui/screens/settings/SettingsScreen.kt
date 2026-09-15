@@ -35,7 +35,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.aurora.music.R
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -68,7 +70,7 @@ fun SettingsScreen(
     val downloads by container.downloadManager.downloads.collectAsStateWithLifecycle()
 
     Column(Modifier.fillMaxWidth()) {
-        SettingsTopBar("Settings", onBack)
+        SettingsTopBar(stringResource(R.string.settings_title), onBack)
         LazyColumn(
             Modifier.fillMaxWidth(),
             contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp),
@@ -93,66 +95,66 @@ fun SettingsScreen(
                     }
                     Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(username.ifBlank { "Listener" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        Text("View profile", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                        Text(username.ifBlank { stringResource(R.string.common_listener) }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text(stringResource(R.string.settings_view_profile), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                     }
                     Box(Modifier.clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.primary).padding(horizontal = 12.dp, vertical = 6.dp)) {
-                        Text("LOCAL", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onPrimary)
+                        Text(stringResource(R.string.settings_badge_local), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onPrimary)
                     }
                 }
             }
 
-            item { SettingsSectionTitle("Audio") }
+            item { SettingsSectionTitle(stringResource(R.string.settings_section_audio)) }
             item {
                 SettingsGroup {
-                    SettingsNavRow(Icons.Filled.PlayCircle, "Playback & quality", "Streaming quality, hi-res, crossfade, gapless", onClick = onOpenPlayback)
+                    SettingsNavRow(Icons.Filled.PlayCircle, stringResource(R.string.settings_playback_quality), stringResource(R.string.settings_playback_sub), onClick = onOpenPlayback)
                     SettingsRowDivider()
-                    SettingsNavRow(Icons.Filled.Tune, "Equalizer & effects", "EQ, AutoEQ, convolution, DSP", onClick = onOpenEq)
+                    SettingsNavRow(Icons.Filled.Tune, stringResource(R.string.settings_eq), stringResource(R.string.settings_eq_sub), onClick = onOpenEq)
                     SettingsRowDivider()
-                    SettingsNavRow(Icons.Filled.GraphicEq, "Visualizer", "Spectrum, waveform, radial, particles", onClick = onOpenVisualizer)
+                    SettingsNavRow(Icons.Filled.GraphicEq, stringResource(R.string.settings_visualizer), stringResource(R.string.settings_visualizer_sub), onClick = onOpenVisualizer)
                 }
             }
 
-            item { SettingsSectionTitle("Discovery") }
+            item { SettingsSectionTitle(stringResource(R.string.settings_section_discovery)) }
             item {
                 SettingsGroup {
-                    SettingsNavRow(Icons.Filled.AutoAwesome, "Sonic discovery", "On-device similarity radio & analysis", onClick = onOpenSonic)
+                    SettingsNavRow(Icons.Filled.AutoAwesome, stringResource(R.string.settings_sonic), stringResource(R.string.settings_sonic_sub), onClick = onOpenSonic)
                 }
             }
 
-            item { SettingsSectionTitle("Library") }
+            item { SettingsSectionTitle(stringResource(R.string.settings_section_library)) }
             item {
                 SettingsGroup {
-                    SettingsNavRow(Icons.Filled.MergeType, "Music sources", "Folders to scan: internal, SD, USB", onClick = onOpenSources)
+                    SettingsNavRow(Icons.Filled.MergeType, stringResource(R.string.settings_music_sources), stringResource(R.string.settings_music_sources_sub), onClick = onOpenSources)
                     SettingsRowDivider()
-                    SettingsNavRow(Icons.Filled.Download, "Downloads & storage", "${downloads.size} downloaded", onClick = onOpenDownloads)
+                    SettingsNavRow(Icons.Filled.Download, stringResource(R.string.settings_downloads_storage), stringResource(R.string.settings_downloads_sub, downloads.size), onClick = onOpenDownloads)
                 }
             }
 
-            item { SettingsSectionTitle("Interface") }
+            item { SettingsSectionTitle(stringResource(R.string.settings_section_interface)) }
             item {
                 SettingsGroup {
-                    SettingsNavRow(Icons.Filled.Palette, "Appearance", "Theme, accent, layout", onClick = onOpenAppearance)
+                    SettingsNavRow(Icons.Filled.Palette, stringResource(R.string.settings_appearance), stringResource(R.string.settings_appearance_sub), onClick = onOpenAppearance)
                     SettingsRowDivider()
-                    SettingsNavRow(Icons.Filled.TouchApp, "Gestures & behaviour", "Swipe, haptics, autoplay", onClick = onOpenGestures)
+                    SettingsNavRow(Icons.Filled.TouchApp, stringResource(R.string.settings_gestures), stringResource(R.string.settings_gestures_sub), onClick = onOpenGestures)
                 }
             }
 
-            item { SettingsSectionTitle("Connections") }
+            item { SettingsSectionTitle(stringResource(R.string.settings_section_connections)) }
             item {
                 SettingsGroup {
-                    SettingsNavRow(Icons.Filled.Extension, "Integrations", "Lyrics, acoustic ID, artist info", onClick = onOpenIntegrations)
+                    SettingsNavRow(Icons.Filled.Extension, stringResource(R.string.settings_integrations), stringResource(R.string.settings_integrations_sub), onClick = onOpenIntegrations)
                     SettingsRowDivider()
-                    SettingsNavRow(Icons.Filled.Lock, "Permissions", "Notifications, background, alarms, DAC", onClick = onOpenPermissions)
+                    SettingsNavRow(Icons.Filled.Lock, stringResource(R.string.settings_permissions), stringResource(R.string.settings_permissions_sub), onClick = onOpenPermissions)
                     SettingsRowDivider()
-                    SettingsNavRow(Icons.Filled.Info, "About Aurora", value = "v1.0", onClick = onOpenAbout)
+                    SettingsNavRow(Icons.Filled.Info, stringResource(R.string.settings_about), value = "v1.0", onClick = onOpenAbout)
                 }
             }
 
-            item { SettingsSectionTitle("Data") }
+            item { SettingsSectionTitle(stringResource(R.string.settings_section_data)) }
             item {
                 SettingsGroup {
-                    SettingsNavRow(Icons.Filled.Backup, "Backup & restore", "Export or import your settings & playlists", onClick = onOpenBackup)
+                    SettingsNavRow(Icons.Filled.Backup, stringResource(R.string.settings_backup), stringResource(R.string.settings_backup_sub), onClick = onOpenBackup)
                 }
             }
         }

@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -35,12 +36,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
+import com.aurora.music.R
+import com.aurora.music.util.AppLocale
 import com.aurora.music.data.AccentMode
 import com.aurora.music.data.CornerStyle
 import com.aurora.music.data.HomeSection
@@ -69,23 +73,64 @@ fun AppearanceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val prefs by store.uiPrefs.collectAsStateWithLifecycle(initialValue = UiPrefs())
     val scope = rememberCoroutineScope()
     val materialYouSupported = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
+    // labels hoisted: stringResource is @Composable and illegal directly in the LazyColumn DSL scope
+    val homeSectionLabels = mapOf(
+        HomeSection.HERO to stringResource(R.string.appearance_home_hero),
+        HomeSection.RECENT to stringResource(R.string.appearance_home_recent),
+        HomeSection.PLAYLISTS to stringResource(R.string.appearance_home_playlists),
+        HomeSection.FAVOURITE to stringResource(R.string.appearance_home_favourite),
+        HomeSection.MOST to stringResource(R.string.appearance_home_most),
+        HomeSection.ARTISTS to stringResource(R.string.appearance_home_artists),
+        HomeSection.NEW to stringResource(R.string.appearance_home_new),
+    )
 
     Column(Modifier.fillMaxWidth()) {
-        SettingsTopBar("Appearance", onBack)
+        SettingsTopBar(stringResource(R.string.appearance_title), onBack)
         LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp)) {
 
-            item { SettingsSectionTitle("Theme") }
+            item { SettingsSectionTitle(stringResource(R.string.appearance_section_language)) }
+            item {
+                val ctx = LocalContext.current
+                var langTag by remember { mutableStateOf(AppLocale.persistedTag(ctx)) }
+                SegmentedRow(
+                    stringResource(R.string.appearance_language),
+                    AppLocale.options.map { stringResource(AppLocale.displayName(it)) },
+                    AppLocale.options.indexOf(langTag).coerceAtLeast(0),
+                ) { i ->
+                    langTag = AppLocale.options[i]
+                    AppLocale.setTag(ctx, langTag)
+                }
+            }
+            item {
+                Text(
+                    stringResource(R.string.appearance_language_sub),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                )
+            }
+
+            item { SettingsSectionTitle(stringResource(R.string.appearance_section_theme)) }
             item { ThemeStylePicker(prefs) { style -> scope.launch { store.setThemeStyle(style) } } }
             item {
-                SegmentedRow("Mode", listOf("System", "Light", "Dark", "AMOLED"), prefs.themeMode) { i ->
+                SegmentedRow(
+                    stringResource(R.string.appearance_mode),
+                    listOf(
+                        stringResource(R.string.appearance_mode_system),
+                        stringResource(R.string.appearance_mode_light),
+                        stringResource(R.string.appearance_mode_dark),
+                        stringResource(R.string.appearance_mode_amoled),
+                    ),
+                    prefs.themeMode,
+                ) { i ->
                     scope.launch { store.setThemeMode(i) }
                 }
             }
             item {
                 Text(
                     when (prefs.themeMode) {
-                        ThemeMode.AMOLED -> "True-black surfaces — saves power on OLED screens."
-                        ThemeMode.SYSTEM -> "Follows your device's light/dark setting."
+                        ThemeMode.AMOLED -> stringResource(R.string.appearance_hint_amoled)
+                        ThemeMode.SYSTEM -> stringResource(R.string.appearance_hint_system)
                         else -> ""
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -95,9 +140,17 @@ fun AppearanceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
             }
 
             if (prefs.themeStyle == ThemeStyle.AURORA) {
-            item { SettingsSectionTitle("Accent") }
+            item { SettingsSectionTitle(stringResource(R.string.appearance_section_accent)) }
             item {
-                SegmentedRow("Source", listOf("Presets", "Custom", "Material You"), prefs.accentMode) { i ->
+                SegmentedRow(
+                    stringResource(R.string.appearance_source),
+                    listOf(
+                        stringResource(R.string.appearance_presets),
+                        stringResource(R.string.appearance_custom),
+                        stringResource(R.string.appearance_material_you),
+                    ),
+                    prefs.accentMode,
+                ) { i ->
                     scope.launch { store.setAccentMode(i) }
                 }
             }
@@ -113,8 +166,8 @@ fun AppearanceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                 }
                 else -> item {
                     Text(
-                        if (materialYouSupported) "Using your wallpaper colors (Material You)."
-                        else "Material You needs Android 12+. Falling back to the preset accent.",
+                        if (materialYouSupported) stringResource(R.string.appearance_myou_on)
+                        else stringResource(R.string.appearance_myou_off),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
@@ -123,79 +176,103 @@ fun AppearanceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
             }
             }
 
-            item { SettingsSectionTitle("Display") }
+            item { SettingsSectionTitle(stringResource(R.string.appearance_section_display)) }
             item {
-                SettingsSliderRow("Font size", "${(prefs.fontScale * 100).roundToInt()}%", prefs.fontScale, 0.85f..1.3f) { v ->
+                SettingsSliderRow(stringResource(R.string.appearance_font_size), "${(prefs.fontScale * 100).roundToInt()}%", prefs.fontScale, 0.85f..1.3f) { v ->
                     scope.launch { store.setFontScale(v) }
                 }
             }
             if (prefs.themeStyle == ThemeStyle.AURORA) item {
-                SegmentedRow("Corners", listOf("Sharp", "Default", "Rounded", "Pill"), prefs.cornerStyle) { i ->
+                SegmentedRow(
+                    stringResource(R.string.appearance_corners),
+                    listOf(
+                        stringResource(R.string.appearance_corner_sharp),
+                        stringResource(R.string.appearance_corner_default),
+                        stringResource(R.string.appearance_corner_rounded),
+                        stringResource(R.string.appearance_corner_pill),
+                    ),
+                    prefs.cornerStyle,
+                ) { i ->
                     scope.launch { store.setCornerStyle(i) }
                 }
             }
 
-            item { SettingsSectionTitle("Player") }
+            item { SettingsSectionTitle(stringResource(R.string.appearance_section_player)) }
             item {
-                SegmentedRow("Seek bar", listOf("Waveform", "Bar"), prefs.playerSeekStyle) { i ->
+                SegmentedRow(
+                    stringResource(R.string.appearance_seek_bar),
+                    listOf(stringResource(R.string.appearance_waveform), stringResource(R.string.appearance_bar)),
+                    prefs.playerSeekStyle,
+                ) { i ->
                     scope.launch { store.setPlayerSeekStyle(i) }
                 }
             }
             if (prefs.playerSeekStyle == SeekStyle.WAVEFORM) {
                 item {
-                    SettingsSliderRow("Waveform bars", "${prefs.playerWaveBars}", prefs.playerWaveBars.toFloat(), 24f..96f) { v ->
+                    SettingsSliderRow(stringResource(R.string.appearance_waveform_bars), "${prefs.playerWaveBars}", prefs.playerWaveBars.toFloat(), 24f..96f) { v ->
                         scope.launch { store.setPlayerWaveBars(v.roundToInt()) }
                     }
                 }
             }
             item {
-                SettingsSliderRow("Artwork size", "${(prefs.playerArtSize * 100).roundToInt()}%", prefs.playerArtSize, 0.6f..1f) { v ->
+                SettingsSliderRow(stringResource(R.string.appearance_artwork_size), "${(prefs.playerArtSize * 100).roundToInt()}%", prefs.playerArtSize, 0.6f..1f) { v ->
                     scope.launch { store.setPlayerArtSize(v) }
                 }
             }
             if (prefs.themeStyle == ThemeStyle.AURORA) item {
-                SettingsSliderRow("Gradient intensity", "${(prefs.playerGradient * 100).roundToInt()}%", prefs.playerGradient, 0f..1.5f) { v ->
+                SettingsSliderRow(stringResource(R.string.appearance_gradient), "${(prefs.playerGradient * 100).roundToInt()}%", prefs.playerGradient, 0f..1.5f) { v ->
                     scope.launch { store.setPlayerGradient(v) }
                 }
             }
             item {
-                SettingsSwitchRow(title = "Bottom utilities", subtitle = "Speed · Lyrics · Queue row", checked = prefs.playerShowUtilities) { v ->
+                SettingsSwitchRow(title = stringResource(R.string.appearance_bottom_utils), subtitle = stringResource(R.string.appearance_bottom_utils_sub), checked = prefs.playerShowUtilities) { v ->
                     scope.launch { store.setPlayerShowUtilities(v) }
                 }
             }
 
-            item { SettingsSectionTitle("Miniplayer") }
+            item { SettingsSectionTitle(stringResource(R.string.appearance_section_mini)) }
             item {
-                SegmentedRow("Style", listOf("Standard", "Compact", "Prominent"), prefs.miniStyle) { i ->
+                SegmentedRow(
+                    stringResource(R.string.appearance_style),
+                    listOf(
+                        stringResource(R.string.appearance_standard),
+                        stringResource(R.string.appearance_compact),
+                        stringResource(R.string.appearance_prominent),
+                    ),
+                    prefs.miniStyle,
+                ) { i ->
                     scope.launch { store.setMiniStyle(i) }
                 }
             }
             item {
-                SegmentedRow("Progress", listOf("Line", "Bar", "None"), prefs.miniProgress) { i ->
+                SegmentedRow(
+                    stringResource(R.string.appearance_progress),
+                    listOf(
+                        stringResource(R.string.appearance_line),
+                        stringResource(R.string.appearance_bar_opt),
+                        stringResource(R.string.appearance_none),
+                    ),
+                    prefs.miniProgress,
+                ) { i ->
                     scope.launch { store.setMiniProgress(i) }
                 }
             }
 
-            item { SettingsSectionTitle("Library") }
+            item { SettingsSectionTitle(stringResource(R.string.appearance_section_library)) }
             item {
-                SegmentedRow("Grid columns", listOf("2", "3", "4"), (prefs.libraryColumns - 2).coerceIn(0, 2)) { i ->
+                SegmentedRow(stringResource(R.string.appearance_grid_columns), listOf("2", "3", "4"), (prefs.libraryColumns - 2).coerceIn(0, 2)) { i ->
                     scope.launch { store.setLibraryColumns(i + 2) }
                 }
             }
 
-            item { SettingsSectionTitle("Home sections") }
+            item { SettingsSectionTitle(stringResource(R.string.appearance_section_home)) }
             val homeSections = listOf(
-                HomeSection.HERO to "New release hero",
-                HomeSection.RECENT to "Jump back in",
-                HomeSection.PLAYLISTS to "Your playlists",
-                HomeSection.FAVOURITE to "From your favourites",
-                HomeSection.MOST to "Most played",
-                HomeSection.ARTISTS to "Artists",
-                HomeSection.NEW to "New releases",
+                HomeSection.HERO, HomeSection.RECENT, HomeSection.PLAYLISTS, HomeSection.FAVOURITE,
+                HomeSection.MOST, HomeSection.ARTISTS, HomeSection.NEW,
             )
             items(homeSections.size) { idx ->
-                val (id, label) = homeSections[idx]
-                SettingsSwitchRow(title = label, checked = id !in prefs.hiddenHomeSections) { v ->
+                val id = homeSections[idx]
+                SettingsSwitchRow(title = homeSectionLabels[id] ?: id, checked = id !in prefs.hiddenHomeSections) { v ->
                     scope.launch { store.setHomeSectionHidden(id, !v) }
                 }
             }
@@ -221,7 +298,7 @@ private fun ThemeStylePicker(prefs: UiPrefs, onSelect: (Int) -> Unit) {
                     ) {
                         ThemePreview(identity, prefs, dark)
                         Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 6.dp, top = 10.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(identity.name, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            Text(themeName(identity.id), style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                             if (selected) Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                         }
                     }
@@ -229,13 +306,43 @@ private fun ThemeStylePicker(prefs: UiPrefs, onSelect: (Int) -> Unit) {
             }
         }
         val current = ThemeIdentities.firstOrNull { it.id == prefs.themeStyle } ?: ThemeIdentities.first()
-        Text(current.description, style = MaterialTheme.typography.titleSmall)
-        Text(current.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(themeDescription(current.id), style = MaterialTheme.typography.titleSmall)
+        Text(themeDetail(current.id), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (prefs.themeStyle != ThemeStyle.AURORA) {
-            Text("This style includes its own colors and corners. Your Aurora customizations are saved.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(R.string.appearance_non_aurora_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
+
+@Composable
+private fun themeName(id: Int): String = stringResource(
+    when (id) {
+        ThemeStyle.RETRO -> R.string.theme_name_retro
+        ThemeStyle.AERO -> R.string.theme_name_aero
+        ThemeStyle.GLASS -> R.string.theme_name_glass
+        else -> R.string.theme_name_aurora
+    }
+)
+
+@Composable
+private fun themeDescription(id: Int): String = stringResource(
+    when (id) {
+        ThemeStyle.RETRO -> R.string.theme_desc_retro
+        ThemeStyle.AERO -> R.string.theme_desc_aero
+        ThemeStyle.GLASS -> R.string.theme_desc_glass
+        else -> R.string.theme_desc_aurora
+    }
+)
+
+@Composable
+private fun themeDetail(id: Int): String = stringResource(
+    when (id) {
+        ThemeStyle.RETRO -> R.string.theme_detail_retro
+        ThemeStyle.AERO -> R.string.theme_detail_aero
+        ThemeStyle.GLASS -> R.string.theme_detail_glass
+        else -> R.string.theme_detail_aurora
+    }
+)
 
 @Composable
 private fun ThemePreview(identity: ThemeIdentity, prefs: UiPrefs, dark: Boolean) {
@@ -283,7 +390,7 @@ private fun AccentPresetGrid(selected: Int, onSelect: (Int) -> Unit) {
                     ) {
                         if (isSel) {
                             val on = if (preset.seed.luminanceApprox() > 0.5f) Color.Black else Color.White
-                            Icon(Icons.Filled.Check, "Selected", tint = on, modifier = Modifier.size(22.dp))
+                            Icon(Icons.Filled.Check, stringResource(R.string.appearance_selected), tint = on, modifier = Modifier.size(22.dp))
                         }
                     }
                 }
@@ -309,11 +416,11 @@ private fun CustomColorPicker(initialArgb: Int, onChange: (Int) -> Unit) {
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(56.dp).clip(CircleShape).background(preview).border(2.dp, MaterialTheme.colorScheme.outline, CircleShape))
-            Text("  Live preview", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(R.string.appearance_live_preview), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        SettingsSliderRow("Hue", "${hue.roundToInt()}°", hue, 0f..360f) { hue = it; push() }
-        SettingsSliderRow("Saturation", "${(sat * 100).roundToInt()}%", sat, 0f..1f) { sat = it; push() }
-        SettingsSliderRow("Brightness", "${(bri * 100).roundToInt()}%", bri, 0f..1f) { bri = it; push() }
+        SettingsSliderRow(stringResource(R.string.appearance_hue), "${hue.roundToInt()}°", hue, 0f..360f) { hue = it; push() }
+        SettingsSliderRow(stringResource(R.string.appearance_saturation), "${(sat * 100).roundToInt()}%", sat, 0f..1f) { sat = it; push() }
+        SettingsSliderRow(stringResource(R.string.appearance_brightness), "${(bri * 100).roundToInt()}%", bri, 0f..1f) { bri = it; push() }
     }
 }
 

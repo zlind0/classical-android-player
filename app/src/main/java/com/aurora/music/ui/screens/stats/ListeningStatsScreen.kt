@@ -38,7 +38,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.aurora.music.R
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.RankedItem
 import com.aurora.music.ui.components.Artwork
@@ -68,15 +70,15 @@ fun ListeningStatsScreen(contentPadding: PaddingValues, onBack: () -> Unit, onPl
 
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth().padding(top = topInset + 6.dp, start = 8.dp, end = 16.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onBack).padding(8.dp))
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.common_back), modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onBack).padding(8.dp))
             Spacer(Modifier.width(8.dp))
-            Text("Listening stats", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.stats_title), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         }
 
         LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp)) {
             item {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("This week", "This month", "All time").forEachIndexed { i, label ->
+                    listOf(stringResource(R.string.stats_week), stringResource(R.string.stats_month), stringResource(R.string.stats_alltime)).forEachIndexed { i, label ->
                         val sel = i == range
                         Box(
                             Modifier.weight(1f).clip(RoundedCornerShape(50)).background(if (sel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh).clickable { range = i }.padding(vertical = 10.dp),
@@ -87,14 +89,14 @@ fun ListeningStatsScreen(contentPadding: PaddingValues, onBack: () -> Unit, onPl
             }
             item {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    StatCard("${events.size}", "Plays", Modifier.weight(1f))
-                    StatCard("$minutes", "Minutes", Modifier.weight(1f))
-                    StatCard("${artists.size}", "Artists", Modifier.weight(1f))
+                    StatCard("${events.size}", stringResource(R.string.stats_plays), Modifier.weight(1f))
+                    StatCard("$minutes", stringResource(R.string.stats_minutes), Modifier.weight(1f))
+                    StatCard("${artists.size}", stringResource(R.string.stats_artists), Modifier.weight(1f))
                 }
             }
 
             if (events.isEmpty()) {
-                item { Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) { Text("No plays in this period", color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+                item { Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) { Text(stringResource(R.string.stats_empty_period), color = MaterialTheme.colorScheme.onSurfaceVariant) } }
             }
 
             if (streak.second > 0) {
@@ -105,15 +107,15 @@ fun ListeningStatsScreen(contentPadding: PaddingValues, onBack: () -> Unit, onPl
             }
 
             if (artists.isNotEmpty()) {
-                item { SectionHeader("Top artists", Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
+                item { SectionHeader(stringResource(R.string.stats_top_artists), Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
                 items(artists.size) { i -> RankRow(i + 1, artists[i], circle = true) { if (artists[i].id.isNotBlank()) onOpenDetail("artist", artists[i].id) } }
             }
             if (songs.isNotEmpty()) {
-                item { SectionHeader("Top songs", Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
+                item { SectionHeader(stringResource(R.string.stats_top_songs), Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
                 items(songs.size) { i -> RankRow(i + 1, songs[i], circle = false) { onPlay(songs[i].id) } }
             }
             if (albums.isNotEmpty()) {
-                item { SectionHeader("Top albums", Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
+                item { SectionHeader(stringResource(R.string.stats_top_albums), Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
                 items(albums.size) { i -> RankRow(i + 1, albums[i], circle = false) { if (albums[i].id.isNotBlank()) onOpenDetail("album", albums[i].id) } }
             }
         }
@@ -130,8 +132,8 @@ private fun StreakCard(current: Int, longest: Int) {
         Icon(Icons.Filled.LocalFireDepartment, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(if (current > 0) "$current-day streak" else "No active streak", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-            Text("Longest: $longest day${if (longest == 1) "" else "s"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(if (current > 0) stringResource(R.string.stats_streak_fmt, current) else stringResource(R.string.stats_no_streak), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.stats_longest, longest, if (longest == 1) "" else "s"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -143,7 +145,7 @@ private fun ListeningClock(byHour: IntArray) {
         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(16.dp),
     ) {
-        Text("Listening clock", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+        Text(stringResource(R.string.stats_clock), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(12.dp))
         Row(Modifier.fillMaxWidth().height(80.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             for (h in 0 until 24) {
@@ -178,7 +180,7 @@ private fun RankRow(rank: Int, item: RankedItem, circle: Boolean, onClick: () ->
         Artwork(item.artworkUrl, accentFor(item.id.ifBlank { item.name }), Modifier.size(48.dp), corner = if (circle) 48.dp else 10.dp)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(item.name.ifBlank { "Unknown" }, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(item.name.ifBlank { stringResource(R.string.stats_unknown) }, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(item.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Box(Modifier.clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)).padding(horizontal = 10.dp, vertical = 4.dp)) {

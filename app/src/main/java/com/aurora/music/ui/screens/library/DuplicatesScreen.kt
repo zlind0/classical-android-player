@@ -27,6 +27,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.aurora.music.R
 import com.aurora.music.data.DuplicateGroup
 import com.aurora.music.model.Song
 import com.aurora.music.ui.components.Artwork
@@ -45,11 +47,11 @@ fun DuplicatesScreen(
     onPlay: (Song) -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
-        SettingsTopBar(title = "Duplicates", onBack = onBack)
+        SettingsTopBar(title = stringResource(R.string.dup_title), onBack = onBack)
         when {
             loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LottieLoader(modifier = Modifier.size(72.dp)) }
             groups.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No duplicates found across $scanned tracks", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.dup_none, scanned), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             else -> {
                 val dupCount = groups.sumOf { it.songs.size }
@@ -59,7 +61,7 @@ fun DuplicatesScreen(
                 ) {
                     item {
                         Text(
-                            "${groups.size} group${if (groups.size == 1) "" else "s"} • $dupCount tracks • $scanned scanned",
+                            stringResource(R.string.dup_stats_fmt, groups.size, dupCount, scanned),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
@@ -74,6 +76,10 @@ fun DuplicatesScreen(
 
 @Composable
 private fun GroupCard(group: DuplicateGroup, currentSongId: String, onPlay: (Song) -> Unit) {
+    val copiesLine = stringResource(R.string.dup_copies_fmt, group.artist, group.songs.size)
+    val unknownAlbum = stringResource(R.string.dup_unknown_album)
+    val unknownFormat = stringResource(R.string.dup_unknown_format)
+    val playingDesc = stringResource(R.string.dup_playing)
     Column(
         Modifier
             .fillMaxWidth()
@@ -84,7 +90,7 @@ private fun GroupCard(group: DuplicateGroup, currentSongId: String, onPlay: (Son
     ) {
         Text(group.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(
-            "${group.artist} • ${group.songs.size} copies",
+            copiesLine,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -97,21 +103,21 @@ private fun GroupCard(group: DuplicateGroup, currentSongId: String, onPlay: (Son
                 Artwork(s.artworkUrl, s.accent, Modifier.size(40.dp), corner = 10.dp)
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(s.album.ifBlank { "Unknown album" }, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(specLine(s), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(s.album.ifBlank { unknownAlbum }, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(specLine(s, unknownFormat), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (s.id == currentSongId) {
-                    Icon(Icons.Filled.MusicNote, "Playing", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Filled.MusicNote, playingDesc, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                 }
             }
         }
     }
 }
 
-private fun specLine(s: Song): String {
+private fun specLine(s: Song, unknownFormat: String): String {
     val parts = mutableListOf<String>()
     if (s.suffix.isNotBlank()) parts += s.suffix.uppercase()
     if (s.bitrateKbps > 0) parts += "${s.bitrateKbps} kbps"
     if (s.durationSec > 0) parts += "%d:%02d".format(s.durationSec / 60, s.durationSec % 60)
-    return parts.joinToString(" • ").ifBlank { "Unknown format" }
+    return parts.joinToString(" • ").ifBlank { unknownFormat }
 }

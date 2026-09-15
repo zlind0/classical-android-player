@@ -142,5 +142,6 @@ fun ScannedTrack.toSong(): Song {
         suffix = fileName.substringAfterLast('.', ""),
         path = path,
         accent = accentFor(path),
+        codecMime = codec,
     )
 }
