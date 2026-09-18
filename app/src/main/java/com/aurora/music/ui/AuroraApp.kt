@@ -180,11 +180,12 @@ fun AuroraApp() {
     fun navigateTopLevel(route: String) {
         if (currentRoute == route) return
         container.haptic()
-        // tab press lands on the tab root pop pushed detail/settings dont restore the sub-stack
+        // bottom-tab pattern: keep each tab's back stack + VM alive so switching
+        // tabs never triggers a full library reload
         navController.navigate(route) {
-            popUpTo(navController.graph.findStartDestination().id) { saveState = false }
+            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
             launchSingleTop = true
-            restoreState = false
+            restoreState = true
         }
     }
 

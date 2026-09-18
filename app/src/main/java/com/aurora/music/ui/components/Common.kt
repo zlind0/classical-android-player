@@ -61,7 +61,8 @@ fun Artwork(
         SubcomposeAsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(url)
-                .crossfade(true)
+                // no crossfade: recycled rows refading on every scroll looks like jank
+                .crossfade(false)
                 .build(),
             contentDescription = null,
             contentScale = contentScale,
