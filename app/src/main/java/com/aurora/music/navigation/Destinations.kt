@@ -3,17 +3,27 @@ package com.aurora.music.navigation
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.LibraryMusic
-import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.MoreHoriz
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.ui.graphics.vector.ImageVector
 
 object Routes {
     const val HOME = "home"
     const val SEARCH = "search"
-    const val LIBRARY = "library"
-    const val PROFILE = "profile"
+    const val PLAYLISTS = "tab_playlists"
+    const val ARTISTS = "tab_artists"
+    const val MORE = "tab_more"
+    // More → single-category browsing (songs/albums/genres/composers)
+    const val BROWSE = "browse/{kind}"
+    fun browse(kind: String) = "browse/$kind"
+    // full player page (tab bar stays visible underneath)
+    const val PLAYER = "player"
     const val SETTINGS = "settings"
     const val SETTINGS_APPEARANCE = "settings_appearance"
     const val SETTINGS_PLAYBACK = "settings_playback"
@@ -54,6 +64,8 @@ data class TopLevelDestination(
 
 val topLevelDestinations = listOf(
     TopLevelDestination(Routes.HOME, "Home", Icons.Filled.Home, Icons.Outlined.Home),
-    TopLevelDestination(Routes.SEARCH, "Search", Icons.Filled.Search, Icons.Outlined.Search),
-    TopLevelDestination(Routes.LIBRARY, "Library", Icons.Filled.LibraryMusic, Icons.Outlined.LibraryMusic),
+    TopLevelDestination(Routes.PLAYLISTS, "Playlists", Icons.Filled.LibraryMusic, Icons.Outlined.LibraryMusic),
+    TopLevelDestination(Routes.ARTISTS, "Artists", Icons.Filled.Person, Icons.Outlined.Person),
+    TopLevelDestination(Routes.MORE, "More", Icons.Filled.MoreHoriz, Icons.Outlined.MoreHoriz),
+    TopLevelDestination(Routes.SETTINGS, "Settings", Icons.Filled.Settings, Icons.Outlined.Settings),
 )

@@ -42,8 +42,12 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PushPin
@@ -131,7 +135,11 @@ fun LibraryScreen(
     onFilter: (LibraryFilter) -> Unit,
     onSort: (LibrarySort) -> Unit,
     onToggleLayout: () -> Unit,
-    onOpenDrawer: () -> Unit,
+    onOpenDrawer: () -> Unit = {},
+    // iOS-style embedding: hide the tab rail + identity header, lock to one filter
+    showTabs: Boolean = true,
+    forceFilter: LibraryFilter? = null,
+    titleOverride: String? = null,
     onPlayAll: (List<Song>, Int) -> Unit,
     onAddToQueue: (Song) -> Unit,
     onPlayNext: (Song) -> Unit,
@@ -164,7 +172,9 @@ fun LibraryScreen(
 ) {
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     var showCreate by remember { mutableStateOf(false) }
-    val filter = state.filter
+    val filter = forceFilter ?: state.filter
+    // drill-down into one genre/composer group; resets when the filter changes
+    var drill by remember(filter) { mutableStateOf<String?>(null) }
     val sort = state.sort
     val layout = state.layout
     val libColumns = com.aurora.music.ui.theme.LocalUiPrefs.current.libraryColumns.coerceIn(2, 4)
@@ -185,15 +195,17 @@ fun LibraryScreen(
     Column(Modifier.fillMaxWidth().padding(top = topInset)) {
         // ---- header: identity + stats ----
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(38.dp).clip(CircleShape)
-                    .background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.tertiary)))
-                    .clickable(onClick = onOpenDrawer),
-                contentAlignment = Alignment.Center,
-            ) { Text(username.take(2).uppercase().ifBlank { avatarFallback }, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onPrimary) }
-            Spacer(Modifier.width(12.dp))
+            if (showTabs) {
+                Box(
+                    Modifier.size(38.dp).clip(CircleShape)
+                        .background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.tertiary)))
+                        .clickable(onClick = onOpenDrawer),
+                    contentAlignment = Alignment.Center,
+                ) { Text(username.take(2).uppercase().ifBlank { avatarFallback }, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onPrimary) }
+                Spacer(Modifier.width(12.dp))
+            }
             Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.library_title), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+                Text(titleOverride ?: stringResource(R.string.library_title), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
                 val playlistsCountLabel = stringResource(R.string.lib_counts_playlists, state.playlists.size + state.smartPlaylists.size)
                 val albumsCountLabel = stringResource(R.string.lib_counts_albums, state.albums.size)
                 val artistsCountLabel = stringResource(R.string.lib_counts_artists, state.artists.size)
@@ -222,15 +234,21 @@ fun LibraryScreen(
         Spacer(Modifier.height(10.dp))
 
         // ---- tab rail: icon + label with accent underline, not pills ----
-        val visibleTabs = LibraryFilter.entries.filter { canDownload || it != LibraryFilter.DOWNLOADED }
-        LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            items(visibleTabs.size) { i ->
-                val f = visibleTabs[i]
-                LibTab(label = tabLabel(f), icon = tabIcon(f), selected = f == filter) { onFilter(f) }
+        if (showTabs) {
+            // genre/composer browsing lives under More, not the rail
+            val visibleTabs = LibraryFilter.entries.filter {
+                it != LibraryFilter.GENRES && it != LibraryFilter.COMPOSERS &&
+                    (canDownload || it != LibraryFilter.DOWNLOADED)
             }
-        }
+            LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                items(visibleTabs.size) { i ->
+                    val f = visibleTabs[i]
+                    LibTab(label = tabLabel(f), icon = tabIcon(f), selected = f == filter) { onFilter(f) }
+                }
+            }
 
-        Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(6.dp))
+        }
 
         // ---- contextual tool row ----
         if (filter != LibraryFilter.ALL) {
@@ -298,6 +316,30 @@ fun LibraryScreen(
                     RowsContent(dlRows, layout, libColumns, sort, bottom, actions) { r -> onOpenDetail(r.kind, r.id) }
                 }
             }
+            LibraryFilter.GENRES, LibraryFilter.COMPOSERS -> {
+                GroupBrowser(
+                    filter = filter,
+                    songs = state.songs,
+                    drill = drill,
+                    onDrill = { drill = it },
+                    onBack = { drill = null },
+                    bottom = bottom,
+                    likedIds = likedIds,
+                    currentSongId = currentSongId,
+                    isPlaying = isPlaying,
+                    canDownload = canDownload,
+                    downloadedIds = downloadedIds,
+                    onPlaySong = onPlaySong,
+                    onToggleLike = onToggleLike,
+                    onAddToQueue = onAddToQueue,
+                    onPlayNext = onPlayNext,
+                    onDownload = onDownload,
+                    onRemoveDownload = onRemoveDownload,
+                    onOpenDetail = onOpenDetail,
+                    onEditTags = onEditTags,
+                    serverTagEditing = serverTagEditing,
+                )
+            }
             else -> {
                 val rows = buildRows(state, filter, sort, pins)
                 if (rows.isEmpty()) {
@@ -322,6 +364,8 @@ private fun tabIcon(f: LibraryFilter): ImageVector = when (f) {
     LibraryFilter.ARTISTS -> Icons.Filled.Person
     LibraryFilter.SONGS -> Icons.Filled.MusicNote
     LibraryFilter.DOWNLOADED -> Icons.Filled.Download
+    LibraryFilter.GENRES -> Icons.Filled.Category
+    LibraryFilter.COMPOSERS -> Icons.Filled.Mic
 }
 
 @Composable
@@ -331,6 +375,8 @@ private fun tabLabel(f: LibraryFilter): String = when (f) {
     LibraryFilter.ARTISTS -> stringResource(R.string.lib_tab_artists)
     LibraryFilter.SONGS -> stringResource(R.string.search_filter_songs)
     LibraryFilter.DOWNLOADED -> stringResource(R.string.lib_filter_downloaded)
+    LibraryFilter.GENRES -> stringResource(R.string.lib_tab_genres)
+    LibraryFilter.COMPOSERS -> stringResource(R.string.lib_tab_composers)
     else -> stringResource(R.string.lib_filter_all)
 }
 
@@ -1006,6 +1052,98 @@ private fun CollectionMenu(row: LibRow, actions: LibActions, expanded: Boolean, 
                     onClick = { onDismiss(); actions.onDelete(row) },
                     leadingIcon = { Icon(Icons.Filled.Delete, null, tint = MaterialTheme.colorScheme.error) },
                 )
+            }
+        }
+    }
+}
+
+// ---- genre/composer grouped browsing (More tab) ----
+
+@Composable
+private fun GroupBrowser(
+    filter: LibraryFilter,
+    songs: List<Song>,
+    drill: String?,
+    onDrill: (String) -> Unit,
+    onBack: () -> Unit,
+    bottom: androidx.compose.ui.unit.Dp,
+    likedIds: Set<String>,
+    currentSongId: String,
+    isPlaying: Boolean,
+    canDownload: Boolean,
+    downloadedIds: Set<String>,
+    onPlaySong: (Song) -> Unit,
+    onToggleLike: (String) -> Unit,
+    onAddToQueue: (Song) -> Unit,
+    onPlayNext: (Song) -> Unit,
+    onDownload: (Song) -> Unit,
+    onRemoveDownload: (String) -> Unit,
+    onOpenDetail: (String, String) -> Unit,
+    onEditTags: ((Song) -> Unit)?,
+    serverTagEditing: Boolean,
+) {
+    val unknown = stringResource(R.string.group_unknown)
+    val groups = remember(songs, filter) {
+        songs.groupBy {
+            val raw = if (filter == LibraryFilter.GENRES) it.genre else it.composer
+            raw.trim().ifBlank { unknown }.let { v -> if (v == unknown) v else v }
+        }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
+    }
+    if (drill != null) {
+        val list = (groups[drill] ?: emptyList()).sortedBy { it.title.lowercase() }
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxWidth().clickable(onClick = onBack).padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.common_back), tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(drill, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Text(stringResource(R.string.lib_songs_fmt, list.size), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            androidx.compose.foundation.lazy.LazyColumn(
+                Modifier.fillMaxSize().padding(horizontal = 8.dp),
+                contentPadding = PaddingValues(bottom = bottom),
+            ) {
+                items(list.size) { i ->
+                    val s = list[i]
+                    SongRow(
+                        s, isPlaying = s.id == currentSongId && isPlaying, isLiked = likedIds.contains(s.id),
+                        onClick = { onPlaySong(s) }, onToggleLike = { onToggleLike(s.id) },
+                        onAddToQueue = { onAddToQueue(s) }, onPlayNext = { onPlayNext(s) },
+                        onGoToAlbum = if (s.albumId.isNotBlank()) ({ onOpenDetail("album", s.albumId) }) else null,
+                        onGoToArtist = if (s.artistId.isNotBlank()) ({ onOpenDetail("artist", s.artistId) }) else null,
+                        isDownloaded = canDownload && downloadedIds.contains(s.id),
+                        onDownload = if (canDownload) ({ onDownload(s) }) else null,
+                        onRemoveDownload = if (canDownload) ({ onRemoveDownload(s.id) }) else null,
+                        onEditTags = onEditTags?.let { cb -> { cb(s) } },
+                        serverTagEditing = serverTagEditing,
+                    )
+                }
+            }
+        }
+        return
+    }
+    if (groups.isEmpty()) {
+        EmptyHint(stringResource(R.string.library_empty_hint), stringResource(R.string.library_empty_sub, tabLabel(filter)))
+        return
+    }
+    androidx.compose.foundation.lazy.LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = bottom),
+    ) {
+        items(groups.keys.toList().size) { i ->
+            val name = groups.keys.toList()[i]
+            val count = groups[name]?.size ?: 0
+            Row(
+                Modifier.fillMaxWidth().clickable { onDrill(name) }.padding(horizontal = 20.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(stringResource(R.string.lib_songs_fmt, count), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

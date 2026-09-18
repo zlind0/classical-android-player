@@ -17,6 +17,7 @@ fun auroraTypography(scale: Float = 1f, style: Int = ThemeStyle.AURORA): Typogra
     val family = when (style) {
         ThemeStyle.RETRO -> FontFamily.Monospace
         ThemeStyle.AERO -> FontFamily.SansSerif
+        ThemeStyle.IOS -> FontFamily.SansSerif
         else -> Circular
     }
     fun t(weight: FontWeight, size: Float, line: Float, letter: Float = 0f) = TextStyle(

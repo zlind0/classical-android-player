@@ -28,6 +28,7 @@ val ThemeIdentities = listOf(
     ThemeIdentity(ThemeStyle.RETRO, "Retro hi-fi", "A little analogue soul", "Amber displays · monospace type · tactile frames"),
     ThemeIdentity(ThemeStyle.AERO, "Aero", "A desktop classic, reimagined", "Windows 7 inspired · blue glass · glossy panels"),
     ThemeIdentity(ThemeStyle.GLASS, "Liquid glass", "Light, flowing, luminous", "Pearlescent surfaces · spacious curves · soft light"),
+    ThemeIdentity(ThemeStyle.IOS, "iOS Classic", "Skeuomorphic throwback", "Linen · glossy blue bars · metal tab"),
 )
 
 fun styleColorScheme(style: Int, dark: Boolean): ColorScheme {
@@ -53,6 +54,14 @@ fun styleColorScheme(style: Int, dark: Boolean): ColorScheme {
         ) else listOf(
             Color(0xFFEFF2FB), Color(0xFFFCFDFF), Color(0xFFE0E6F4), Color(0xFF222A44),
             Color(0xFF505E7B), Color(0xFF5D42A4), Color(0xFF216D72), Color(0xFF99A8C4),
+        )
+        // iOS 5 skeuomorph: warm linen light, black linen dark, system blue accent
+        ThemeStyle.IOS -> if (dark) listOf(
+            Color(0xFF0E0F11), Color(0xFF1A1C1F), Color(0xFF26282D), Color(0xFFF2F2F4),
+            Color(0xFFB9BDC4), Color(0xFF0A84FF), Color(0xFF5E5CE6), Color(0xFF3A3D42),
+        ) else listOf(
+            Color(0xFFE9E6E0), Color(0xFFF8F7F4), Color(0xFFFFFFFF), Color(0xFF1C1C1E),
+            Color(0xFF6E6E72), Color(0xFF0A84FF), Color(0xFF5E5CE6), Color(0xFFC6C6C8),
         )
         else -> if (dark) listOf(
             DarkBackground, DarkSurface, DarkSurfaceElevated, TextPrimaryDark,
@@ -104,9 +113,15 @@ fun Modifier.auroraPanel(
         ThemeStyle.RETRO -> colors.outline.copy(alpha = 0.75f)
         ThemeStyle.AERO -> colors.primary.copy(alpha = if (dark) 0.48f else 0.36f)
         ThemeStyle.GLASS -> if (dark) Color.White.copy(alpha = 0.24f) else Color.White.copy(alpha = 0.94f)
+        ThemeStyle.IOS -> colors.outline.copy(alpha = 0.9f)
         else -> colors.onSurface.copy(alpha = 0.06f)
     }
     val brush = when (style) {
+        ThemeStyle.IOS -> Brush.verticalGradient(
+            0f to Color.White.copy(alpha = if (dark) 0.06f else 0.75f),
+            0.5f to fill,
+            1f to lerp(fill, Color.Black, if (dark) 0.12f else 0.05f),
+        )
         ThemeStyle.RETRO -> Brush.verticalGradient(listOf(lerp(fill, Color.White, 0.025f), fill))
         ThemeStyle.AERO -> Brush.verticalGradient(
             0f to lerp(fill, Color.White, if (dark) 0.10f else 0.55f),
@@ -149,6 +164,22 @@ fun Modifier.auroraBackdrop(): Modifier {
         val lineWidth = 0.5.dp.toPx()
         onDrawBehind {
             when (style) {
+                ThemeStyle.IOS -> {
+                    // linen crosshatch: two diagonal thread sets over the base fill
+                    drawRect(topGlow)
+                    val thread = colors.onBackground.copy(alpha = if (dark) 0.05f else 0.045f)
+                    val step = 4.dp.toPx()
+                    var d = -h
+                    while (d < w + h) {
+                        drawLine(thread, Offset(d, 0f), Offset(d + h, h), 0.5.dp.toPx())
+                        d += step
+                    }
+                    d = -h
+                    while (d < w + h) {
+                        drawLine(thread, Offset(d + h, 0f), Offset(d, h), 0.5.dp.toPx())
+                        d += step
+                    }
+                }
                 ThemeStyle.RETRO -> {
                     var y = 0f
                     while (y < h) {

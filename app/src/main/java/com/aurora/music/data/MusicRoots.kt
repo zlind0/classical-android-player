@@ -27,6 +27,8 @@ data class ScannedTrack(
     val available: Boolean = true,
     // audio codec mime sniffed via MediaExtractor (audio/alac vs audio/mp4a-latm)
     val codec: String = "",
+    val composer: String = "",
+    val genre: String = "",
 )
 
 data class ScanProgress(

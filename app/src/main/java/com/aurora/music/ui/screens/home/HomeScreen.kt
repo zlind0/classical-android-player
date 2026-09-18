@@ -60,7 +60,6 @@ fun HomeScreen(
     state: HomeUiState,
     username: String,
     avatarUrl: String = "",
-    onOpenDrawer: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenDetail: (String, String) -> Unit,
     onPlayAlbum: (String) -> Unit,
@@ -96,8 +95,7 @@ fun HomeScreen(
             ) {
                 Box(
                     Modifier.size(44.dp).clip(CircleShape)
-                        .background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.tertiary)))
-                        .clickable(onClick = onOpenDrawer),
+                        .background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.tertiary))),
                     contentAlignment = Alignment.Center,
                 ) {
                     if (avatarUrl.isNotBlank()) {

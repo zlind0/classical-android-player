@@ -18,32 +18,26 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Downloading
-import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -69,15 +63,16 @@ import com.aurora.music.AuroraApplication
 import com.aurora.music.R
 import com.aurora.music.navigation.Routes
 import com.aurora.music.navigation.topLevelDestinations
+import com.aurora.music.model.LibraryFilter
 import com.aurora.music.ui.components.AmbientBackground
+import com.aurora.music.ui.components.IosTabBar
 import com.aurora.music.ui.components.MiniPlayer
-import com.aurora.music.ui.components.SidebarContent
 import com.aurora.music.ui.screens.detail.DetailScreen
 import com.aurora.music.ui.screens.home.HomeScreen
 import com.aurora.music.ui.screens.library.LibraryScreen
+import com.aurora.music.ui.screens.library.MoreScreen
 import com.aurora.music.ui.screens.player.PlayerScreen
 import com.aurora.music.ui.screens.player.SpeedPitchSheet
-import com.aurora.music.ui.screens.profile.ProfileScreen
 import com.aurora.music.ui.screens.search.SearchScreen
 import com.aurora.music.ui.theme.auroraPanel
 import com.aurora.music.ui.screens.settings.PlaybackSettingsScreen
@@ -160,12 +155,20 @@ fun AuroraApp() {
         }
     }
 
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    var drawerNavigationPending by remember { mutableStateOf(false) }
-
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
-    val onTopLevel = currentRoute in topLevelDestinations.map { it.route }
+    // browse pages belong to the More tab; player highlights nothing
+    val tabRoute = when {
+        currentRoute == Routes.PLAYLISTS || currentRoute == Routes.ARTISTS ||
+            currentRoute == Routes.MORE || currentRoute?.startsWith("browse/") == true -> currentRoute?.let {
+            when {
+                it.startsWith("browse/") -> Routes.MORE
+                else -> it
+            }
+        }
+        currentRoute in topLevelDestinations.map { it.route } -> currentRoute
+        else -> null
+    }
     val showChrome = currentRoute != null
 
     var showSpeedSheet by remember { mutableStateOf(false) }
@@ -185,25 +188,6 @@ fun AuroraApp() {
         }
     }
 
-    fun openDrawer() {
-        if (!drawerNavigationPending && !drawerState.isAnimationRunning) {
-            scope.launch { drawerState.open() }
-        }
-    }
-    fun closeDrawerThen(action: () -> Unit) {
-        if (drawerNavigationPending) return
-        drawerNavigationPending = true
-        scope.launch {
-            try {
-                // Finish dismissing before changing routes. Otherwise the scrim can
-                // outlive its screen and intercept taps over a blank destination.
-                drawerState.close()
-                action()
-            } finally {
-                drawerNavigationPending = false
-            }
-        }
-    }
     fun openDetail(kind: String, id: String) = navController.navigate(Routes.detail(kind, id))
     fun playAlbum(id: String) = scope.launch {
         container.repository.detail("album", id)?.let { if (it.tracks.isNotEmpty()) playerVM.playCollection("album", id, it.tracks, 0, it.info.songCount) }
@@ -221,58 +205,34 @@ fun AuroraApp() {
     }
     val startDestination = Routes.HOME
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        gesturesEnabled = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open || (showChrome && onTopLevel),
-        drawerContent = {
-            ModalDrawerSheet(drawerState = drawerState, drawerContainerColor = MaterialTheme.colorScheme.surface) {
-                SidebarContent(
-                    username = session?.username ?: "",
-                    server = session?.server ?: "",
-                    avatarUrl = session?.imageUrl ?: "",
-                    onProfile = { closeDrawerThen { navController.navigate(Routes.PROFILE) } },
-                    onSettings = { closeDrawerThen { navController.navigate(Routes.SETTINGS) } },
-                    onLibrary = { closeDrawerThen { navigateTopLevel(Routes.LIBRARY) } },
-                    onHistory = { closeDrawerThen { navController.navigate(Routes.HISTORY) } },
-                    onStats = { closeDrawerThen { navController.navigate(Routes.STATS) } },
-                    onDuplicates = { closeDrawerThen { navController.navigate(Routes.DUPLICATES) } },
-                )
-            }
-        },
-    ) {
-        Box(Modifier.fillMaxSize()) {
-            AmbientBackground()
-            Scaffold(
-                containerColor = Color.Transparent,
-                contentWindowInsets = WindowInsets(0, 0, 0, 0),
-                snackbarHost = { SnackbarHost(snackbarHostState) },
-                bottomBar = {
-                    if (showChrome) {
-                        Column(
-                            Modifier
-                                .windowInsetsPadding(WindowInsets.navigationBars)
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            if (activeDownloads > 0) {
-                                DownloadProgressBanner(count = activeDownloads, progress = downloadProgress)
-                                Spacer(Modifier.height(8.dp))
-                            }
-                            if (playerState.hasTrack) {
-                                MiniPlayer(
-                                    state = playerState,
-                                    onExpand = { playerVM.setExpanded(true) },
-                                    onTogglePlay = { playerVM.togglePlay() },
-                                    onToggleLike = { playerVM.toggleLikeCurrent() },
-                                    onNext = { playerVM.next() },
-                                )
-                                Spacer(Modifier.height(8.dp))
-                            }
-                            FloatingNav(currentRoute) { navigateTopLevel(it) }
+    // iOS-style shell: no drawer. MiniPlayer + metal tab bar, full-bleed to the
+    // system gesture area (no navigation inset gap).
+    Box(Modifier.fillMaxSize()) {
+        AmbientBackground()
+        Scaffold(
+            containerColor = Color.Transparent,
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            bottomBar = {
+                if (showChrome) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        if (activeDownloads > 0) {
+                            DownloadProgressBanner(count = activeDownloads, progress = downloadProgress)
                         }
+                        if (playerState.hasTrack && currentRoute != Routes.PLAYER) {
+                            MiniPlayer(
+                                state = playerState,
+                                onExpand = { navController.navigate(Routes.PLAYER) },
+                                onTogglePlay = { playerVM.togglePlay() },
+                                onToggleLike = { playerVM.toggleLikeCurrent() },
+                                onNext = { playerVM.next() },
+                            )
+                        }
+                        IosTabBar(selectedRoute = tabRoute) { navigateTopLevel(it) }
                     }
-                },
-            ) { inner ->
+                }
+            },
+        ) { inner ->
                 NavHost(
                     navController = navController,
                     startDestination = startDestination,
@@ -293,7 +253,6 @@ fun AuroraApp() {
                             state = homeState,
                             username = session?.username ?: "",
                             avatarUrl = session?.imageUrl ?: "",
-                            onOpenDrawer = { openDrawer() },
                             onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                             onOpenDetail = { kind, id -> openDetail(kind, id) },
                             onPlayAlbum = { playAlbum(it) },
@@ -330,9 +289,19 @@ fun AuroraApp() {
                             onCommitSearch = { searchVM.commit() },
                         )
                     }
-                    composable(Routes.LIBRARY) {
+                    // Shared library page: full mode for LIBRARY, embedded for tab/browse pages.
+                    @Composable
+                    fun LibraryPage(
+                        inner: PaddingValues,
+                        forceFilter: LibraryFilter? = null,
+                        showTabs: Boolean = true,
+                        titleOverride: String? = null,
+                    ) {
                         val libraryVM: LibraryViewModel = viewModel()
                         val libraryState by libraryVM.state.collectAsStateWithLifecycle()
+                        androidx.compose.runtime.LaunchedEffect(forceFilter) {
+                            forceFilter?.let { libraryVM.setFilter(it) }
+                        }
                         // m3u export staged here written once the user picks a file
                         var pendingM3u by remember { mutableStateOf<String?>(null) }
                         val exportM3uLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("audio/x-mpegurl")) { uri ->
@@ -382,7 +351,6 @@ fun AuroraApp() {
                             onFilter = libraryVM::setFilter,
                             onSort = libraryVM::setSort,
                             onToggleLayout = libraryVM::toggleLayout,
-                            onOpenDrawer = { openDrawer() },
                             onPlayAll = { songs, index -> playerVM.playAll(songs, index) },
                             onAddToQueue = { playerVM.addToQueue(it); confirm(context.getString(R.string.msg_added_to_queue)) },
                             onPlayNext = { playerVM.playNext(it); confirm(context.getString(R.string.msg_playing_next)) },
@@ -391,7 +359,7 @@ fun AuroraApp() {
                             downloadedIds = downloadedIds,
                             onDownload = onDownload,
                             onRemoveDownload = onRemoveDownload,
-                            onOpenSearch = { navigateTopLevel(Routes.SEARCH) },
+                            onOpenSearch = { navController.navigate(Routes.SEARCH) },
                             onCreatePlaylist = { name -> scope.launch { container.repository.createPlaylist(name); libraryVM.load() } },
                             onCreateSmart = { navController.navigate(Routes.smartEdit()) },
                             onEditSmart = { id -> navController.navigate(Routes.smartEdit(id)) },
@@ -434,7 +402,55 @@ fun AuroraApp() {
                                     if (idx >= 0) playerVM.playAll(all, idx) else playerVM.playAll(listOf(song), 0)
                                 }
                             },
+                            showTabs = showTabs,
+                            forceFilter = forceFilter,
+                            titleOverride = titleOverride,
                         )
+                    }
+
+                    composable(Routes.PLAYLISTS) {
+                        LibraryPage(
+                            inner,
+                            forceFilter = LibraryFilter.PLAYLISTS,
+                            showTabs = false,
+                            titleOverride = stringResource(R.string.tab_playlists),
+                        )
+                    }
+                    composable(Routes.ARTISTS) {
+                        LibraryPage(
+                            inner,
+                            forceFilter = LibraryFilter.ARTISTS,
+                            showTabs = false,
+                            titleOverride = stringResource(R.string.tab_artists),
+                        )
+                    }
+                    composable(Routes.MORE) {
+                        MoreScreen(
+                            contentPadding = inner,
+                            onBrowse = { filter ->
+                                val kind = when (filter) {
+                                    LibraryFilter.SONGS -> "songs"
+                                    LibraryFilter.ALBUMS -> "albums"
+                                    LibraryFilter.GENRES -> "genres"
+                                    else -> "composers"
+                                }
+                                navController.navigate(Routes.browse(kind))
+                            },
+                            onOpenFolders = { navController.navigate(Routes.folders()) },
+                        )
+                    }
+                    composable(
+                        Routes.BROWSE,
+                        arguments = listOf(androidx.navigation.navArgument("kind") { defaultValue = "songs" }),
+                    ) { entry ->
+                        val kind = entry.arguments?.getString("kind").orEmpty()
+                        val (filter, title) = when (kind) {
+                            "albums" -> LibraryFilter.ALBUMS to stringResource(R.string.more_albums)
+                            "genres" -> LibraryFilter.GENRES to stringResource(R.string.more_genres)
+                            "composers" -> LibraryFilter.COMPOSERS to stringResource(R.string.more_composers)
+                            else -> LibraryFilter.SONGS to stringResource(R.string.more_songs)
+                        }
+                        LibraryPage(inner, forceFilter = filter, showTabs = false, titleOverride = title)
                     }
                     composable(
                         Routes.FOLDERS,
@@ -490,22 +506,6 @@ fun AuroraApp() {
                             onUpdate = smartVM::update,
                             onSave = { smartVM.save { navController.popBackStack() } },
                             onBack = { navController.popBackStack() },
-                        )
-                    }
-                    composable(Routes.PROFILE) {
-                        val homeVM: HomeViewModel = viewModel()
-                        val homeState by homeVM.state.collectAsStateWithLifecycle()
-                        ProfileScreen(
-                            contentPadding = inner,
-                            username = session?.username ?: "",
-                            server = session?.server ?: "",
-                            serverLabel = session?.typeLabel ?: "",
-                            avatarUrl = session?.imageUrl ?: "",
-                            playlists = homeState.data.playlists,
-                            artists = homeState.data.artists,
-                            onBack = { navController.popBackStack() },
-                            onOpenSettings = { navController.navigate(Routes.SETTINGS) },
-                            onOpenDetail = { kind, id -> openDetail(kind, id) },
                         )
                     }
                     composable(Routes.DETAIL) { entry ->
@@ -616,8 +616,10 @@ fun AuroraApp() {
                             onOpenIntegrations = { navController.navigate(Routes.SETTINGS_INTEGRATIONS) },
                             onOpenPermissions = { navController.navigate(Routes.SETTINGS_PERMISSIONS) },
                             onOpenAbout = { navController.navigate(Routes.SETTINGS_ABOUT) },
-                            onOpenProfile = { navController.navigate(Routes.PROFILE) },
                             onOpenBackup = { navController.navigate(Routes.SETTINGS_BACKUP) },
+                            onOpenHistory = { navController.navigate(Routes.HISTORY) },
+                            onOpenStats = { navController.navigate(Routes.STATS) },
+                            onOpenDuplicates = { navController.navigate(Routes.DUPLICATES) },
                         )
                     }
                     composable(Routes.SETTINGS_PLAYBACK) {
@@ -693,42 +695,37 @@ fun AuroraApp() {
                     composable(Routes.STATS) {
                         com.aurora.music.ui.screens.stats.ListeningStatsScreen(contentPadding = inner, onBack = { navController.popBackStack() }, onPlay = { playById(it) }, onOpenDetail = { k, i -> openDetail(k, i) })
                     }
+                    composable(Routes.PLAYER) {
+                        PlayerScreen(
+                            state = playerState,
+                            onCollapse = { navController.popBackStack() },
+                            onTogglePlay = { playerVM.togglePlay() },
+                            onNext = { playerVM.next() },
+                            onPrevious = { playerVM.previous() },
+                            onSeek = { playerVM.seekTo(it) },
+                            onToggleLike = { playerVM.toggleLikeCurrent() },
+                            onToggleShuffle = { playerVM.toggleShuffle() },
+                            onCycleRepeat = { playerVM.cycleRepeat() },
+                            onOpenSpeedPitch = { showSpeedSheet = true },
+                            onOpenQueue = { showQueue = true },
+                            onGoToAlbum = {
+                                val id = playerState.current.albumId
+                                if (id.isNotBlank()) { openDetail("album", id) }
+                            },
+                            onGoToArtist = {
+                                val id = playerState.current.artistId
+                                if (id.isNotBlank()) { openDetail("artist", id) }
+                            },
+                            onOpenOutput = { showOutput = true },
+                            onOpenSleep = { showSleep = true },
+                            onOpenVisualizer = { showVisualizer = true },
+                            onOpenEqualizer = { navController.navigate(Routes.SETTINGS_EQ) },
+                            onSonicRadio = { playerVM.startSonicRadio(onResult = { confirm(it) }) },
+                            onAutoDj = { playerVM.startAutoDj(onResult = { confirm(it) }) },
+                            gestures = gesturePrefs,
+                        )
+                    }
                 }
-            }
-
-            AnimatedVisibility(
-                visible = playerState.expanded,
-                enter = slideInVertically(animationSpec = tween(320)) { it } + fadeIn(tween(220)),
-                exit = slideOutVertically(animationSpec = tween(280)) { it } + fadeOut(tween(180)),
-            ) {
-                PlayerScreen(
-                    state = playerState,
-                    onCollapse = { playerVM.setExpanded(false) },
-                    onTogglePlay = { playerVM.togglePlay() },
-                    onNext = { playerVM.next() },
-                    onPrevious = { playerVM.previous() },
-                    onSeek = { playerVM.seekTo(it) },
-                    onToggleLike = { playerVM.toggleLikeCurrent() },
-                    onToggleShuffle = { playerVM.toggleShuffle() },
-                    onCycleRepeat = { playerVM.cycleRepeat() },
-                    onOpenSpeedPitch = { showSpeedSheet = true },
-                    onOpenQueue = { showQueue = true },
-                    onGoToAlbum = {
-                        val id = playerState.current.albumId
-                        if (id.isNotBlank()) { playerVM.setExpanded(false); openDetail("album", id) }
-                    },
-                    onGoToArtist = {
-                        val id = playerState.current.artistId
-                        if (id.isNotBlank()) { playerVM.setExpanded(false); openDetail("artist", id) }
-                    },
-                    onOpenOutput = { showOutput = true },
-                    onOpenSleep = { showSleep = true },
-                    onOpenVisualizer = { showVisualizer = true },
-                    onOpenEqualizer = { playerVM.setExpanded(false); navController.navigate(Routes.SETTINGS_EQ) },
-                    onSonicRadio = { playerVM.startSonicRadio(onResult = { confirm(it) }) },
-                    onAutoDj = { playerVM.startAutoDj(onResult = { confirm(it) }) },
-                    gestures = gesturePrefs,
-                )
             }
 
             AnimatedVisibility(
@@ -760,9 +757,6 @@ fun AuroraApp() {
                 )
             }
         }
-    }
-
-    BackHandler(enabled = playerState.expanded) { playerVM.setExpanded(false) }
 
     if (showSpeedSheet) {
         SpeedPitchSheet(
@@ -840,48 +834,5 @@ private fun DownloadProgressBanner(count: Int, progress: Float) {
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.primary,
         )
-    }
-}
-
-@Composable
-private fun FloatingNav(currentRoute: String?, onNavigate: (String) -> Unit) {
-    val classic = com.aurora.music.ui.theme.LocalUiPrefs.current.themeStyle == com.aurora.music.data.ThemeStyle.AURORA
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(if (classic) Modifier.clip(RoundedCornerShape(26.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f))
-                .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f), RoundedCornerShape(26.dp))
-                else Modifier.auroraPanel(MaterialTheme.shapes.extraLarge, emphasized = true))
-            .padding(6.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        topLevelDestinations.forEach { dest ->
-            val selected = currentRoute == dest.route
-            val bg by animateColorAsState(
-                if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                label = "navBg",
-            )
-            val content = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-            Row(
-                modifier = Modifier
-                    .weight(if (selected) 1.4f else 1f)
-                    .clip(if (classic) RoundedCornerShape(50) else MaterialTheme.shapes.small)
-                    .background(bg)
-                    .clickable { onNavigate(dest.route) }
-                    .padding(vertical = 12.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(if (selected) dest.selectedIcon else dest.unselectedIcon, dest.label, tint = content, modifier = Modifier.size(22.dp))
-                AnimatedVisibility(visible = selected) {
-                    Row {
-                        Spacer(Modifier.width(8.dp))
-                        Text(dest.label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = content)
-                    }
-                }
-            }
-        }
     }
 }

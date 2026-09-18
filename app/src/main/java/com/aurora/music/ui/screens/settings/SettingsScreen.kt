@@ -18,7 +18,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Workspaces
 import androidx.compose.material.icons.filled.MergeType
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Info
@@ -62,8 +65,10 @@ fun SettingsScreen(
     onOpenIntegrations: () -> Unit,
     onOpenPermissions: () -> Unit,
     onOpenAbout: () -> Unit,
-    onOpenProfile: () -> Unit,
     onOpenBackup: () -> Unit,
+    onOpenHistory: () -> Unit,
+    onOpenStats: () -> Unit,
+    onOpenDuplicates: () -> Unit,
 ) {
     val container = (androidx.compose.ui.platform.LocalContext.current.applicationContext as com.aurora.music.AuroraApplication).container
     val session by container.settingsStore.session.collectAsStateWithLifecycle(initialValue = null)
@@ -79,7 +84,7 @@ fun SettingsScreen(
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
                         .clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                        .clickable(onClick = onOpenProfile).padding(16.dp),
+                        .padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Box(
@@ -96,7 +101,7 @@ fun SettingsScreen(
                     Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f)) {
                         Text(username.ifBlank { stringResource(R.string.common_listener) }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        Text(stringResource(R.string.settings_view_profile), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                        Text(stringResource(R.string.settings_badge_local), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                     }
                     Box(Modifier.clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.primary).padding(horizontal = 12.dp, vertical = 6.dp)) {
                         Text(stringResource(R.string.settings_badge_local), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onPrimary)
@@ -155,6 +160,12 @@ fun SettingsScreen(
             item {
                 SettingsGroup {
                     SettingsNavRow(Icons.Filled.Backup, stringResource(R.string.settings_backup), stringResource(R.string.settings_backup_sub), onClick = onOpenBackup)
+                    SettingsRowDivider()
+                    SettingsNavRow(Icons.Filled.History, stringResource(R.string.history_title), stringResource(R.string.history_empty_sub), onClick = onOpenHistory)
+                    SettingsRowDivider()
+                    SettingsNavRow(Icons.Filled.Workspaces, stringResource(R.string.stats_title), stringResource(R.string.stats_empty_period), onClick = onOpenStats)
+                    SettingsRowDivider()
+                    SettingsNavRow(Icons.Filled.ContentCopy, stringResource(R.string.dup_title), null, onClick = onOpenDuplicates)
                 }
             }
         }

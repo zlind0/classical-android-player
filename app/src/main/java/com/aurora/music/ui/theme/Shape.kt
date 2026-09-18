@@ -30,6 +30,11 @@ fun auroraShapes(style: Int, themeStyle: Int = ThemeStyle.AURORA): Shapes = when
         extraSmall = RoundedCornerShape(12.dp), small = RoundedCornerShape(18.dp),
         medium = RoundedCornerShape(24.dp), large = RoundedCornerShape(30.dp), extraLarge = RoundedCornerShape(36.dp),
     )
+    // iOS grouped tables: tight radii
+    ThemeStyle.IOS -> Shapes(
+        extraSmall = RoundedCornerShape(3.dp), small = RoundedCornerShape(5.dp),
+        medium = RoundedCornerShape(8.dp), large = RoundedCornerShape(10.dp), extraLarge = RoundedCornerShape(12.dp),
+    )
     else -> Shapes(
         extraSmall = RoundedCornerShape(cornerDp(style, 8.dp)),
         small = RoundedCornerShape(cornerDp(style, 12.dp)),

@@ -125,6 +125,7 @@ class LocalLibrary(
             MediaStore.Audio.Media.DATE_ADDED,
             MediaStore.Audio.Media.DISPLAY_NAME,
             MediaStore.Audio.Media.MIME_TYPE,
+            MediaStore.Audio.Media.COMPOSER,
             @Suppress("DEPRECATION") MediaStore.Audio.Media.DATA,
         )
         if (Build.VERSION.SDK_INT >= 30) {
@@ -151,6 +152,7 @@ class LocalLibrary(
                 val addedCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
                 val nameCol = c.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME)
                 val mimeCol = c.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
+                val composerCol = c.getColumnIndex(MediaStore.Audio.Media.COMPOSER)
                 val bitrateCol = c.getColumnIndex(MediaStore.Audio.Media.BITRATE)
                 val genreCol = if (Build.VERSION.SDK_INT >= 30) c.getColumnIndex(MediaStore.Audio.Media.GENRE) else -1
                 @Suppress("DEPRECATION") val dataCol = c.getColumnIndex(MediaStore.Audio.Media.DATA)
@@ -194,6 +196,7 @@ class LocalLibrary(
                         replayGainAlbum = rg?.second ?: 0f,
                         genre = if (genreCol >= 0) c.getString(genreCol).orEmpty() else "",
                         dateAddedSec = added,
+                        composer = if (composerCol >= 0) c.getString(composerCol).orEmpty() else "",
                     )
                 }
             }

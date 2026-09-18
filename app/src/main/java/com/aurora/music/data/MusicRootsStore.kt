@@ -143,5 +143,7 @@ fun ScannedTrack.toSong(): Song {
         path = path,
         accent = accentFor(path),
         codecMime = codec,
+        composer = composer,
+        genre = genre,
     )
 }

@@ -898,4 +898,21 @@
     <string name="eq_kind_earbuds_sub">Unsealed earbuds and measured open-ear models, including Shokz.</string>
     <string name="eq_kind_speakers">Speakers / Bluetooth</string>
     <string name="eq_kind_speakers_sub">Measured speaker correction from Spinorama, including Bluetooth models. Placement and room acoustics still affect the result.</string>
+    <string name="tab_home">Home</string>
+    <string name="tab_playlists">Playlists</string>
+    <string name="tab_artists">Artists</string>
+    <string name="tab_more">More</string>
+    <string name="tab_settings">Settings</string>
+    <string name="more_title">More</string>
+    <string name="more_songs">Songs</string>
+    <string name="more_albums">Albums</string>
+    <string name="more_genres">Genres</string>
+    <string name="more_composers">Composers</string>
+    <string name="more_folders">Folders</string>
+    <string name="group_unknown">Unknown</string>
+    <string name="lib_tab_genres">Genres</string>
+    <string name="lib_tab_composers">Composers</string>
+    <string name="theme_name_ios">iOS Classic</string>
+    <string name="theme_desc_ios">Skeuomorphic throwback</string>
+    <string name="theme_detail_ios">Linen · glossy blue bars · metal tab</string>
 </resources>

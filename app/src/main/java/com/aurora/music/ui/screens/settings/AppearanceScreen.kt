@@ -320,6 +320,7 @@ private fun themeName(id: Int): String = stringResource(
         ThemeStyle.RETRO -> R.string.theme_name_retro
         ThemeStyle.AERO -> R.string.theme_name_aero
         ThemeStyle.GLASS -> R.string.theme_name_glass
+        ThemeStyle.IOS -> R.string.theme_name_ios
         else -> R.string.theme_name_aurora
     }
 )
@@ -330,6 +331,7 @@ private fun themeDescription(id: Int): String = stringResource(
         ThemeStyle.RETRO -> R.string.theme_desc_retro
         ThemeStyle.AERO -> R.string.theme_desc_aero
         ThemeStyle.GLASS -> R.string.theme_desc_glass
+        ThemeStyle.IOS -> R.string.theme_desc_ios
         else -> R.string.theme_desc_aurora
     }
 )
@@ -340,6 +342,7 @@ private fun themeDetail(id: Int): String = stringResource(
         ThemeStyle.RETRO -> R.string.theme_detail_retro
         ThemeStyle.AERO -> R.string.theme_detail_aero
         ThemeStyle.GLASS -> R.string.theme_detail_glass
+        ThemeStyle.IOS -> R.string.theme_detail_ios
         else -> R.string.theme_detail_aurora
     }
 )

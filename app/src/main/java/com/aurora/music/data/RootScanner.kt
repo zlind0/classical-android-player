@@ -62,6 +62,7 @@ class RootScanner(
                                 title = meta.title, artist = meta.artist, album = meta.album,
                                 durationSec = meta.durationSec, artworkUrl = folderCover(f),
                                 codec = sniffCodec(f),
+                                composer = meta.composer, genre = meta.genre,
                             )
                         )
                         if (old == null) added++ else updated++
@@ -89,7 +90,7 @@ class RootScanner(
             total = out.size, added = added, updated = updated, missing = missing))
     }
 
-    private data class Meta(val title: String, val artist: String, val album: String, val durationSec: Int)
+    private data class Meta(val title: String, val artist: String, val album: String, val durationSec: Int, val composer: String = "", val genre: String = "")
 
     private fun readMetadata(f: File): Meta {
         val mmr = MediaMetadataRetriever()
@@ -105,6 +106,8 @@ class RootScanner(
                     .ifBlank { s(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST) },
                 album = s(MediaMetadataRetriever.METADATA_KEY_ALBUM),
                 durationSec = (durMs / 1000).toInt().coerceAtLeast(0),
+                composer = s(MediaMetadataRetriever.METADATA_KEY_COMPOSER),
+                genre = s(MediaMetadataRetriever.METADATA_KEY_GENRE),
             )
         } catch (e: Exception) {
             fallback(f)

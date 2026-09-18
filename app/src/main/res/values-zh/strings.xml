@@ -895,4 +895,21 @@
     <string name="eq_kind_earbuds_sub">非密封耳塞和开放耳实测，包括 Shokz。</string>
     <string name="eq_kind_speakers">音箱 / 蓝牙音箱</string>
     <string name="eq_kind_speakers_sub">Spinorama 音箱实测校正，包括蓝牙型号，摆位和房间仍有影响。</string>
+    <string name="tab_home">首页</string>
+    <string name="tab_playlists">歌单</string>
+    <string name="tab_artists">艺人</string>
+    <string name="tab_more">更多</string>
+    <string name="tab_settings">设置</string>
+    <string name="more_title">更多</string>
+    <string name="more_songs">歌曲</string>
+    <string name="more_albums">专辑</string>
+    <string name="more_genres">风格</string>
+    <string name="more_composers">作曲家</string>
+    <string name="more_folders">文件夹</string>
+    <string name="group_unknown">未知</string>
+    <string name="lib_tab_genres">风格</string>
+    <string name="lib_tab_composers">作曲家</string>
+    <string name="theme_name_ios">iOS 经典</string>
+    <string name="theme_desc_ios">拟物怀旧</string>
+    <string name="theme_detail_ios">亚麻·亮蓝导航·金属 Tab</string>
 </resources>

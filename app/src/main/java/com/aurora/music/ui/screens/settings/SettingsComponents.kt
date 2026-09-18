@@ -43,6 +43,10 @@ import com.aurora.music.ui.theme.auroraPanel
 
 @Composable
 fun SettingsTopBar(title: String, onBack: () -> Unit) {
+    if (com.aurora.music.ui.components.isIosTheme()) {
+        com.aurora.music.ui.components.GlossyNavBar(title = title, onBack = onBack)
+        return
+    }
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     Row(
         Modifier.fillMaxWidth()

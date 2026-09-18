@@ -201,6 +201,7 @@ object ThemeStyle {
     const val RETRO = 1
     const val AERO = 2
     const val GLASS = 3
+    const val IOS = 4
 }
 
 object AccentMode { const val PRESET = 0; const val CUSTOM = 1; const val MATERIAL_YOU = 2 }
@@ -221,7 +222,7 @@ object HomeSection {
 data class UiPrefs(
     val themeMode: Int = ThemeMode.DARK,
     // Individual DataStore preference, not a Gson-serialized field.
-    val themeStyle: Int = ThemeStyle.AURORA,
+    val themeStyle: Int = ThemeStyle.IOS,
     val accentMode: Int = AccentMode.PRESET,
     val accentPreset: Int = 0,
     val accentColor: Long = 0xFFFF2E7EL,
@@ -391,7 +392,7 @@ class SettingsStore(private val context: Context) {
     val uiPrefs: Flow<UiPrefs> = context.dataStore.data.map { p ->
         UiPrefs(
             themeMode = p[Keys.UI_THEME_MODE] ?: ThemeMode.DARK,
-            themeStyle = (p[Keys.UI_THEME_STYLE] ?: ThemeStyle.AURORA).coerceIn(ThemeStyle.AURORA, ThemeStyle.GLASS),
+            themeStyle = (p[Keys.UI_THEME_STYLE] ?: ThemeStyle.IOS).coerceIn(ThemeStyle.AURORA, ThemeStyle.IOS),
             accentMode = p[Keys.UI_ACCENT_MODE] ?: AccentMode.PRESET,
             accentPreset = p[Keys.UI_ACCENT_PRESET] ?: 0,
             accentColor = p[Keys.UI_ACCENT_COLOR] ?: 0xFFFF2E7EL,
@@ -804,7 +805,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setDspAutoHeadroom(v: Boolean) = context.dataStore.edit { it[Keys.DSP_AUTO_HEADROOM] = v }
 
     suspend fun setThemeMode(v: Int) = context.dataStore.edit { it[Keys.UI_THEME_MODE] = v }
-    suspend fun setThemeStyle(v: Int) = context.dataStore.edit { it[Keys.UI_THEME_STYLE] = v.coerceIn(ThemeStyle.AURORA, ThemeStyle.GLASS) }
+    suspend fun setThemeStyle(v: Int) = context.dataStore.edit { it[Keys.UI_THEME_STYLE] = v.coerceIn(ThemeStyle.AURORA, ThemeStyle.IOS) }
     suspend fun setAccentMode(v: Int) = context.dataStore.edit { it[Keys.UI_ACCENT_MODE] = v }
     suspend fun setAccentPreset(v: Int) = context.dataStore.edit { it[Keys.UI_ACCENT_PRESET] = v }
     suspend fun setAccentColor(v: Long) = context.dataStore.edit { it[Keys.UI_ACCENT_COLOR] = v }
