@@ -10,7 +10,8 @@ android {
     ndkVersion = "27.0.12077973"
 
     defaultConfig {
-        applicationId = "com.aurora.music"
+        // Classical fork ships side-by-side with upstream Aurora
+        applicationId = "com.aurora.music.classical"
         // Classical fork: floor is API 24 (Android 7.0) per plan §2.1. API 26+ calls must be
         // guarded with SDK_INT checks (plan §63); lint NewApi findings are tracked as follow-ups.
         minSdk = 24

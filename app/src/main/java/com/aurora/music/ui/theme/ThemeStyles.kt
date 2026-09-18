@@ -145,8 +145,7 @@ fun Modifier.auroraPanel(
 
 /** Static, cached decoration: no blur pass or continuously running animation. */
 @Composable
-fun Modifier.auroraBackdrop(): Modifier {
-    val style = LocalUiPrefs.current.themeStyle
+fun Modifier.auroraBackdrop(): Modifier {    val style = LocalUiPrefs.current.themeStyle
     val colors = MaterialTheme.colorScheme
     val dark = colors.background.luminance() < 0.3f
     return background(colors.background).drawWithCache {
@@ -165,19 +164,12 @@ fun Modifier.auroraBackdrop(): Modifier {
         onDrawBehind {
             when (style) {
                 ThemeStyle.IOS -> {
-                    // linen crosshatch: two diagonal thread sets over the base fill
+                    // linen is pre-rendered to a bitmap once per size (see linenBitmap):
+                    // replaying hundreds of drawLine ops every frame was the main
+                    // scroll-jank regression vs the flat upstream theme.
                     drawRect(topGlow)
-                    val thread = colors.onBackground.copy(alpha = if (dark) 0.05f else 0.045f)
-                    val step = 4.dp.toPx()
-                    var d = -h
-                    while (d < w + h) {
-                        drawLine(thread, Offset(d, 0f), Offset(d + h, h), 0.5.dp.toPx())
-                        d += step
-                    }
-                    d = -h
-                    while (d < w + h) {
-                        drawLine(thread, Offset(d + h, 0f), Offset(d, h), 0.5.dp.toPx())
-                        d += step
+                    linenBitmap(this, colors.onBackground.copy(alpha = if (dark) 0.05f else 0.045f), dark)?.let {
+                        drawImage(it)
                     }
                 }
                 ThemeStyle.RETRO -> {
@@ -201,4 +193,65 @@ fun Modifier.auroraBackdrop(): Modifier {
             }
         }
     }
+}
+
+// ---- iOS linen: rendered once per (size, dark) into a shared bitmap, then a
+// single drawImage per frame. Keeps the skeuomorphic look at ~zero frame cost.
+private var linenBmp: androidx.compose.ui.graphics.ImageBitmap? = null
+private var linenW = 0
+private var linenH = 0
+private var linenDarkCache = false
+private val linenLock = Any()
+
+private fun linenBitmap(
+    scope: androidx.compose.ui.graphics.drawscope.DrawScope,
+    thread: androidx.compose.ui.graphics.Color,
+    dark: Boolean,
+): androidx.compose.ui.graphics.ImageBitmap? {
+    val w = scope.size.width.toInt()
+    val h = scope.size.height.toInt()
+    if (w <= 0 || h <= 0) return null
+    synchronized(linenLock) {
+        if (linenBmp == null || linenW != w || linenH != h || linenDarkCache != dark) {
+            linenBmp = renderLinen(w, h, thread, scope)
+            linenW = w
+            linenH = h
+            linenDarkCache = dark
+        }
+        return linenBmp
+    }
+}
+
+private fun renderLinen(
+    w: Int,
+    h: Int,
+    thread: androidx.compose.ui.graphics.Color,
+    scope: androidx.compose.ui.graphics.drawscope.DrawScope,
+): androidx.compose.ui.graphics.ImageBitmap {
+    val bmp = androidx.compose.ui.graphics.ImageBitmap(w, h)
+    val canvas = androidx.compose.ui.graphics.Canvas(bmp)
+    val density = scope.drawContext.density.density
+    val step = 4f * density
+    val stroke = 0.5f * density
+    val hF = h.toFloat()
+    val wF = w.toFloat()
+    var d = -hF
+    while (d < wF + hF) {
+        canvas.drawLine(
+            androidx.compose.ui.geometry.Offset(d, 0f),
+            androidx.compose.ui.geometry.Offset(d + hF, hF),
+            androidx.compose.ui.graphics.Paint().apply { color = thread; strokeWidth = stroke },
+        )
+        d += step
+    }
+    d = -hF
+    while (d < wF + hF) {
+        canvas.drawLine(
+            androidx.compose.ui.geometry.Offset(d + hF, 0f),
+            androidx.compose.ui.geometry.Offset(d, hF),
+            androidx.compose.ui.graphics.Paint().apply { color = thread; strokeWidth = stroke },
+        )
+        d += step
+    }
+    return bmp
 }

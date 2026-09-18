@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -31,23 +32,35 @@ import com.aurora.music.navigation.topLevelDestinations
 // full-bleed into the system gesture area (no inset gap).
 @Composable
 fun IosTabBar(selectedRoute: String?, onNavigate: (String) -> Unit) {
+    // hoisted: these were rebuilt on every bottom-bar recomposition (5x/s ticker)
+    val barBrush = remember {
+        Brush.verticalGradient(
+            listOf(
+                Color(0xFF5A5E63),
+                Color(0xFF2E3134),
+                Color(0xFF17181A),
+                Color(0xFF0B0C0D),
+            )
+        )
+    }
+    val glowBrush = remember {
+        Brush.radialGradient(
+            listOf(Color(0xFF5EB9F5), Color(0xFF1C7FE0).copy(alpha = 0.55f), Color.Transparent),
+            radius = 90f,
+        )
+    }
+    val idleBrush = remember {
+        Brush.radialGradient(listOf(Color.Transparent, Color.Transparent))
+    }
+    val hairline = remember { Color.White.copy(alpha = 0.22f) }
     Column(
         Modifier.fillMaxWidth()
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        Color(0xFF5A5E63),
-                        Color(0xFF2E3134),
-                        Color(0xFF17181A),
-                        Color(0xFF0B0C0D),
-                    )
-                )
-            )
+            .background(barBrush)
             .navigationBarsPadding()
             .padding(top = 5.dp, bottom = 4.dp),
     ) {
         // top hairline highlight
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.22f)))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(hairline))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             topLevelDestinations.forEach { dest ->
                 val selected = dest.route == selectedRoute
@@ -57,12 +70,7 @@ fun IosTabBar(selectedRoute: String?, onNavigate: (String) -> Unit) {
                 ) {
                     Box(
                         modifier = Modifier
-                            .background(
-                                if (selected) Brush.radialGradient(
-                                    listOf(Color(0xFF5EB9F5), Color(0xFF1C7FE0).copy(alpha = 0.55f), Color.Transparent),
-                                    radius = 90f,
-                                ) else Brush.radialGradient(listOf(Color.Transparent, Color.Transparent)),
-                            )
+                            .background(if (selected) glowBrush else idleBrush)
                             .padding(horizontal = 14.dp, vertical = 2.dp),
                         contentAlignment = Alignment.Center,
                     ) {

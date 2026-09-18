@@ -11,3 +11,4 @@ decent/*/build/
 app/.cxx/
 decent/*/.cxx/
 *.hprof
+keystore/

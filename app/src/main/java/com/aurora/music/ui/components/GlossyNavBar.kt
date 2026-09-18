@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -23,7 +24,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
@@ -56,7 +56,7 @@ fun GlossyNavBar(
                     )
                 )
             )
-            .shadow(4.dp)
+            // hairline instead of shadow: shadow() forces an offscreen layer per bar
             .padding(top = topInset),
     ) {
         // gloss highlight over the top half
@@ -108,6 +108,12 @@ fun GlossyNavBar(
                 if (onBack != null) Spacer(Modifier.width(8.dp))
             }
         }
+        // bottom hairline for separation (no shadow layer)
+        Box(
+            Modifier.fillMaxWidth().height(1.dp)
+                .background(Color.Black.copy(alpha = 0.35f))
+                .align(Alignment.BottomCenter),
+        )
     }
 }
 
