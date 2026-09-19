@@ -1,5 +1,9 @@
 package com.aurora.music.ui.ios5
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -12,24 +16,28 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -83,23 +91,93 @@ fun Ios5SwitchRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, color = Ios5Colors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(title, color = Ios5Colors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (subtitle.isNotBlank()) {
                 Text(subtitle, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
         }
         Spacer(Modifier.width(10.dp))
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = Ios5Colors.IosBlue,
-                checkedBorderColor = Ios5Colors.IosBlueDark,
-                uncheckedThumbColor = Color.White,
-                uncheckedTrackColor = Color(0xFFC7CCD4),
-                uncheckedBorderColor = Color(0xFFAEB4BE),
+        Ios5Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+/**
+ * iOS5 拨杆开关：银灰底 / 果冻蓝底 + 白色滑钮，滑钮带阴影，无 ON/OFF 字。
+ */
+@Composable
+fun Ios5Switch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val trackW = 51.dp
+    val trackH = 31.dp
+    val thumb = 27.dp
+    val thumbX by animateDpAsState(
+        targetValue = if (checked) trackW - thumb - 2.dp else 2.dp,
+        animationSpec = tween(200, easing = FastOutSlowInEasing),
+        label = "ios5switch",
+    )
+    val blueAlpha by animateFloatAsState(
+        targetValue = if (checked) 1f else 0f,
+        animationSpec = tween(200),
+        label = "ios5switchBlue",
+    )
+    val shape = RoundedCornerShape(16.dp)
+    Box(
+        modifier
+            .size(trackW, trackH)
+            .clip(shape)
+            .background(
+                Brush.verticalGradient(
+                    0f to Color(0xFFD1D1D6),
+                    1f to Color(0xFFF2F2F7),
+                ),
+            )
+            .border(1.dp, Color(0xFF8E8E93), shape)
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = Role.Switch,
+                onValueChange = onCheckedChange,
             ),
+    ) {
+        // 蓝层淡入盖住灰底
+        Box(
+            Modifier.fillMaxSize()
+                .graphicsLayer { alpha = blueAlpha }
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color(0xFF53A7EB),
+                        1f to Color(0xFF0B6EDB),
+                    ),
+                ),
+        )
+        // 顶部高光
+        Box(
+            Modifier.fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.White.copy(alpha = 0.35f),
+                        0.5f to Color.Transparent,
+                    ),
+                ),
+        )
+        // 白色滑钮
+        Box(
+            Modifier.align(Alignment.CenterStart)
+                .offset(x = thumbX)
+                .size(thumb)
+                .shadow(2.dp, CircleShape)
+                .clip(CircleShape)
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.White,
+                        1f to Color(0xFFE8E8E8),
+                    ),
+                )
+                .border(0.5.dp, Color(0xFFB0B0B0), CircleShape),
         )
     }
 }
@@ -115,19 +193,14 @@ fun Ios5SliderRow(
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(title, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+            Text(title, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             Text(valueLabel, color = Ios5Colors.TextSecondary, fontSize = 14.sp)
         }
-        Slider(
+        Ios5Slider(
             value = value,
             onValueChange = onValueChange,
-            valueRange = range,
+            range = range,
             steps = steps,
-            colors = SliderDefaults.colors(
-                thumbColor = Ios5Colors.IosBlue,
-                activeTrackColor = Ios5Colors.IosBlue,
-                inactiveTrackColor = Color.Black.copy(alpha = 0.15f),
-            ),
         )
     }
 }
@@ -175,7 +248,7 @@ fun Ios5CheckRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, color = Ios5Colors.TextPrimary, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, color = Ios5Colors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (subtitle.isNotBlank()) {
                 Text(subtitle, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
@@ -196,7 +269,7 @@ fun Ios5TextRow(
     onValueChange: (String) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-        Text(title, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        Text(title, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(6.dp))
         TextField(
             value = value,
@@ -223,7 +296,7 @@ fun Ios5SegmentRow(
     onSelect: (Int) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
-        Text(title, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        Text(title, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Row(
             Modifier.fillMaxWidth()
@@ -274,6 +347,7 @@ fun Ios5StaticText(text: String) {
         text,
         color = Ios5Colors.TextPrimary,
         fontSize = 15.sp,
+        fontWeight = FontWeight.Bold,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
     )
 }

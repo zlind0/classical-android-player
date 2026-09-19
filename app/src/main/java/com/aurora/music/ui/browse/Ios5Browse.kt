@@ -45,6 +45,8 @@ import com.aurora.music.ui.ios5.Ios5Empty
 import com.aurora.music.ui.ios5.Ios5Group
 import com.aurora.music.ui.ios5.Ios5Loading
 import com.aurora.music.ui.ios5.Ios5NavBar
+import com.aurora.music.ui.ios5.Ios5ActionsHeader
+import com.aurora.music.ui.ios5.Ios5HeaderAction
 import com.aurora.music.ui.ios5.Ios5SectionTitle
 import com.aurora.music.ui.ios5.Ios5SongRow
 import com.aurora.music.ui.ios5.ios5Rows
@@ -164,7 +166,13 @@ fun Ios5GroupDetail(
         } else {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
                 item {
-                    Ios5TracksHeader(count = songs.size, onPlayAll = onPlayAll, onShuffleAll = onShuffleAll)
+                    Ios5ActionsHeader(
+                        title = "歌曲（${songs.size}）",
+                        actions = listOf(
+                            Ios5HeaderAction("播放全部", Icons.Filled.PlayArrow, onPlayAll),
+                            Ios5HeaderAction("随机播放", Icons.Filled.Shuffle, onShuffleAll),
+                        ),
+                    )
                 }
                 ios5Rows(songs, key = { it.id }) { i, s ->
                     Ios5SongRow(s, s.id == player.current.id, player.isPlaying) {
@@ -173,61 +181,6 @@ fun Ios5GroupDetail(
                 }
             }
         }
-    }
-}
-
-/**
- * 歌曲标题行：左侧“歌曲（N）”，右侧两个低饱和浅蓝小按钮。
- * 代替之前独占一整行的大光泽按钮。
- */
-@Composable
-private fun Ios5TracksHeader(
-    count: Int,
-    onPlayAll: () -> Unit,
-    onShuffleAll: () -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            "歌曲（$count）",
-            color = Color(0xFF4A5160),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.weight(1f),
-        )
-        Ios5MiniButton("播放全部", Icons.Filled.PlayArrow, onPlayAll)
-        Spacer(Modifier.width(8.dp))
-        Ios5MiniButton("随机播放", Icons.Filled.Shuffle, onShuffleAll)
-    }
-}
-
-@Composable
-private fun Ios5MiniButton(
-    text: String,
-    icon: ImageVector,
-    onClick: () -> Unit,
-) {
-    // iOS 分段按钮质感：浅色高光对半开 + 灰描边 + 深灰字，比之前扁一号
-    val ink = Color(0xFF3E444D)
-    val shape = RoundedCornerShape(7.dp)
-    Row(
-        Modifier.clip(shape)
-            .background(
-                androidx.compose.ui.graphics.Brush.verticalGradient(
-                    0f to Color.White,
-                    1f to Color(0xFFDDE1E7),
-                ),
-            )
-            .border(1.dp, Color(0xFF9AA0A8), shape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, null, tint = ink, modifier = Modifier.size(14.dp))
-        Spacer(Modifier.width(4.dp))
-        Text(text, color = ink, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
 
@@ -372,10 +325,12 @@ fun Ios5Detail(
                     }
                     if (d.tracks.isNotEmpty()) {
                         item {
-                            Ios5TracksHeader(
-                                count = d.tracks.size,
-                                onPlayAll = { onPlayCollection(kind, id) },
-                                onShuffleAll = { onShuffleCollection(kind, id) },
+                            Ios5ActionsHeader(
+                                title = "歌曲（${d.tracks.size}）",
+                                actions = listOf(
+                                    Ios5HeaderAction("播放全部", Icons.Filled.PlayArrow, onClick = { onPlayCollection(kind, id) }),
+                                    Ios5HeaderAction("随机播放", Icons.Filled.Shuffle, onClick = { onShuffleCollection(kind, id) }),
+                                ),
                             )
                         }
                         // 专辑内：同一张碟，只留曲名

@@ -45,8 +45,6 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -75,6 +73,7 @@ import com.aurora.music.ui.components.Artwork
 import com.aurora.music.ui.components.formatTime
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5Sans
+import com.aurora.music.ui.ios5.Ios5Slider
 import com.aurora.music.viewmodel.PlayerUiState
 import com.aurora.music.viewmodel.PlayerViewModel
 import com.aurora.music.viewmodel.RepeatMode
@@ -322,15 +321,10 @@ fun Ios5PlayerDeck(
                             )
                         }
                         Spacer(Modifier.height(6.dp))
-                        Slider(
+                        Ios5Slider(
                             value = state.progress.coerceIn(0f, 1f),
                             onValueChange = { playerVM.seekTo(it) },
                             modifier = Modifier.fillMaxWidth(),
-                            colors = SliderDefaults.colors(
-                                thumbColor = Ios5Colors.IosBlue,
-                                activeTrackColor = Ios5Colors.IosBlue,
-                                inactiveTrackColor = Color.Black.copy(alpha = 0.15f),
-                            ),
                         )
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text(formatTime(state.positionSec.toInt()), fontSize = 12.sp, color = Ios5Colors.TextSecondary)

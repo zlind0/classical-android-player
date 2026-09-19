@@ -19,10 +19,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -33,6 +29,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.aurora.music.R
+import com.aurora.music.ui.ios5.Ios5Slider
+import com.aurora.music.ui.ios5.Ios5Switch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,12 +59,11 @@ fun SpeedPitchSheet(
                 title = stringResource(R.string.sheet_speed),
                 value = "${"%.2f".format(speed)}x",
             ) {
-                Slider(
+                Ios5Slider(
                     value = speed,
                     onValueChange = onSpeed,
-                    valueRange = 0.5f..2.0f,
+                    range = 0.5f..2.0f,
                     steps = 29,
-                    colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary),
                 )
                 QuickPicks(listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f), speed) { onSpeed(it) }
             }
@@ -78,10 +75,9 @@ fun SpeedPitchSheet(
                     Text(stringResource(R.string.sheet_match_pitch), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(stringResource(R.string.sheet_pitch_follows), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Switch(
+                Ios5Switch(
                     checked = matchPitch,
                     onCheckedChange = onMatchPitch,
-                    colors = SwitchDefaults.colors(checkedThumbColor = MaterialTheme.colorScheme.onPrimary, checkedTrackColor = MaterialTheme.colorScheme.primary),
                 )
             }
 
@@ -92,12 +88,11 @@ fun SpeedPitchSheet(
                     title = stringResource(R.string.sheet_pitch),
                     value = "${if (pitch >= 0) "+" else ""}${"%.1f".format(pitch)} st",
                 ) {
-                    Slider(
+                    Ios5Slider(
                         value = pitch,
                         onValueChange = onPitch,
-                        valueRange = -6f..6f,
+                        range = -6f..6f,
                         steps = 11,
-                        colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.tertiary, activeTrackColor = MaterialTheme.colorScheme.tertiary),
                     )
                 }
             }

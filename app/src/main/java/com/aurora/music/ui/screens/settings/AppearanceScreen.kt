@@ -292,7 +292,7 @@ private fun ThemeStylePicker(prefs: UiPrefs, onSelect: (Int) -> Unit) {
             }
         }
         val current = ThemeIdentities.firstOrNull { it.id == prefs.themeStyle } ?: ThemeIdentities.first()
-        Text(themeDescription(current.id), color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        Text(themeDescription(current.id), color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
         Text(themeDetail(current.id), color = Ios5Colors.TextSecondary, fontSize = 13.sp)
         if (prefs.themeStyle != ThemeStyle.AURORA) {
             Text(stringResource(R.string.appearance_non_aurora_note), color = Ios5Colors.TextSecondary, fontSize = 13.sp)

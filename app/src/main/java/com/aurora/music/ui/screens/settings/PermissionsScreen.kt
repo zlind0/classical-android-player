@@ -146,7 +146,7 @@ private fun PermRow(
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(title, color = Ios5Colors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                Text(title, color = Ios5Colors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 if (subtitle.isNotBlank()) {
                     Text(subtitle, color = Ios5Colors.TextSecondary, fontSize = 13.sp)
                 }

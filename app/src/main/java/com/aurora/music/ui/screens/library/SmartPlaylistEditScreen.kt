@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -41,10 +42,12 @@ import androidx.compose.ui.unit.sp
 import com.aurora.music.R
 import com.aurora.music.data.SmartPlaylist
 import com.aurora.music.data.SmartRule
-import com.aurora.music.ui.ios5.Ios5ActionRow
+import com.aurora.music.ui.ios5.Ios5ActionsHeader
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5GlossButton
+import com.aurora.music.ui.ios5.Ios5Group
+import com.aurora.music.ui.ios5.Ios5HeaderAction
 import com.aurora.music.ui.ios5.Ios5SegmentRow
 import com.aurora.music.ui.ios5.Ios5SettingsPage
 import com.aurora.music.ui.ios5.Ios5TextRow
@@ -175,25 +178,32 @@ fun SmartPlaylistEditScreen(
                 onSelect = { i -> onUpdate { it.copy(matchAll = i == 0) } },
             )
         }
-        ios5Section(strRules) {
-            if (rules.isEmpty()) {
-                Ios5ActionRow(title = strAddRule, onClick = { onUpdate { it.copy(rules = rules + SmartRule()) } })
-            } else {
-                rules.forEachIndexed { i, rule ->
-                    RuleRow(
-                        rule = rule,
-                        onChange = { r -> onUpdate { it.copy(rules = rules.toMutableList().apply { set(i, r) }) } },
-                        onRemove = { onUpdate { it.copy(rules = rules.toMutableList().apply { removeAt(i) }) } },
-                    )
-                    if (i < rules.size - 1) Ios5CellDivider()
+        item {
+            Ios5ActionsHeader(
+                title = strRules,
+                actions = listOf(
+                    Ios5HeaderAction(strAddRule, Icons.Filled.Add, onClick = {
+                        onUpdate { it.copy(rules = rules + SmartRule()) }
+                    }),
+                ),
+            )
+            if (rules.isNotEmpty()) {
+                Ios5Group(Modifier.padding(horizontal = 12.dp)) {
+                    rules.forEachIndexed { i, rule ->
+                        RuleRow(
+                            rule = rule,
+                            onChange = { r -> onUpdate { it.copy(rules = rules.toMutableList().apply { set(i, r) }) } },
+                            onRemove = { onUpdate { it.copy(rules = rules.toMutableList().apply { removeAt(i) }) } },
+                        )
+                        if (i < rules.size - 1) Ios5CellDivider()
+                    }
                 }
-                Ios5ActionRow(title = strAddRule, onClick = { onUpdate { it.copy(rules = rules + SmartRule()) } })
             }
         }
         ios5Section(strSort) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(strSort, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                    Text(strSort, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     Dropdown(
                         options = sortOptions,
                         selected = sortSelected,
@@ -211,7 +221,7 @@ fun SmartPlaylistEditScreen(
                 }
                 Ios5CellDivider()
                 Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(strLimit, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                    Text(strLimit, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     OutlinedTextField(
                         value = limitText,
                         onValueChange = { v -> onUpdate { it.copy(limit = v.filter { c -> c.isDigit() }.toIntOrNull() ?: 0) } },
@@ -311,7 +321,7 @@ private fun Dropdown(options: List<String>, selected: Int, onSelect: (Int) -> Un
         ) {
             Text(
                 options.getOrElse(selected) { options.first() },
-                fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Ios5Colors.TextPrimary,
+                fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Ios5Colors.TextPrimary,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
             )
             Icon(Icons.Filled.ArrowDropDown, null, tint = Ios5Colors.TextSecondary, modifier = Modifier.size(20.dp))

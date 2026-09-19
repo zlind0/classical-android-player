@@ -3,8 +3,13 @@ package com.aurora.music.ui.ios5
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -15,16 +20,31 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
@@ -216,6 +236,75 @@ fun Ios5SectionTitle(text: String) {
     )
 }
 
+data class Ios5HeaderAction(
+    val text: String,
+    val icon: ImageVector,
+    val onClick: () -> Unit,
+    val danger: Boolean = false,
+)
+
+/**
+ * 分组标题行：左侧标题，右侧一排浅色小按钮。
+ * 抽象自专辑详情页的“歌曲 + 播放全部/随机播放”——凡是“列表+操作”的分组都用它，
+ * 不要再为每个页面手写一遍。
+ */
+@Composable
+fun Ios5ActionsHeader(
+    title: String,
+    actions: List<Ios5HeaderAction>,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            title,
+            color = Color(0xFF4A5160),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        actions.forEachIndexed { i, a ->
+            if (i > 0) Spacer(Modifier.width(8.dp))
+            Ios5MiniButton(text = a.text, icon = a.icon, onClick = a.onClick, danger = a.danger)
+        }
+    }
+}
+
+/**
+ * 浅色分段质感小按钮：白→浅灰平滑渐变 + 灰描边 + 深灰字，比光泽大按钮扁一号。
+ * 用于标题行右侧的操作，不独占行。
+ */
+@Composable
+fun Ios5MiniButton(
+    text: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    danger: Boolean = false,
+) {
+    val ink = if (danger) Color(0xFFC03232) else Color(0xFF3E444D)
+    val shape = RoundedCornerShape(7.dp)
+    Row(
+        Modifier.clip(shape)
+            .background(
+                Brush.verticalGradient(
+                    0f to Color.White,
+                    1f to Color(0xFFDDE1E7),
+                ),
+            )
+            .border(1.dp, Color(0xFF9AA0A8), shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = ink, modifier = Modifier.size(14.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(text, color = ink, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+    }
+}
+
 /** One tappable row inside an [Ios5Group]. */
 @Composable
 fun Ios5Cell(
@@ -387,6 +476,132 @@ fun Ios5SongRow(
 fun Ios5Loading() {
     Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
         LottieLoader(modifier = Modifier.size(72.dp))
+    }
+}
+
+/**
+ * iOS5 滑杆：横向大槽 + 白色豆豆。左半蓝填充，豆豆可拖、可点跳；
+ * steps > 0 时松手/点按吸附到刻度。
+ */
+@Composable
+fun Ios5Slider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    range: ClosedFloatingPointRange<Float> = 0f..1f,
+    steps: Int = 0,
+    modifier: Modifier = Modifier,
+) {
+    val scope = rememberCoroutineScope()
+    var dragging by remember { mutableStateOf(false) }
+    var dragFrac by remember { mutableFloatStateOf(0f) }
+    // 拖动中直接跟手，平时跟外部 value
+    val shown = if (dragging) {
+        dragFrac * (range.endInclusive - range.start) + range.start
+    } else {
+        value
+    }
+    val frac = ((shown - range.start) / (range.endInclusive - range.start)).coerceIn(0f, 1f)
+
+    fun snap(v: Float): Float {
+        if (steps <= 0) return v.coerceIn(range.start, range.endInclusive)
+        val n = steps + 1
+        val tick = ((v - range.start) / (range.endInclusive - range.start) * n).roundToInt().coerceIn(0, n)
+        return range.start + (range.endInclusive - range.start) * tick / n
+    }
+
+    BoxWithConstraints(
+        modifier
+            .fillMaxWidth()
+            .height(34.dp),
+    ) {
+        val density = LocalDensity.current
+        val trackH = 10.dp
+        val thumbD = 28.dp
+        val thumbPx = with(density) { thumbD.toPx() }
+        val wPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
+        val centerX = thumbPx / 2 + frac * (wPx - thumbPx)
+        Box(
+            Modifier.fillMaxSize()
+                .pointerInput(range, steps, wPx) {
+                    detectTapGestures { offset ->
+                        val f = (offset.x / size.width).coerceIn(0f, 1f)
+                        onValueChange(snap(range.start + (range.endInclusive - range.start) * f))
+                    }
+                }
+                .draggable(
+                    state = rememberDraggableState { delta ->
+                        val nf = (dragFrac + delta / wPx).coerceIn(0f, 1f)
+                        dragFrac = nf
+                        onValueChange(range.start + (range.endInclusive - range.start) * nf)
+                    },
+                    orientation = Orientation.Horizontal,
+                    onDragStarted = {
+                        dragging = true
+                        dragFrac = frac
+                    },
+                    onDragStopped = {
+                        dragging = false
+                        scope.launch { onValueChange(snap(value)) }
+                    },
+                ),
+        ) {
+        // 槽：银灰渐变 + 灰描边
+        Box(
+            Modifier.align(Alignment.CenterStart)
+                .fillMaxWidth()
+                .height(trackH)
+                .clip(RoundedCornerShape(5.dp))
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color(0xFFC9CED6),
+                        0.5f to Color(0xFFE4E7EC),
+                        1f to Color(0xFFF4F5F7),
+                    ),
+                )
+                .border(1.dp, Color(0xFF9AA0A8), RoundedCornerShape(5.dp)),
+        )
+        // 左半蓝填充
+        if (centerX > 1f) {
+            Box(
+                Modifier.align(Alignment.CenterStart)
+                    .height(trackH)
+                    .width(with(density) { centerX.toDp() })
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color(0xFF53A7EB),
+                            1f to Color(0xFF0B6EDB),
+                        ),
+                    ),
+            )
+        }
+        // 豆豆：白瓷 + 阴影，高光
+        Box(
+            Modifier.align(Alignment.CenterStart)
+                .offset { IntOffset((centerX - thumbPx / 2).roundToInt(), 0) }
+                .size(thumbD)
+                .shadow(2.dp, CircleShape)
+                .clip(CircleShape)
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.White,
+                        0.5f to Color(0xFFF5F5F7),
+                        1f to Color(0xFFD9DCE1),
+                    ),
+                )
+                .border(1.dp, Color(0xFF9AA0A8), CircleShape),
+        ) {
+            Box(
+                Modifier.fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color.White.copy(alpha = 0.7f),
+                            0.45f to Color.Transparent,
+                        ),
+                    ),
+            )
+        }
+        }
     }
 }
 

@@ -2,7 +2,8 @@ package com.aurora.music.ui.screens.settings
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -11,6 +12,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CleaningServices
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,6 +45,7 @@ import com.aurora.music.data.ScanProgress
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5GlossButton
+import com.aurora.music.ui.ios5.Ios5MiniButton
 import com.aurora.music.ui.ios5.Ios5NavRow
 import com.aurora.music.ui.ios5.Ios5SettingsPage
 import com.aurora.music.ui.ios5.Ios5StaticText
@@ -227,26 +234,16 @@ private fun RootCard(
             Ios5StaticText(strScanning)
         }
         Ios5CellDivider()
-        Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 2.dp)) {
-            RootAction(strPlay, Modifier.weight(1f), onPlay)
-            RootAction(strScan, Modifier.weight(1f), onScan)
-            RootAction(strClean, Modifier.weight(1f), onClean)
-            Text(
-                strRemove,
-                fontSize = 15.sp, fontWeight = FontWeight.Bold,
-                color = Color(0xFFD63A3A),
-                modifier = Modifier.weight(1f).clickable(onClick = onRemove).padding(vertical = 12.dp),
-            )
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Box(Modifier.weight(1f)) { Ios5MiniButton(strPlay, Icons.Filled.PlayArrow, onPlay) }
+            Box(Modifier.weight(1f)) { Ios5MiniButton(strScan, Icons.Filled.Refresh, onScan) }
+            Box(Modifier.weight(1f)) { Ios5MiniButton(strClean, Icons.Filled.CleaningServices, onClean) }
+            Box(Modifier.weight(1f)) { Ios5MiniButton(strRemove, Icons.Filled.Delete, onRemove, danger = true) }
         }
     }
-}
-
-@Composable
-private fun RootAction(label: String, modifier: Modifier, onClick: () -> Unit) {
-    Text(
-        label, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Ios5Colors.IosBlue,
-        modifier = modifier.clickable(onClick = onClick).padding(vertical = 12.dp),
-    )
 }
 
 private fun fmtTime(ms: Long): String = runCatching {
