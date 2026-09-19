@@ -42,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
@@ -59,6 +60,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
+import com.aurora.music.AuroraApplication
+import com.aurora.music.data.lookupMergedTitle
+import com.aurora.music.data.mergeEnabledFor
 import com.aurora.music.ui.components.Artwork
 import com.aurora.music.ui.components.formatTime
 import com.aurora.music.ui.ios5.Ios5Sans
@@ -167,6 +171,16 @@ fun Ios5PlayerPage(
     val remaining = (state.durationSec - state.positionSec.toInt()).coerceAtLeast(0)
     val posLabel = "${state.currentIndex + 1} of ${state.queue.size.coerceAtLeast(1)}"
 
+    // 合并标题：扫描预计算表 + 内存曲目表同步查出，无 IO、无协程、无分词
+    val container = (context.applicationContext as AuroraApplication).container
+    val roots by container.musicRoots.roots.collectAsStateWithLifecycle(initialValue = emptyList())
+    val libMerges by container.localLibrary.albumMerges.collectAsStateWithLifecycle()
+    val merged = remember(song.id, song.albumId, libMerges, roots) {
+        val tracks = container.localLibrary.albumTracksSorted(song.albumId)
+        if (tracks.isEmpty() || !mergeEnabledFor(roots, tracks)) null
+        else lookupMergedTitle(libMerges[song.albumId], tracks, song.id)
+    }
+
     BoxWithConstraints(
         Modifier.fillMaxSize().background(Color(0xFFF4F4F6)),
     ) {
@@ -190,7 +204,7 @@ fun Ios5PlayerPage(
                 .background(iPodBlack)
                 .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + third),
         ) {
-            // 第一行：返回 | 艺人 | 队列（同高对齐）
+            // 第一行：返回 | 艺人/大标题 | 队列（同高对齐）
             Row(
                 Modifier.fillMaxWidth().height(44.dp + third).padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -198,9 +212,13 @@ fun Ios5PlayerPage(
                 IpodBarButton(onClick = onCollapse) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBackIos, "返回", tint = Color.White, modifier = Modifier.size(20.dp))
                 }
+                val firstLine = merged?.first ?: song.artist.ifBlank { " " }
                 Text(
-                    song.artist.ifBlank { " " },
-                    color = Color(0xFF9AA0AB), fontSize = 13.sp, fontFamily = Ios5Sans,
+                    firstLine,
+                    color = if (merged != null) Color.White else Color(0xFF9AA0AB),
+                    fontSize = if (merged != null) 17.sp else 13.sp,
+                    fontWeight = if (merged != null) FontWeight.Bold else FontWeight.Normal,
+                    fontFamily = Ios5Sans,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
                 )
@@ -208,10 +226,14 @@ fun Ios5PlayerPage(
                     Icon(Icons.AutoMirrored.Filled.QueueMusic, "队列", tint = Color.White, modifier = Modifier.size(20.dp))
                 }
             }
-            // 第二行：曲名独占一行
+            // 第二行：曲名/小标题独占一行
+            val secondLine = merged?.second?.ifBlank { song.title } ?: song.title.ifBlank { "未在播放" }
             Text(
-                song.title.ifBlank { "未在播放" },
-                color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
+                secondLine,
+                color = if (merged != null) Color(0xFFB9BEC7) else Color.White,
+                fontSize = if (merged != null) 14.sp else 19.sp,
+                fontWeight = if (merged != null) FontWeight.Normal else FontWeight.Bold,
+                fontFamily = Ios5Sans,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp + third),
             )

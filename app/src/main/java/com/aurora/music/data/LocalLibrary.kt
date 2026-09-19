@@ -10,6 +10,12 @@ import com.aurora.music.model.Artist
 import com.aurora.music.model.Song
 import com.aurora.music.util.TrackMatch
 import com.aurora.music.util.accentFor
+import com.aurora.titlemerge.MergeInput
+import com.aurora.titlemerge.MergedRow
+import com.aurora.titlemerge.mergeTracks
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -31,6 +37,11 @@ class LocalLibrary(
     private var byId: Map<String, Song> = emptyMap()
 
     @Volatile private var matchIndex: Map<String, List<Song>> = emptyMap()
+
+    // 扫描时预计算的每专辑标题合并表（后台线程一次算好，UI 只查表）。
+    // 顺序与 albumTracksSorted 完全一致，index 可直接对上。
+    private val _albumMerges = MutableStateFlow<Map<String, List<MergedRow>>>(emptyMap())
+    val albumMerges: StateFlow<Map<String, List<MergedRow>>> = _albumMerges.asStateFlow()
 
     @Volatile private var dirOf: Map<String, String> = emptyMap()
 
@@ -87,6 +98,10 @@ class LocalLibrary(
     }
     fun songsIn(album: Album): List<Song> = songs.filter { it.albumId == album.id }
     fun songsByAlbumId(albumId: String): List<Song> = songs.filter { it.albumId == albumId }
+
+    /** 专辑曲目标准序：碟号 → 曲号 → 标题 → 文件名（展示与合并都用它对齐序号）。 */
+    fun albumTracksSorted(albumId: String): List<Song> =
+        songsByAlbumId(albumId).sortedWith(ALBUM_TRACK_ORDER)
     fun songsByArtistId(artistId: String): List<Song> = songs.filter { it.artistId == artistId }
     fun albumsByArtistId(artistId: String): List<Album> =
         songs.filter { it.artistId == artistId }.map { it.albumId }.distinct()
@@ -248,6 +263,11 @@ class LocalLibrary(
                 )
             }
             .sortedBy { it.name.lowercase() }
+        // 标题合并表：同一份标准序上一次算好，UI 查表即可不再分词
+        _albumMerges.value = albums.associate { a ->
+            val ordered = songsByAlbumId(a.id).sortedWith(ALBUM_TRACK_ORDER)
+            a.id to mergeTracks(ordered.map { MergeInput(it.id, it.title) })
+        }
     }
 
     private companion object {
@@ -255,5 +275,12 @@ class LocalLibrary(
 
         /** 跨文件夹/跨艺人同名即同专辑（代价：标题撞名的不同专辑会被并到一起）。 */
         fun albumKey(title: String): String = "album::" + title.trim().lowercase()
+
+        /** 碟号 → 曲号 → 标题 → 文件名；缺号沉底。 */
+        val ALBUM_TRACK_ORDER: Comparator<Song> =
+            compareBy<Song> { if (it.discNumber == 0) Int.MAX_VALUE else it.discNumber }
+                .thenBy { if (it.trackNumber == 0) Int.MAX_VALUE else it.trackNumber }
+                .thenBy { it.title.lowercase() }
+                .thenBy { it.path.substringAfterLast('/').lowercase() }
     }
 }

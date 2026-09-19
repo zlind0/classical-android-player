@@ -175,6 +175,7 @@ fun MusicSourcesScreen(
                             }
                         },
                         onToggle = { v -> scope.launch { container.musicRoots.setEnabled(root.id, v) } },
+                        onMerge = { v -> scope.launch { container.musicRoots.setMergeTitles(root.id, v) } },
                         onRemove = {
                             scanJob?.cancel()
                             scope.launch {
@@ -208,6 +209,7 @@ private fun RootCard(
     onPlay: () -> Unit,
     onScan: () -> Unit,
     onToggle: (Boolean) -> Unit,
+    onMerge: (Boolean) -> Unit,
     onRemove: () -> Unit,
     onClean: () -> Unit,
 ) {
@@ -228,6 +230,13 @@ private fun RootCard(
             subtitle = "",
             checked = root.enabled,
             onCheckedChange = onToggle,
+        )
+        Ios5CellDivider()
+        Ios5SwitchRow(
+            title = stringResource(R.string.sources_merge),
+            subtitle = stringResource(R.string.sources_merge_sub),
+            checked = root.mergeTitles,
+            onCheckedChange = onMerge,
         )
         if (progress != null) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp))

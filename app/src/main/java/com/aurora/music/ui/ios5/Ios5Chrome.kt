@@ -35,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -392,11 +393,16 @@ fun <T> LazyListScope.ios5Rows(
     data: List<T>,
     key: ((T) -> Any)? = null,
     dividers: Boolean = true,
+    // 贴边留白（画在卡片描边之外）：给连续行与相邻卡片之间凑出统一间距用
+    topInset: Dp = 0.dp,
+    bottomInset: Dp = 0.dp,
     row: @Composable (index: Int, item: T) -> Unit,
 ) {
     items(data.size, key = key?.let { k -> { i: Int -> k(data[i]) } }) { i ->
         Column(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+                .then(if (i == 0 && topInset > 0.dp) Modifier.padding(top = topInset) else Modifier)
+                .then(if (i == data.size - 1 && bottomInset > 0.dp) Modifier.padding(bottom = bottomInset) else Modifier)
                 .ios5RowChrome(isFirst = i == 0, isLast = i == data.size - 1),
         ) {
             if (dividers && i > 0) Ios5CellDivider()

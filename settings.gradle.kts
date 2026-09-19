@@ -22,6 +22,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "Aurora"
 include(":app")
+include(":lib-titlemerge")
 
 // Vendored decent-player USB bit-perfect driver + Media3 wrapper (MIT). Experimental.
 include(":decent-usb-audio-driver")

@@ -50,7 +50,11 @@ class MusicRootsStore(private val context: Context) {
 
     private fun parseRoots(json: String?): List<MusicRoot> = runCatching {
         if (json.isNullOrBlank()) emptyList()
-        else (gson.fromJson<List<MusicRoot>>(json, rootsType) ?: emptyList())
+        else (gson.fromJson<List<MusicRoot>>(json, rootsType) ?: emptyList()).let { list ->
+            // 老存档没有 mergeTitles 键（Gson 缺键读成 false），一次性迁成默认开
+            if (json.contains("\"mergeTitles\"")) list
+            else list.map { it.copy(mergeTitles = true) }
+        }
     }.getOrDefault(emptyList())
 
     private fun readRoots(): List<MusicRoot> = runCatching {
@@ -112,6 +116,10 @@ class MusicRootsStore(private val context: Context) {
 
     suspend fun setEnabled(id: Long, enabled: Boolean) {
         persistRoots(_roots.value.map { if (it.id == id) it.copy(enabled = enabled) else it })
+    }
+
+    suspend fun setMergeTitles(id: Long, merge: Boolean) {
+        persistRoots(_roots.value.map { if (it.id == id) it.copy(mergeTitles = merge) else it })
     }
 
     suspend fun stampScan(id: Long) {

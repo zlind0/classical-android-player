@@ -102,8 +102,10 @@ dependencies {
     implementation(libs.jaudiotagger)
     // Experimental USB bit-perfect audio driver (vendored decent-player, MIT).
     implementation(project(":decent-usb-audio-wrapper-media3"))
+    implementation(project(":lib-titlemerge"))
     // FFmpeg decoder (Jellyfin build) — float32 output for all formats, required for bit-perfect
     // non-local / non-FLAC content through the USB driver. Picked up by EXTENSION_RENDERER_MODE_PREFER.
     implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.5.0+1")
     debugImplementation(libs.androidx.ui.tooling)
+    testImplementation("junit:junit:4.13.2")
 }

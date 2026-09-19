@@ -142,6 +142,8 @@
     <string name="sources_remove">删除</string>
     <string name="sources_add">添加音乐文件夹</string>
     <string name="sources_add_sub">内部存储、SD 卡或 USB</string>
+    <string name="sources_merge">标题合并</string>
+    <string name="sources_merge_sub">把这个曲库里前几个单词相同的连续曲目合并显示</string>
     <string name="sources_footnote">扫描只会进入上面的文件夹，本机其他位置的文件会被忽略。</string>
     <string name="sources_need_read_title">需要存储权限</string>
     <string name="sources_need_read_sub">允许 Aurora 读取本机音频文件。</string>

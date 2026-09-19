@@ -145,6 +145,8 @@
     <string name="sources_remove">Remove</string>
     <string name="sources_add">Add music folder</string>
     <string name="sources_add_sub">Internal, SD card or USB</string>
+    <string name="sources_merge">Merge movement titles</string>
+    <string name="sources_merge_sub">Group consecutive tracks sharing leading words in this library</string>
     <string name="sources_footnote">Scanning stays inside the folders above. Files elsewhere on the device are ignored.</string>
     <string name="sources_need_read_title">Storage permission needed</string>
     <string name="sources_need_read_sub">Allow Aurora to read audio files on this device.</string>

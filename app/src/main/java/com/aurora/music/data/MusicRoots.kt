@@ -11,6 +11,7 @@ data class MusicRoot(
     val storageType: StorageType,
     val enabled: Boolean = true,
     val lastScanTime: Long = 0L,
+    val mergeTitles: Boolean = true,
 )
 
 // One indexed audio file. size+lastModified drive incremental scans (plan §11);

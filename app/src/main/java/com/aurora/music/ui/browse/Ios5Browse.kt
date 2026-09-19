@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -25,16 +27,25 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.aurora.music.AuroraApplication
+import com.aurora.music.data.AlbumRow
+import com.aurora.music.data.mapMergeRows
+import com.aurora.music.data.mergeEnabledFor
 import com.aurora.music.model.Album
 import com.aurora.music.model.Song
 import com.aurora.music.navigation.Ios5Routes
@@ -274,6 +285,23 @@ fun Ios5Detail(
             st.data == null -> Ios5Empty("找不到内容")
             else -> {
                 val d = st.data!!
+                // 注意：LazyColumn 的 content 不是 @Composable 上下文，remember/状态读取
+                // 只能放在这里（普通 @Composable 函数体），下面只做纯发射。
+                val mergeContainer = (LocalContext.current.applicationContext as AuroraApplication).container
+                val mergeRoots by mergeContainer.musicRoots.roots.collectAsStateWithLifecycle(initialValue = emptyList())
+                // 扫描预计算好的合并表，直接查，UI 不再分词
+                val libMerges by mergeContainer.localLibrary.albumMerges.collectAsStateWithLifecycle()
+                val mergeRows: List<AlbumRow> = remember(kind, id, d.tracks, libMerges, mergeRoots) {
+                    if (kind == "album" && mergeEnabledFor(mergeRoots, d.tracks)) mapMergeRows(libMerges[id], d.tracks)
+                    else d.tracks.mapIndexed { i, s -> AlbumRow.Single(s, i) }
+                }
+                var mergeExpanded by remember(kind, id, d.tracks) { mutableStateOf(setOf<String>()) }
+                val mergeKey: (AlbumRow) -> String = { row ->
+                    when (row) {
+                        is AlbumRow.Single -> "s:${row.song.id}"
+                        is AlbumRow.Group -> "g:${row.items.first().index}:${row.major}"
+                    }
+                }
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
                     item {
                         Spacer(Modifier.height(8.dp))
@@ -333,14 +361,88 @@ fun Ios5Detail(
                                 ),
                             )
                         }
-                        // 专辑内：同一张碟，只留曲名
-                        val minimal = kind == "album"
-                        ios5Rows(d.tracks, key = { it.id }) { i, s ->
-                            Ios5SongRow(
-                                s, s.id == player.current.id, player.isPlaying,
-                                showArtwork = !minimal, showSubtitle = !minimal,
-                            ) {
-                                onPlaySongs(d.tracks, i)
+                        if (kind == "album") {
+                            // 组卡上下各 4dp；连续单曲连体，只在贴组的一边补 4dp：
+                            // 组↔组 = 8，组↔单 = 8，单↔单 = 0，没有双倍
+                            var segIdx = 0
+                            var prevWasGroup = false
+                            while (segIdx < mergeRows.size) {
+                                val segRow = mergeRows[segIdx]
+                                if (segRow is AlbumRow.Group) {
+                                    val gkey = mergeKey(segRow)
+                                    val open = gkey in mergeExpanded
+                                    val hasCurrent = segRow.items.any { it.song.id == player.current.id }
+                                    item(key = gkey) {
+                                        Ios5Group(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                                            Row(
+                                                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                            ) {
+                                                Text(
+                                                    segRow.major,
+                                                    color = if (hasCurrent) com.aurora.music.ui.ios5.Ios5Colors.IosBlue
+                                                    else com.aurora.music.ui.ios5.Ios5Colors.TextPrimary,
+                                                    fontSize = 16.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f)
+                                                        .clickable { onPlaySongs(d.tracks, segRow.items.first().index) },
+                                                )
+                                                Icon(
+                                                    if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                                                    if (open) "收起" else "展开",
+                                                    tint = com.aurora.music.ui.ios5.Ios5Colors.TextSecondary,
+                                                    modifier = Modifier.size(40.dp).clip(RoundedCornerShape(20.dp))
+                                                        .clickable {
+                                                            mergeExpanded = if (open) mergeExpanded - gkey else mergeExpanded + gkey
+                                                        }.padding(8.dp),
+                                                )
+                                            }
+                                            if (open) {
+                                                Ios5CellDivider()
+                                                segRow.items.forEachIndexed { vi, subItem ->
+                                                    if (vi > 0) Ios5CellDivider()
+                                                    val sub = subItem.song.copy(title = subItem.minor.ifBlank { subItem.song.title })
+                                                    Ios5SongRow(
+                                                        sub, subItem.song.id == player.current.id, player.isPlaying,
+                                                        showArtwork = false, showSubtitle = false,
+                                                    ) {
+                                                        onPlaySongs(d.tracks, subItem.index)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    segIdx++
+                                    prevWasGroup = true
+                                } else {
+                                    var runEnd = segIdx
+                                    while (runEnd < mergeRows.size && mergeRows[runEnd] is AlbumRow.Single) runEnd++
+                                    val nextIsGroup = runEnd < mergeRows.size && mergeRows[runEnd] is AlbumRow.Group
+                                    val run = mergeRows.subList(segIdx, runEnd).map { it as AlbumRow.Single }
+                                    ios5Rows(
+                                        run,
+                                        key = { "s:${it.song.id}" },
+                                        topInset = if (prevWasGroup) 4.dp else 0.dp,
+                                        bottomInset = if (nextIsGroup) 4.dp else 0.dp,
+                                    ) { _, single ->
+                                        Ios5SongRow(
+                                            single.song, single.song.id == player.current.id, player.isPlaying,
+                                            showArtwork = false, showSubtitle = false,
+                                        ) {
+                                            onPlaySongs(d.tracks, single.index)
+                                        }
+                                    }
+                                    segIdx = runEnd
+                                    prevWasGroup = false
+                                }
+                            }
+                        } else {
+                            ios5Rows(d.tracks, key = { it.id }) { i, s ->
+                                Ios5SongRow(s, s.id == player.current.id, player.isPlaying) {
+                                    onPlaySongs(d.tracks, i)
+                                }
                             }
                         }
                         if (st.canLoadMore) {
