@@ -34,7 +34,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -69,18 +68,6 @@ import com.aurora.music.viewmodel.HomeViewModel
 import com.aurora.music.viewmodel.Ios5BrowseViewModel
 import com.aurora.music.viewmodel.PlayerViewModel
 import kotlinx.coroutines.launch
-
-/**
- * 可见的播放面吃掉多余手势，防止点透到下面的内容面。
- * 不可见时必须彻底拿掉，否则全屏透明层会吞掉主界面所有触摸。
- */
-private fun Modifier.blockTouch(): Modifier = pointerInput(Unit) {
-    awaitPointerEventScope {
-        while (true) {
-            awaitPointerEvent().changes.forEach { it.consume() }
-        }
-    }
-}
 
 @Composable
 fun Ios5App() {
@@ -524,7 +511,7 @@ fun Ios5App() {
             } // 内容面
 
             // ---- 播放面（整页 iPod 播放器，翻转进入） ----
-            // 可见时吞掉多余手势；不可见时不挂任何手势，让触摸穿透回主界面。
+            // 页面本身全屏不透明，触摸漏不下去，不需要额外拦截层。
             // 动画结束后卸载，避免两棵树常驻耗性能。
             if (playerState.expanded || flip > 0.02f) {
             Box(
@@ -533,8 +520,7 @@ fun Ios5App() {
                         rotationY = flip * 180f - 180f
                         cameraDistance = 8 * flipDensity.density
                         alpha = if (flip >= 0.5f) 1f else 0f
-                    }
-                    .then(if (flip >= 0.5f) Modifier.blockTouch() else Modifier),
+                    },
             ) {
                 if (playerState.hasTrack) {
                     Ios5PlayerPage(
