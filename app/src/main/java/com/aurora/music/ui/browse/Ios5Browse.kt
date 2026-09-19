@@ -1,5 +1,8 @@
 package com.aurora.music.ui.browse
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,10 +19,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -153,10 +164,8 @@ fun Ios5GroupDetail(
         } else {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
                 item {
-                    Spacer(Modifier.height(8.dp))
-                    Ios5PlayButtons(onPlayAll = onPlayAll, onShuffleAll = onShuffleAll)
+                    Ios5TracksHeader(count = songs.size, onPlayAll = onPlayAll, onShuffleAll = onShuffleAll)
                 }
-                item { Ios5SectionTitle("歌曲（${songs.size}）") }
                 ios5Rows(songs, key = { it.id }) { i, s ->
                     Ios5SongRow(s, s.id == player.current.id, player.isPlaying) {
                         onPlaySongs(songs, i)
@@ -167,24 +176,58 @@ fun Ios5GroupDetail(
     }
 }
 
-/** 播放全部 + 随机播放：文字配经典图标，详情页标配。 */
+/**
+ * 歌曲标题行：左侧“歌曲（N）”，右侧两个低饱和浅蓝小按钮。
+ * 代替之前独占一整行的大光泽按钮。
+ */
 @Composable
-private fun Ios5PlayButtons(
+private fun Ios5TracksHeader(
+    count: Int,
     onPlayAll: () -> Unit,
     onShuffleAll: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        com.aurora.music.ui.ios5.Ios5GlossButton(
-            "播放全部", onClick = onPlayAll,
-            modifier = Modifier.weight(1f), icon = Icons.Filled.PlayArrow,
+        Text(
+            "歌曲（$count）",
+            color = Color(0xFF4A5160),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f),
         )
-        com.aurora.music.ui.ios5.Ios5GlossButton(
-            "随机播放", onClick = onShuffleAll,
-            modifier = Modifier.weight(1f), icon = Icons.Filled.Shuffle,
-        )
+        Ios5MiniButton("播放全部", Icons.Filled.PlayArrow, onPlayAll)
+        Spacer(Modifier.width(8.dp))
+        Ios5MiniButton("随机播放", Icons.Filled.Shuffle, onShuffleAll)
+    }
+}
+
+@Composable
+private fun Ios5MiniButton(
+    text: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+) {
+    // iOS 分段按钮质感：浅色高光对半开 + 灰描边 + 深灰字，比之前扁一号
+    val ink = Color(0xFF3E444D)
+    val shape = RoundedCornerShape(7.dp)
+    Row(
+        Modifier.clip(shape)
+            .background(
+                androidx.compose.ui.graphics.Brush.verticalGradient(
+                    0f to Color.White,
+                    1f to Color(0xFFDDE1E7),
+                ),
+            )
+            .border(1.dp, Color(0xFF9AA0A8), shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = ink, modifier = Modifier.size(14.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(text, color = ink, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
 
@@ -314,11 +357,6 @@ fun Ios5Detail(
                                 }
                             }
                         }
-                        Spacer(Modifier.height(8.dp))
-                        Ios5PlayButtons(
-                            onPlayAll = { onPlayCollection(kind, id) },
-                            onShuffleAll = { onShuffleCollection(kind, id) },
-                        )
                     }
                     if (d.albums.isNotEmpty()) {
                         item { Ios5SectionTitle("专辑（${d.albums.size}）") }
@@ -333,7 +371,13 @@ fun Ios5Detail(
                         }
                     }
                     if (d.tracks.isNotEmpty()) {
-                        item { Ios5SectionTitle("歌曲（${d.tracks.size}）") }
+                        item {
+                            Ios5TracksHeader(
+                                count = d.tracks.size,
+                                onPlayAll = { onPlayCollection(kind, id) },
+                                onShuffleAll = { onShuffleCollection(kind, id) },
+                            )
+                        }
                         // 专辑内：同一张碟，只留曲名
                         val minimal = kind == "album"
                         ios5Rows(d.tracks, key = { it.id }) { i, s ->

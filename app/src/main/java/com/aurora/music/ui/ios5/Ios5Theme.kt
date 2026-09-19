@@ -53,10 +53,9 @@ object Ios5Colors {
     val LeatherBottom = Color(0xFF241A14)
 
     val linenBrush = Brush.verticalGradient(listOf(LinenTop, LinenBottom))
+    // 简单两段：上浅下深
     val metalBrush = Brush.verticalGradient(
         0f to MetalTop,
-        0.48f to MetalMid,
-        0.52f to MetalBottom,
         1f to MetalBottom,
     )
     val tabBrush = Brush.verticalGradient(listOf(TabTop, TabBottom))

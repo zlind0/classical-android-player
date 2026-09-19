@@ -179,6 +179,9 @@ class LocalLibrary(
                     val data = if (dataCol >= 0) c.getString(dataCol).orEmpty() else ""
                     if (data.contains('/')) dirs[id.toString()] = data.substringBeforeLast('/')
                     val rg = if (data.isNotBlank()) gainProvider(data) else null
+                    // 专辑键只看归一化标题：MediaStore 的 album_id 按艺人维度拆分，
+                    // 同名专辑跨文件夹/跨艺人会被拆成多个 id，这里直接无视它
+                    val sidAlbum = albumKey(albumName)
                     val rawTrack = if (trackCol >= 0) runCatching { c.getInt(trackCol) }.getOrDefault(0) else 0
                     var discNo = if (discCol >= 0) runCatching { c.getInt(discCol) }.getOrDefault(0) else 0
                     var trackNo = rawTrack
@@ -187,7 +190,6 @@ class LocalLibrary(
                         discNo = trackNo / 1000
                         trackNo %= 1000
                     }
-                    val sidAlbum = albumId.toString()
                     if (added > (albumDateAdded[sidAlbum] ?: 0L)) albumDateAdded[sidAlbum] = added
                     if (year > 0 && albumYear[sidAlbum] == null) albumYear[sidAlbum] = year
                     out += Song(
@@ -250,5 +252,8 @@ class LocalLibrary(
 
     private companion object {
         val ALBUM_ART_BASE: Uri = Uri.parse("content://media/external/audio/albumart")
+
+        /** 跨文件夹/跨艺人同名即同专辑（代价：标题撞名的不同专辑会被并到一起）。 */
+        fun albumKey(title: String): String = "album::" + title.trim().lowercase()
     }
 }

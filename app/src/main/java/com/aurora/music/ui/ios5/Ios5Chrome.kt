@@ -79,33 +79,33 @@ fun Ios5NavBar(
             contentAlignment = Alignment.Center,
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                if (onBack != null) {
-                    Ios5BarButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBackIos, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                // 两侧等宽槽：标题永远真居中
+                Box(Modifier.width(64.dp), contentAlignment = Alignment.CenterStart) {
+                    if (onBack != null) {
+                        Ios5BarButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBackIos, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        }
                     }
-                } else {
-                    Spacer(Modifier.width(56.dp))
                 }
-                Spacer(Modifier.weight(1f))
-                if (onSearch != null) {
-                    Ios5BarButton(onClick = onSearch) {
-                        Icon(Icons.Filled.Search, "搜索", tint = Color.White, modifier = Modifier.size(20.dp))
+                Text(
+                    title,
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = Ios5Sans,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                )
+                Box(Modifier.width(64.dp), contentAlignment = Alignment.CenterEnd) {
+                    if (onSearch != null) {
+                        Ios5BarButton(onClick = onSearch) {
+                            Icon(Icons.Filled.Search, "搜索", tint = Color.White, modifier = Modifier.size(20.dp))
+                        }
                     }
-                } else {
-                    Spacer(Modifier.width(56.dp))
                 }
             }
-            Text(
-                title,
-                color = Color.White,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = Ios5Sans,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth(0.62f),
-            )
         }
         // highlight + shadow lines for the machined edge
         Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.55f)))
@@ -115,8 +115,10 @@ fun Ios5NavBar(
 
 @Composable
 private fun Ios5BarButton(onClick: () -> Unit, content: @Composable RowScope.() -> Unit) {
+    // 固定尺寸 + 内容居中：箭头不再偏
     Row(
-        Modifier.clip(RoundedCornerShape(8.dp))
+        Modifier.size(width = 44.dp, height = 32.dp)
+            .clip(RoundedCornerShape(8.dp))
             .background(
                 androidx.compose.ui.graphics.Brush.verticalGradient(
                     listOf(Color.White.copy(alpha = 0.28f), Color.Black.copy(alpha = 0.28f)),
@@ -124,8 +126,9 @@ private fun Ios5BarButton(onClick: () -> Unit, content: @Composable RowScope.() 
             )
             .border(1.dp, Color.Black.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 7.dp),
+            .padding(horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
         content = content,
     )
 }
