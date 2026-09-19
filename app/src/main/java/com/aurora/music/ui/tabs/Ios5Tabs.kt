@@ -1,5 +1,6 @@
 package com.aurora.music.ui.tabs
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -57,7 +58,6 @@ import com.aurora.music.viewmodel.HomeUiState
 fun HomeTab(
     state: HomeUiState,
     onOpenDetail: (kind: String, id: String, title: String) -> Unit,
-    onPlayAlbum: (id: String) -> Unit,
     onPlaySongs: (songs: List<Song>, index: Int) -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
@@ -85,7 +85,6 @@ fun HomeTab(
                     ShelfRow(
                         covers = (d.newReleases + d.recentlyPlayed).distinctBy { it.id }.take(10),
                         onOpen = { onOpenDetail("album", it.id, it.title) },
-                        onPlay = { onPlayAlbum(it.id) },
                     )
                 }
             }
@@ -95,7 +94,6 @@ fun HomeTab(
                     ShelfRow(
                         covers = d.mostPlayed.take(10),
                         onOpen = { onOpenDetail("album", it.id, it.title) },
-                        onPlay = { onPlayAlbum(it.id) },
                     )
                 }
             }
@@ -141,44 +139,29 @@ fun HomeTab(
 private fun ShelfRow(
     covers: List<com.aurora.music.model.Album>,
     onOpen: (com.aurora.music.model.Album) -> Unit,
-    onPlay: (com.aurora.music.model.Album) -> Unit,
 ) {
     LazyRow(
         contentPadding = PaddingValues(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(covers, key = { it.id }) { a ->
-            Column(Modifier.width(120.dp)) {
+            Column(
+                Modifier.width(120.dp)
+                    .clickable(onClick = { onOpen(a) }),
+            ) {
                 Artwork(
                     a.artworkUrl, accentFor(a.id), Modifier.size(120.dp).clip(RoundedCornerShape(8.dp)),
                     corner = 8.dp,
                 )
                 Text(
-                    a.title, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                    a.title, fontSize = 13.sp, lineHeight = 15.sp, fontWeight = FontWeight.Medium,
                     color = com.aurora.music.ui.ios5.Ios5Colors.TextPrimary,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp),
                 )
                 Text(
-                    a.artist, fontSize = 12.sp, color = com.aurora.music.ui.ios5.Ios5Colors.TextSecondary,
+                    a.artist, fontSize = 12.sp, lineHeight = 14.sp, color = com.aurora.music.ui.ios5.Ios5Colors.TextSecondary,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
-                Row(Modifier.padding(top = 4.dp)) {
-                    androidx.compose.foundation.text.ClickableText(
-                        androidx.compose.ui.text.AnnotatedString("播放"),
-                        style = androidx.compose.ui.text.TextStyle(
-                            color = com.aurora.music.ui.ios5.Ios5Colors.IosBlue, fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                        ),
-                        onClick = { onPlay(a) },
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    androidx.compose.foundation.text.ClickableText(
-                        androidx.compose.ui.text.AnnotatedString("详情"),
-                        style = androidx.compose.ui.text.TextStyle(
-                            color = com.aurora.music.ui.ios5.Ios5Colors.TextSecondary, fontSize = 13.sp,
-                        ),
-                        onClick = { onOpen(a) },
-                    )
-                }
             }
         }
     }

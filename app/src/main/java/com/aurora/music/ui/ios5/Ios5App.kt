@@ -106,10 +106,6 @@ fun Ios5App() {
     }
     fun openDetail(kind: String, id: String, title: String = "") =
         navController.navigate(Ios5Routes.detail(kind, id, title))
-    fun playAlbum(id: String) = scope.launch {
-        container.repository.detail("album", id)
-            ?.let { if (it.tracks.isNotEmpty()) playerVM.playCollection("album", id, it.tracks, 0, it.info.songCount) }
-    }
     fun playCollection(kind: String, id: String) = scope.launch {
         container.repository.detail(kind, id)
             ?.let { if (it.tracks.isNotEmpty()) playerVM.playCollection(kind, id, it.tracks, 0, it.info.songCount) }
@@ -143,7 +139,6 @@ fun Ios5App() {
                             HomeTab(
                                 state = homeState,
                                 onOpenDetail = { k, i, t -> openDetail(k, i, t) },
-                                onPlayAlbum = { playAlbum(it) },
                                 onPlaySongs = { songs, index -> playerVM.playAll(songs, index) },
                             )
                         }

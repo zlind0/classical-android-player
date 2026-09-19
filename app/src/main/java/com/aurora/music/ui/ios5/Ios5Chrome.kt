@@ -156,7 +156,7 @@ fun Ios5TabBar(currentRoute: String?, onNavigate: (String) -> Unit) {
                             else Modifier,
                         )
                         .clickable { onNavigate(tab.route) }
-                        .padding(vertical = 4.dp),
+                        .padding(vertical = 3.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
@@ -164,11 +164,13 @@ fun Ios5TabBar(currentRoute: String?, onNavigate: (String) -> Unit) {
                         tabIcons[tab.label] ?: Icons.Filled.Home,
                         tab.label,
                         tint = if (selected) Ios5Colors.TabSelected else Ios5Colors.TabUnselected,
-                        modifier = Modifier.size(24.dp),
+                        modifier = Modifier.size(22.dp),
                     )
                     Text(
                         tab.label,
                         fontSize = 10.sp,
+                        lineHeight = 12.sp,
+                        maxLines = 1,
                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                         color = if (selected) Color.White else Ios5Colors.TabUnselected,
                     )

@@ -43,6 +43,7 @@ fun Artwork(
     modifier: Modifier = Modifier,
     corner: Dp = 12.dp,
     contentScale: ContentScale = ContentScale.Crop,
+    fullQuality: Boolean = false,
 ) {
     // Keep flush artwork and circular avatars intact; frame music covers to match the identity.
     val artCorner = if (corner == 0.dp || corner >= 22.dp) corner else when (LocalUiPrefs.current.themeStyle) {
@@ -62,6 +63,9 @@ fun Artwork(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(url)
                 .crossfade(true)
+                // MediaStore 封面 URI 默认按显示尺寸解码：小条里够用，
+                // 放大到播放页会被拉伸成马赛克，原图只让播放器大封面用。
+                .apply { if (fullQuality) size(coil.size.Size.ORIGINAL) }
                 .build(),
             contentDescription = null,
             contentScale = contentScale,

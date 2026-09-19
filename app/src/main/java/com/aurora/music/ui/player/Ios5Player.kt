@@ -139,6 +139,28 @@ fun Ios5PlayerDeck(
 
         val travelPx = with(density) { (expandedH - collapsedH).toPx() }.coerceAtLeast(1f)
 
+        // 同一套拖拽状态同时挂在卡片和封面上：在哪开始拖都一样跟手
+        val deckDragState = rememberDraggableState { delta ->
+            scope.launch {
+                progress.snapTo((progress.value - delta / travelPx).coerceIn(0f, 1f))
+            }
+        }
+        fun deckDragStarted() {
+            dragging = true
+        }
+        fun deckDragStopped(velocity: Float) {
+            dragging = false
+            scope.launch {
+                val target = when {
+                    velocity < -600f -> 1f
+                    velocity > 600f -> 0f
+                    progress.value > 0.5f -> 1f
+                    else -> 0f
+                }
+                settle(target)
+            }
+        }
+
         Box(
             Modifier.align(Alignment.BottomStart)
                 .fillMaxWidth()
@@ -153,25 +175,10 @@ fun Ios5PlayerDeck(
                     else Modifier,
                 )
                 .draggable(
-                    state = rememberDraggableState { delta ->
-                        scope.launch {
-                            progress.snapTo((progress.value - delta / travelPx).coerceIn(0f, 1f))
-                        }
-                    },
+                    state = deckDragState,
                     orientation = Orientation.Vertical,
-                    onDragStarted = { dragging = true },
-                    onDragStopped = { velocity ->
-                        dragging = false
-                        scope.launch {
-                            val target = when {
-                                velocity < -600f -> 1f
-                                velocity > 600f -> 0f
-                                progress.value > 0.5f -> 1f
-                                else -> 0f
-                            }
-                            settle(target)
-                        }
-                    },
+                    onDragStarted = { deckDragStarted() },
+                    onDragStopped = { deckDragStopped(it) },
                 ),
         ) {
             // ---- 单张 travelling 封面 ----
@@ -187,8 +194,15 @@ fun Ios5PlayerDeck(
             Artwork(
                 song.artworkUrl, song.accent,
                 Modifier.size(with(density) { coverPx.toDp() })
-                    .offset { IntOffset(coverX.roundToInt(), coverY.roundToInt()) },
+                    .offset { IntOffset(coverX.roundToInt(), coverY.roundToInt()) }
+                    .draggable(
+                        state = deckDragState,
+                        orientation = Orientation.Vertical,
+                        onDragStarted = { deckDragStarted() },
+                        onDragStopped = { deckDragStopped(it) },
+                    ),
                 corner = 8.dp,
+                fullQuality = true,
             )
 
             // ---- Mini 行（底部，p<0.35 可见，可点展开） ----
@@ -210,12 +224,12 @@ fun Ios5PlayerDeck(
                     Column(Modifier.weight(1f)) {
                         Text(
                             song.title.ifBlank { "未在播放" },
-                            fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                            fontSize = 13.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium,
                             color = Ios5Colors.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
                         val sub = listOf(song.artist, song.album).filter { it.isNotBlank() }.joinToString(" — ")
                         if (sub.isNotBlank()) {
-                            Text(sub, fontSize = 12.sp, color = Ios5Colors.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(sub, fontSize = 11.sp, lineHeight = 13.sp, color = Ios5Colors.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                     Icon(
@@ -234,15 +248,19 @@ fun Ios5PlayerDeck(
             }
 
             // ---- 展开内容（p>0.5 淡入上浮） ----
+            // 注意：滚动列的 bounds 被收在封面区域之下（而不是全屏 padding），
+            // 否则透明的列会盖住封面、先吃掉落在封面上的拖拽手势。
             val mainAlpha = ((p - 0.5f) / 0.45f).coerceIn(0f, 1f)
             if (mainAlpha > 0f) {
                 val shiftPx = with(density) { 24.dp.toPx() * (1f - mainAlpha) }
-                Column(
+                Box(
                     Modifier.fillMaxSize()
                         .graphicsLayer { alpha = mainAlpha; translationY = shiftPx },
                 ) {
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                        Modifier.align(Alignment.TopStart)
+                            .fillMaxWidth().height(48.dp)
+                            .padding(horizontal = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(
@@ -263,13 +281,18 @@ fun Ios5PlayerDeck(
                                 .clickable(onClick = onOpenQueue).padding(8.dp),
                         )
                     }
-                    val coverZoneTop: Dp = with(density) { (coverYBig + bigPx).toDp() }
-                    Column(
-                        Modifier.fillMaxSize()
-                            .verticalScroll(rememberScrollState(), enabled = p > 0.95f && !dragging)
-                            .padding(top = coverZoneTop + 12.dp, start = 20.dp, end = 20.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
+                    val contentTop: Dp = 48.dp + with(density) { (coverYBig + bigPx).toDp() } + 12.dp
+                    val contentH = (cardH - contentTop).coerceAtLeast(0.dp)
+                    if (contentH > 0.dp) {
+                        Column(
+                            Modifier.align(Alignment.TopStart)
+                                .fillMaxWidth()
+                                .offset(y = contentTop)
+                                .height(contentH)
+                                .verticalScroll(rememberScrollState(), enabled = p > 0.95f && !dragging)
+                                .padding(horizontal = 20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
                         Text(
                             song.title.ifBlank { "未在播放" },
                             fontSize = 20.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Serif,
@@ -380,6 +403,7 @@ fun Ios5PlayerDeck(
                             )
                         }
                         Spacer(Modifier.height(16.dp))
+                        }
                     }
                 }
             }
