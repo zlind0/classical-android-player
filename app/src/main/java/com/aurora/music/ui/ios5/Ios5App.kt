@@ -131,7 +131,12 @@ fun Ios5App() {
         Box(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize()) {
                 // ---- 上栏：当前页面 ----
-                Box(Modifier.weight(1f).fillMaxWidth()) {
+                // Mini 条是悬在 Tab 栏上方的覆盖层（56dp），有歌时内容区底部预留，
+                // 否则各列表最后一个元素会被它盖住
+                Box(
+                    Modifier.weight(1f).fillMaxWidth()
+                        .then(if (playerState.hasTrack) Modifier.padding(bottom = 56.dp) else Modifier),
+                ) {
                     NavHost(
                         navController = navController,
                         startDestination = Ios5Routes.HOME,
