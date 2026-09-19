@@ -8,6 +8,7 @@ import com.aurora.music.model.Album
 import com.aurora.music.model.Artist
 import com.aurora.music.model.Playlist
 import com.aurora.music.model.Song
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,7 +43,8 @@ class Ios5BrowseViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun load() {
-        viewModelScope.launch {
+        // 全库分页 walk + 分组排序放后台：万首级别在主线程做会掉帧
+        viewModelScope.launch(Dispatchers.Default) {
             _state.update { it.copy(loading = true) }
             val songs = container.repository.allLibrarySongs()
             val albums = container.repository.allAlbums()

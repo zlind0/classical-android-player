@@ -31,6 +31,7 @@ import com.aurora.music.ui.ios5.Ios5Loading
 import com.aurora.music.ui.ios5.Ios5NavBar
 import com.aurora.music.ui.ios5.Ios5SectionTitle
 import com.aurora.music.ui.ios5.Ios5SongRow
+import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.util.accentFor
 import com.aurora.music.viewmodel.PlayerUiState
 import com.aurora.music.viewmodel.SearchViewModel
@@ -89,63 +90,43 @@ fun Ios5SearchPage(
             }
             if (showSongs && r.songs.isNotEmpty()) {
                 item { Ios5SectionTitle("歌曲（${r.songs.size}）") }
-                item {
-                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                        r.songs.forEachIndexed { i, s ->
-                            if (i > 0) Ios5CellDivider()
-                            Ios5SongRow(s, s.id == player.current.id, player.isPlaying) {
-                                vm.commit()
-                                onPlaySongs(r.songs, i)
-                            }
-                        }
+                ios5Rows(r.songs, key = { it.id }) { i, s ->
+                    Ios5SongRow(s, s.id == player.current.id, player.isPlaying) {
+                        vm.commit()
+                        onPlaySongs(r.songs, i)
                     }
                 }
             }
             if (showAlbums && r.albums.isNotEmpty()) {
                 item { Ios5SectionTitle("专辑（${r.albums.size}）") }
-                item {
-                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                        r.albums.forEachIndexed { i, a ->
-                            if (i > 0) Ios5CellDivider()
-                            Ios5Cell(
-                                title = a.title,
-                                subtitle = a.artist,
-                                onClick = { vm.commit(); onOpenDetail("album", a.id, a.title) },
-                                leading = { Artwork(a.artworkUrl, accentFor(a.id), Modifier.size(44.dp), corner = 6.dp) },
-                            )
-                        }
-                    }
+                ios5Rows(r.albums, key = { it.id }) { _, a ->
+                    Ios5Cell(
+                        title = a.title,
+                        subtitle = a.artist,
+                        onClick = { vm.commit(); onOpenDetail("album", a.id, a.title) },
+                        leading = { Artwork(a.artworkUrl, accentFor(a.id), Modifier.size(44.dp), corner = 6.dp) },
+                    )
                 }
             }
             if (showArtists && r.artists.isNotEmpty()) {
                 item { Ios5SectionTitle("艺人（${r.artists.size}）") }
-                item {
-                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                        r.artists.forEachIndexed { i, a ->
-                            if (i > 0) Ios5CellDivider()
-                            Ios5Cell(
-                                title = a.name,
-                                onClick = { vm.commit(); onOpenDetail("artist", a.id, a.name) },
-                                leading = { Artwork(a.imageUrl, accentFor(a.id), Modifier.size(40.dp), corner = 20.dp) },
-                            )
-                        }
-                    }
+                ios5Rows(r.artists, key = { it.id }) { _, a ->
+                    Ios5Cell(
+                        title = a.name,
+                        onClick = { vm.commit(); onOpenDetail("artist", a.id, a.name) },
+                        leading = { Artwork(a.imageUrl, accentFor(a.id), Modifier.size(40.dp), corner = 20.dp) },
+                    )
                 }
             }
             if (scope == "all" && r.playlists.isNotEmpty()) {
                 item { Ios5SectionTitle("歌单（${r.playlists.size}）") }
-                item {
-                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                        r.playlists.forEachIndexed { i, p ->
-                            if (i > 0) Ios5CellDivider()
-                            Ios5Cell(
-                                title = p.title,
-                                subtitle = p.subtitle,
-                                onClick = { vm.commit(); onOpenDetail("playlist", p.id, p.title) },
-                                leading = { Artwork(p.coverUrl, p.accent, Modifier.size(40.dp), corner = 6.dp) },
-                            )
-                        }
-                    }
+                ios5Rows(r.playlists, key = { it.id }) { _, p ->
+                    Ios5Cell(
+                        title = p.title,
+                        subtitle = p.subtitle,
+                        onClick = { vm.commit(); onOpenDetail("playlist", p.id, p.title) },
+                        leading = { Artwork(p.coverUrl, p.accent, Modifier.size(40.dp), corner = 6.dp) },
+                    )
                 }
             }
             if (r.songs.isEmpty() && r.albums.isEmpty() && r.artists.isEmpty() && r.playlists.isEmpty()) {

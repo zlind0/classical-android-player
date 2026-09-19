@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -38,10 +39,14 @@ import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5CheckRow
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5GlossButton
+import com.aurora.music.ui.ios5.Ios5SectionTitle
 import com.aurora.music.ui.ios5.Ios5SettingsPage
 import com.aurora.music.ui.ios5.Ios5StaticText
+import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.ui.ios5.ios5Section
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 // Classical fork v0.3 (plan §4/§56): traditional file-system folder picker.
 // The user browses one volume at a time; confirming adds exactly that directory
@@ -76,7 +81,11 @@ fun FolderPickerScreen(
     val hasRead = remember(resumeTick) { com.aurora.music.data.hasStorageRead(ctx) }
     val readLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { resumeTick++ }
 
-    val dirs = remember(current) { container.volumeManager.listDirs(current) ?: emptyList() }
+    // 文件列表走 IO 线程：USB/OTG 等慢存储上 listFiles 会阻塞主线程
+    var dirs by remember { mutableStateOf<List<File>>(emptyList()) }
+    LaunchedEffect(current) {
+        dirs = withContext(Dispatchers.IO) { container.volumeManager.listDirs(current) ?: emptyList() }
+    }
     val canSelect = remember(current) {
         val f = File(current)
         runCatching { f.isDirectory && f.canRead() }.getOrDefault(false)
@@ -150,14 +159,12 @@ fun FolderPickerScreen(
             }
         }
         if (dirs.isNotEmpty()) {
-            ios5Section(strFolder) {
-                dirs.forEachIndexed { di, d ->
-                    Ios5Cell(
-                        title = d.name,
-                        onClick = { current = d.absolutePath },
-                    )
-                    if (di < dirs.size - 1) Ios5CellDivider()
-                }
+            item { Ios5SectionTitle(strFolder) }
+            ios5Rows(dirs, key = { it.absolutePath }) { _, d ->
+                Ios5Cell(
+                    title = d.name,
+                    onClick = { current = d.absolutePath },
+                )
             }
         }
         item {

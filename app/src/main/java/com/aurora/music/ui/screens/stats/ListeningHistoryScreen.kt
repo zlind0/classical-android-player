@@ -26,11 +26,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.R
 import com.aurora.music.AuroraApplication
 import com.aurora.music.ui.components.Artwork
-import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5Empty
+import com.aurora.music.ui.ios5.Ios5SectionTitle
 import com.aurora.music.ui.ios5.Ios5SettingsPage
-import com.aurora.music.ui.ios5.ios5Section
+import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.util.accentFor
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -60,21 +60,19 @@ fun ListeningHistoryScreen(contentPadding: PaddingValues, onBack: () -> Unit, on
     val grouped = history.groupBy { dayLabel(it.timestamp, strToday, strYesterday) }
     Ios5SettingsPage(title = strTitle, onBack = onBack) {
         grouped.forEach { (day, events) ->
-            ios5Section(day) {
-                events.forEachIndexed { i, e ->
-                    Row(
-                        Modifier.fillMaxWidth().clickable { onPlay(e.songId) }.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Artwork(e.artworkUrl, accentFor(e.songId), Modifier.size(44.dp), corner = 6.dp)
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(e.title, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(e.artist, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                        Text(timeFmt.format(Date(e.timestamp)), color = Ios5Colors.TextSecondary, fontSize = 13.sp)
+            item { Ios5SectionTitle(day) }
+            ios5Rows(events, key = { "${it.timestamp}-${it.songId}" }) { _, e ->
+                Row(
+                    Modifier.fillMaxWidth().clickable { onPlay(e.songId) }.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Artwork(e.artworkUrl, accentFor(e.songId), Modifier.size(44.dp), corner = 6.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(e.title, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(e.artist, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    if (i < events.size - 1) Ios5CellDivider()
+                    Text(timeFmt.format(Date(e.timestamp)), color = Ios5Colors.TextSecondary, fontSize = 13.sp)
                 }
             }
         }

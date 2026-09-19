@@ -36,12 +36,13 @@ import com.aurora.music.R
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.RankedItem
 import com.aurora.music.ui.components.Artwork
-import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5Colors
+import com.aurora.music.ui.ios5.Ios5SectionTitle
 import com.aurora.music.ui.ios5.Ios5SegmentRow
 import com.aurora.music.ui.ios5.Ios5SettingsPage
 import com.aurora.music.ui.ios5.Ios5StaticText
 import com.aurora.music.ui.ios5.ios5FootNote
+import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.ui.ios5.ios5Section
 import com.aurora.music.util.accentFor
 
@@ -120,27 +121,21 @@ fun ListeningStatsScreen(contentPadding: PaddingValues, onBack: () -> Unit, onPl
             }
         }
         if (artists.isNotEmpty()) {
-            ios5Section(strTopArtists) {
-                artists.forEachIndexed { i, a ->
-                    RankRowIos5(i + 1, a, circle = true, unknown = strUnknown) { if (a.id.isNotBlank()) onOpenDetail("artist", a.id) }
-                    if (i < artists.size - 1) Ios5CellDivider()
-                }
+            item { Ios5SectionTitle(strTopArtists) }
+            ios5Rows(artists) { i, a ->
+                RankRowIos5(i + 1, a, circle = true, unknown = strUnknown) { if (a.id.isNotBlank()) onOpenDetail("artist", a.id) }
             }
         }
         if (songs.isNotEmpty()) {
-            ios5Section(strTopSongs) {
-                songs.forEachIndexed { i, s ->
-                    RankRowIos5(i + 1, s, circle = false, unknown = strUnknown) { onPlay(s.id) }
-                    if (i < songs.size - 1) Ios5CellDivider()
-                }
+            item { Ios5SectionTitle(strTopSongs) }
+            ios5Rows(songs) { i, s ->
+                RankRowIos5(i + 1, s, circle = false, unknown = strUnknown) { onPlay(s.id) }
             }
         }
         if (albums.isNotEmpty()) {
-            ios5Section(strTopAlbums) {
-                albums.forEachIndexed { i, a ->
-                    RankRowIos5(i + 1, a, circle = false, unknown = strUnknown) { if (a.id.isNotBlank()) onOpenDetail("album", a.id) }
-                    if (i < albums.size - 1) Ios5CellDivider()
-                }
+            item { Ios5SectionTitle(strTopAlbums) }
+            ios5Rows(albums) { i, a ->
+                RankRowIos5(i + 1, a, circle = false, unknown = strUnknown) { if (a.id.isNotBlank()) onOpenDetail("album", a.id) }
             }
         }
         if (events.isEmpty()) {

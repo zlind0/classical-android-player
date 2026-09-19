@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.FolderContent
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,7 +28,8 @@ class FolderViewModel(app: Application) : AndroidViewModel(app) {
     fun load(folderId: String) {
         if (folderId == loadedId) return
         loadedId = folderId
-        viewModelScope.launch {
+        // browse() 要扫全库 path 表，大库放后台
+        viewModelScope.launch(Dispatchers.Default) {
             _state.update { it.copy(loading = true, content = null) }
             val content = container.repository.browseFolder(folderId)
             _state.update { it.copy(loading = false, content = content) }

@@ -19,7 +19,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
@@ -246,6 +252,64 @@ fun Ios5Cell(
 @Composable
 fun Ios5CellDivider() {
     Box(Modifier.fillMaxWidth().padding(start = 12.dp).height(1.dp).background(Ios5Colors.CellDivider))
+}
+
+/**
+ * Per-row card chrome for virtualized grouped lists. MUST be used instead of
+ * `item { Ios5Group { list.forEach { ... } } }` for any list that can grow:
+ * the forEach-in-item pattern composes every row at once on the UI thread and
+ * freezes scrolling the moment the block enters the viewport.
+ */
+private fun Modifier.ios5RowChrome(isFirst: Boolean, isLast: Boolean): Modifier {
+    val shape = RoundedCornerShape(
+        topStart = if (isFirst) Ios5Dimens.CornerGroup else 0.dp,
+        topEnd = if (isFirst) Ios5Dimens.CornerGroup else 0.dp,
+        bottomStart = if (isLast) Ios5Dimens.CornerGroup else 0.dp,
+        bottomEnd = if (isLast) Ios5Dimens.CornerGroup else 0.dp,
+    )
+    return this
+        .clip(shape)
+        .background(Ios5Colors.CellBg)
+        .drawBehind {
+            val stroke = 1.dp.toPx()
+            val r = Ios5Dimens.CornerGroup.toPx()
+            val c = Ios5Colors.CellDivider
+            // continuous side edges
+            drawLine(c, Offset(stroke / 2, 0f), Offset(stroke / 2, size.height), stroke)
+            drawLine(c, Offset(size.width - stroke / 2, 0f), Offset(size.width - stroke / 2, size.height), stroke)
+            if (isFirst) {
+                drawLine(c, Offset(r, stroke / 2), Offset(size.width - r, stroke / 2), stroke)
+                drawArc(c, 180f, 90f, false, Offset(0f, 0f), Size(r * 2, r * 2), style = Stroke(stroke))
+                drawArc(c, 270f, 90f, false, Offset(size.width - r * 2, 0f), Size(r * 2, r * 2), style = Stroke(stroke))
+            }
+            if (isLast) {
+                val y = size.height - stroke / 2
+                drawLine(c, Offset(r, y), Offset(size.width - r, y), stroke)
+                drawArc(c, 90f, 90f, false, Offset(0f, size.height - r * 2), Size(r * 2, r * 2), style = Stroke(stroke))
+                drawArc(c, 0f, 90f, false, Offset(size.width - r * 2, size.height - r * 2), Size(r * 2, r * 2), style = Stroke(stroke))
+            }
+        }
+}
+
+/**
+ * Virtualized grouped rows: same look as [Ios5Group], but each row is its own
+ * lazy item so only visible rows compose. Single-item groups keep using [Ios5Group].
+ */
+fun <T> LazyListScope.ios5Rows(
+    data: List<T>,
+    key: ((T) -> Any)? = null,
+    dividers: Boolean = true,
+    row: @Composable (index: Int, item: T) -> Unit,
+) {
+    items(data.size, key = key?.let { k -> { i: Int -> k(data[i]) } }) { i ->
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+                .ios5RowChrome(isFirst = i == 0, isLast = i == data.size - 1),
+        ) {
+            if (dividers && i > 0) Ios5CellDivider()
+            row(i, data[i])
+        }
+    }
 }
 
 /** Glossy blue iOS5 button. */

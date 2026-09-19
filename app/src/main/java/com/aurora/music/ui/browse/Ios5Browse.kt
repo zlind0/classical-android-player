@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
@@ -29,6 +30,7 @@ import com.aurora.music.ui.ios5.Ios5Loading
 import com.aurora.music.ui.ios5.Ios5NavBar
 import com.aurora.music.ui.ios5.Ios5SectionTitle
 import com.aurora.music.ui.ios5.Ios5SongRow
+import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.util.accentFor
 import com.aurora.music.viewmodel.DetailViewModel
 import com.aurora.music.viewmodel.FolderViewModel
@@ -53,14 +55,9 @@ fun Ios5SongsBrowse(
             songs.isEmpty() -> Ios5Empty("没有歌曲")
             else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
                 item { Ios5SectionTitle("全部歌曲（${songs.size}）") }
-                item {
-                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                        songs.forEachIndexed { i, s ->
-                            if (i > 0) Ios5CellDivider()
-                            Ios5SongRow(s, s.id == player.current.id, player.isPlaying) {
-                                onPlaySongs(songs, i)
-                            }
-                        }
+                ios5Rows(songs, key = { it.id }) { i, s ->
+                    Ios5SongRow(s, s.id == player.current.id, player.isPlaying) {
+                        onPlaySongs(songs, i)
                     }
                 }
             }
@@ -85,19 +82,14 @@ fun Ios5AlbumsBrowse(
             albums.isEmpty() -> Ios5Empty("没有专辑")
             else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
                 item { Ios5SectionTitle("全部专辑（${albums.size}）") }
-                item {
-                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                        albums.forEachIndexed { i, a ->
-                            if (i > 0) Ios5CellDivider()
-                            Ios5Cell(
-                                title = a.title,
-                                subtitle = listOf(a.artist, a.year.takeIf { it > 0 }?.toString() ?: "").filter { it.isNotBlank() }.joinToString(" · "),
-                                count = "${a.songCount}",
-                                onClick = { onOpenDetail("album", a.id, a.title) },
-                                leading = { Artwork(a.artworkUrl, accentFor(a.id), Modifier.size(44.dp), corner = 6.dp) },
-                            )
-                        }
-                    }
+                ios5Rows(albums, key = { it.id }) { _, a ->
+                    Ios5Cell(
+                        title = a.title,
+                        subtitle = listOf(a.artist, a.year.takeIf { it > 0 }?.toString() ?: "").filter { it.isNotBlank() }.joinToString(" · "),
+                        count = "${a.songCount}",
+                        onClick = { onOpenDetail("album", a.id, a.title) },
+                        leading = { Artwork(a.artworkUrl, accentFor(a.id), Modifier.size(44.dp), corner = 6.dp) },
+                    )
                 }
             }
         }
@@ -123,17 +115,12 @@ fun Ios5GroupsBrowse(
             groups.isEmpty() -> Ios5Empty("没有$title")
             else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
                 item { Ios5SectionTitle("$title（${groups.size}）") }
-                item {
-                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                        groups.forEachIndexed { i, g ->
-                            if (i > 0) Ios5CellDivider()
-                            Ios5Cell(
-                                title = g.name,
-                                count = "${g.songs.size}",
-                                onClick = { onOpenGroup(g.name) },
-                            )
-                        }
-                    }
+                ios5Rows(groups, key = { it.name }) { _, g ->
+                    Ios5Cell(
+                        title = g.name,
+                        count = "${g.songs.size}",
+                        onClick = { onOpenGroup(g.name) },
+                    )
                 }
             }
         }
@@ -158,14 +145,9 @@ fun Ios5GroupDetail(
         } else {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
                 item { Ios5SectionTitle("歌曲（${songs.size}）") }
-                item {
-                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                        songs.forEachIndexed { i, s ->
-                            if (i > 0) Ios5CellDivider()
-                            Ios5SongRow(s, s.id == player.current.id, player.isPlaying) {
-                                onPlaySongs(songs, i)
-                            }
-                        }
+                ios5Rows(songs, key = { it.id }) { i, s ->
+                    Ios5SongRow(s, s.id == player.current.id, player.isPlaying) {
+                        onPlaySongs(songs, i)
                     }
                 }
             }
@@ -217,25 +199,15 @@ fun Ios5FolderLevel(
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
                     if (c.folders.isNotEmpty()) {
                         item { Ios5SectionTitle("文件夹（${c.folders.size}）") }
-                        item {
-                            Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                                c.folders.forEachIndexed { i, f ->
-                                    if (i > 0) Ios5CellDivider()
-                                    Ios5Cell(title = f.name, onClick = { onOpenFolder(f.id, f.name) })
-                                }
-                            }
+                        ios5Rows(c.folders, key = { it.id }) { _, f ->
+                            Ios5Cell(title = f.name, onClick = { onOpenFolder(f.id, f.name) })
                         }
                     }
                     if (c.songs.isNotEmpty()) {
                         item { Ios5SectionTitle("歌曲（${c.songs.size}）") }
-                        item {
-                            Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                                c.songs.forEachIndexed { i, s ->
-                                    if (i > 0) Ios5CellDivider()
-                                    Ios5SongRow(s, s.id == player.current.id, player.isPlaying, showArtwork = false) {
-                                        onPlaySongs(c.songs, i)
-                                    }
-                                }
+                        ios5Rows(c.songs, key = { it.id }) { i, s ->
+                            Ios5SongRow(s, s.id == player.current.id, player.isPlaying, showArtwork = false) {
+                                onPlaySongs(c.songs, i)
                             }
                         }
                     }
@@ -281,7 +253,7 @@ fun Ios5Detail(
                                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                             ) {
                                 Artwork(d.info.artUrl, d.info.accent, Modifier.size(84.dp), corner = 8.dp)
-                                Spacer(Modifier.padding(6.dp))
+                                Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f)) {
                                     androidx.compose.material3.Text(
                                         d.info.title.ifBlank { title },
@@ -321,32 +293,22 @@ fun Ios5Detail(
                         }
                     }
                     if (d.albums.isNotEmpty()) {
-                        item {
-                            Ios5SectionTitle("专辑（${d.albums.size}）")
-                            Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                                d.albums.forEachIndexed { i, a ->
-                                    if (i > 0) Ios5CellDivider()
-                                    Ios5Cell(
-                                        title = a.title,
-                                        subtitle = a.artist,
-                                        count = "${a.songCount}",
-                                        onClick = { onOpenDetail("album", a.id, a.title) },
-                                        leading = { Artwork(a.artworkUrl, accentFor(a.id), Modifier.size(44.dp), corner = 6.dp) },
-                                    )
-                                }
-                            }
+                        item { Ios5SectionTitle("专辑（${d.albums.size}）") }
+                        ios5Rows(d.albums, key = { it.id }) { _, a ->
+                            Ios5Cell(
+                                title = a.title,
+                                subtitle = a.artist,
+                                count = "${a.songCount}",
+                                onClick = { onOpenDetail("album", a.id, a.title) },
+                                leading = { Artwork(a.artworkUrl, accentFor(a.id), Modifier.size(44.dp), corner = 6.dp) },
+                            )
                         }
                     }
                     if (d.tracks.isNotEmpty()) {
                         item { Ios5SectionTitle("歌曲（${d.tracks.size}）") }
-                        item {
-                            Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                                d.tracks.forEachIndexed { i, s ->
-                                    if (i > 0) Ios5CellDivider()
-                                    Ios5SongRow(s, s.id == player.current.id, player.isPlaying) {
-                                        onPlaySongs(d.tracks, i)
-                                    }
-                                }
+                        ios5Rows(d.tracks, key = { it.id }) { i, s ->
+                            Ios5SongRow(s, s.id == player.current.id, player.isPlaying) {
+                                onPlaySongs(d.tracks, i)
                             }
                         }
                         if (st.canLoadMore) {

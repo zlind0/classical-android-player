@@ -26,7 +26,9 @@ import com.aurora.music.ui.components.Artwork
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5Empty
+import com.aurora.music.ui.ios5.Ios5Group
 import com.aurora.music.ui.ios5.Ios5Loading
+import com.aurora.music.ui.ios5.Ios5SectionTitle
 import com.aurora.music.ui.ios5.Ios5SettingsPage
 import com.aurora.music.ui.ios5.Ios5StaticText
 import com.aurora.music.ui.ios5.ios5FootNote
@@ -68,8 +70,11 @@ fun DuplicatesScreen(
                     Ios5StaticText(strStats)
                 }
                 groups.forEach { group ->
-                    ios5Section(group.title) {
-                        GroupRows(group, currentSongId, onPlay)
+                    item { Ios5SectionTitle(group.title) }
+                    item {
+                        Ios5Group(Modifier.padding(horizontal = 12.dp)) {
+                            GroupRows(group, currentSongId, onPlay)
+                        }
                     }
                 }
                 ios5FootNote(strStats)

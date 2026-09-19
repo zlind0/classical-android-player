@@ -6,12 +6,14 @@ import androidx.lifecycle.viewModelScope
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.DetailData
 import com.aurora.music.data.remote.ArtistInfo
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class DetailUiState(
     val loading: Boolean = true,
@@ -43,7 +45,8 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
         curKind = kind; curId = id
         viewModelScope.launch {
             _state.update { it.copy(loading = true, data = null, loadingMore = false, canLoadMore = false, artistInfo = null) }
-            val data = container.repository.detail(kind, id)
+            // 艺人详情要过滤聚合全库曲目，大库放后台（报障：滚到歌曲区卡死）
+            val data = withContext(Dispatchers.Default) { container.repository.detail(kind, id) }
             val canMore = data != null && data.tracks.size < data.info.songCount
             _state.update { it.copy(loading = false, data = data, canLoadMore = canMore) }
             if (kind == "artist" && data != null) enrichArtist(data.info.title)

@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.SearchResults
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class SearchUiState(
     val query: String = "",
@@ -59,7 +61,8 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
         searchJob = viewModelScope.launch {
             delay(300)
             _state.update { it.copy(loading = true) }
-            val r = container.repository.search(q)
+            // 全库 contains 过滤放后台，逐字输入不卡
+            val r = withContext(Dispatchers.Default) { container.repository.search(q) }
             _state.update { it.copy(loading = false, results = r) }
         }
     }

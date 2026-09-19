@@ -49,6 +49,7 @@ import com.aurora.music.ui.ios5.Ios5Loading
 import com.aurora.music.ui.ios5.Ios5NavBar
 import com.aurora.music.ui.ios5.Ios5SectionTitle
 import com.aurora.music.ui.ios5.Ios5SongRow
+import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.util.accentFor
 import com.aurora.music.viewmodel.HomeUiState
 
@@ -206,22 +207,18 @@ fun PlaylistsTab(
                     }
                 }
             }
-            item {
-                Ios5SectionTitle("我的歌单（${playlists.size}）")
-                Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                    if (playlists.isEmpty()) {
-                        Ios5Empty("还没有歌单")
-                    } else {
-                        playlists.forEachIndexed { i, p ->
-                            if (i > 0) Ios5CellDivider()
-                            Ios5Cell(
-                                title = p.title,
-                                subtitle = p.subtitle,
-                                onClick = { onOpenDetail("playlist", p.id, p.title) },
-                                leading = { Artwork(p.coverUrl, p.accent, Modifier.size(40.dp), corner = 6.dp) },
-                            )
-                        }
-                    }
+            if (playlists.isEmpty()) {
+                item { Ios5SectionTitle("我的歌单") }
+                item { Ios5Empty("还没有歌单") }
+            } else {
+                item { Ios5SectionTitle("我的歌单（${playlists.size}）") }
+                ios5Rows(playlists, key = { it.id }) { _, p ->
+                    Ios5Cell(
+                        title = p.title,
+                        subtitle = p.subtitle,
+                        onClick = { onOpenDetail("playlist", p.id, p.title) },
+                        leading = { Artwork(p.coverUrl, p.accent, Modifier.size(40.dp), corner = 6.dp) },
+                    )
                 }
             }
         }
@@ -258,18 +255,13 @@ fun ArtistsTab(
             loading -> Ios5Loading()
             artists.isEmpty() -> Ios5Empty("没有艺人\n请先扫描音乐目录")
             else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
-                item {
-                    Ios5SectionTitle("全部艺人（${artists.size}）")
-                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                        artists.forEachIndexed { i, a ->
-                            if (i > 0) Ios5CellDivider()
-                            Ios5Cell(
-                                title = a.name,
-                                onClick = { onOpenDetail("artist", a.id, a.name) },
-                                leading = { Artwork(a.imageUrl, accentFor(a.id), Modifier.size(40.dp), corner = 20.dp) },
-                            )
-                        }
-                    }
+                item { Ios5SectionTitle("全部艺人（${artists.size}）") }
+                ios5Rows(artists, key = { it.id }) { _, a ->
+                    Ios5Cell(
+                        title = a.name,
+                        onClick = { onOpenDetail("artist", a.id, a.name) },
+                        leading = { Artwork(a.imageUrl, accentFor(a.id), Modifier.size(40.dp), corner = 20.dp) },
+                    )
                 }
             }
         }

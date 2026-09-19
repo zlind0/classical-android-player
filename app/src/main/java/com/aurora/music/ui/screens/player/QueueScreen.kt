@@ -52,6 +52,7 @@ import com.aurora.music.ui.ios5.Ios5ActionRow
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5Group
+import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.ui.ios5.Ios5NavBar
 import com.aurora.music.ui.ios5.Ios5SectionTitle
 import kotlin.math.roundToInt
@@ -146,49 +147,43 @@ fun QueueScreen(
                                 tint = Ios5Colors.TextSecondary, modifier = Modifier.size(20.dp),
                             )
                         }
-                        if (showHistory) {
-                            played.forEach { i ->
-                                Ios5CellDivider()
-                                QueueTrackRow(
-                                    song = queue[i], index = null, rowHeight = rowHeight,
-                                    dimmed = true, onClick = { onJump(i) }, onRemove = null, dragHandle = null,
-                                )
-                            }
-                        }
+                    }
+                }
+                if (showHistory) {
+                    ios5Rows(played, key = { queue[it].id }) { _, i ->
+                        QueueTrackRow(
+                            song = queue[i], index = null, rowHeight = rowHeight,
+                            dimmed = true, onClick = { onJump(i) }, onRemove = null, dragHandle = null,
+                        )
                     }
                 }
             }
             item { Ios5SectionTitle(strUpNext) }
             if (upcoming.isNotEmpty()) {
-                item {
-                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                        upcoming.forEachIndexed { vi, i ->
-                            if (vi > 0) Ios5CellDivider()
-                            val dragging = i == dragIndex
-                            QueueTrackRow(
-                                song = queue[i],
-                                index = vi + 1,
-                                rowHeight = rowHeight,
-                                dragging = dragging,
-                                dragOffset = if (dragging) dragOffset else 0f,
-                                onClick = { onJump(i) },
-                                onRemove = { onRemove(i) },
-                                // key on i/startIdx so gesture re-captures fresh indices when current advances or rows shift
-                                dragHandle = Modifier.pointerInput(queue.size, i, startIdx) {
-                                    detectDragGestures(
-                                        onDragStart = { dragIndex = i; dragOffset = 0f },
-                                        onDragEnd = {
-                                            val target = (dragIndex + (dragOffset / rowPx).roundToInt()).coerceIn(startIdx, queue.size - 1)
-                                            if (target != dragIndex && dragIndex >= 0) onMove(dragIndex, target)
-                                            dragIndex = -1; dragOffset = 0f
-                                        },
-                                        onDragCancel = { dragIndex = -1; dragOffset = 0f },
-                                        onDrag = { change, amount -> change.consume(); dragOffset += amount.y },
-                                    )
+                ios5Rows(upcoming, key = { queue[it].id }) { vi, i ->
+                    val dragging = i == dragIndex
+                    QueueTrackRow(
+                        song = queue[i],
+                        index = vi + 1,
+                        rowHeight = rowHeight,
+                        dragging = dragging,
+                        dragOffset = if (dragging) dragOffset else 0f,
+                        onClick = { onJump(i) },
+                        onRemove = { onRemove(i) },
+                        // key on i/startIdx so gesture re-captures fresh indices when current advances or rows shift
+                        dragHandle = Modifier.pointerInput(queue.size, i, startIdx) {
+                            detectDragGestures(
+                                onDragStart = { dragIndex = i; dragOffset = 0f },
+                                onDragEnd = {
+                                    val target = (dragIndex + (dragOffset / rowPx).roundToInt()).coerceIn(startIdx, queue.size - 1)
+                                    if (target != dragIndex && dragIndex >= 0) onMove(dragIndex, target)
+                                    dragIndex = -1; dragOffset = 0f
                                 },
+                                onDragCancel = { dragIndex = -1; dragOffset = 0f },
+                                onDrag = { change, amount -> change.consume(); dragOffset += amount.y },
                             )
-                        }
-                    }
+                        },
+                    )
                 }
             }
             item { Spacer(Modifier.height(24.dp)) }
