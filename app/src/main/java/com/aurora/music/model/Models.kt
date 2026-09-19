@@ -23,6 +23,7 @@ data class Song(
     val replayGainAlbum: Float = 0f,
     val path: String = "",   // source file path when the backend exposes one (M3U export)
     val genre: String = "",
+    val composer: String = "",
     val playCount: Int = 0,       // server-reported (subsonic child/jellyfin userdata); 0 if unsupported
     val dateAddedSec: Long = 0,   // epoch seconds the server added this file; 0 if unknown
     // real audio codec mime sniffed at scan time (e.g. audio/alac vs audio/mp4a-latm);
