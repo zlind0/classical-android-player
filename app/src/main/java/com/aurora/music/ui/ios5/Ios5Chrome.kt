@@ -490,6 +490,7 @@ fun Ios5Slider(
     range: ClosedFloatingPointRange<Float> = 0f..1f,
     steps: Int = 0,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
     var dragging by remember { mutableStateOf(false) }
@@ -512,11 +513,11 @@ fun Ios5Slider(
     BoxWithConstraints(
         modifier
             .fillMaxWidth()
-            .height(34.dp),
+            .height(if (compact) 26.dp else 34.dp),
     ) {
         val density = LocalDensity.current
-        val trackH = 10.dp
-        val thumbD = 28.dp
+        val trackH = if (compact) 6.dp else 10.dp
+        val thumbD = if (compact) 20.dp else 28.dp
         val thumbPx = with(density) { thumbD.toPx() }
         val wPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
         val centerX = thumbPx / 2 + frac * (wPx - thumbPx)

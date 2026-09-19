@@ -3,6 +3,8 @@ package com.aurora.music.ui.ios5
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -31,6 +33,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -52,7 +57,8 @@ import com.aurora.music.ui.browse.Ios5GroupDetail
 import com.aurora.music.ui.browse.Ios5GroupsBrowse
 import com.aurora.music.ui.browse.Ios5SongsBrowse
 import com.aurora.music.ui.browse.searchScopeFor
-import com.aurora.music.ui.player.Ios5PlayerDeck
+import com.aurora.music.ui.player.Ios5MiniStrip
+import com.aurora.music.ui.player.Ios5PlayerPage
 import com.aurora.music.ui.search.Ios5SearchPage
 import com.aurora.music.ui.tabs.ArtistsTab
 import com.aurora.music.ui.tabs.HomeTab
@@ -63,6 +69,18 @@ import com.aurora.music.viewmodel.HomeViewModel
 import com.aurora.music.viewmodel.Ios5BrowseViewModel
 import com.aurora.music.viewmodel.PlayerViewModel
 import kotlinx.coroutines.launch
+
+/**
+ * 可见的播放面吃掉多余手势，防止点透到下面的内容面。
+ * 不可见时必须彻底拿掉，否则全屏透明层会吞掉主界面所有触摸。
+ */
+private fun Modifier.blockTouch(): Modifier = pointerInput(Unit) {
+    awaitPointerEventScope {
+        while (true) {
+            awaitPointerEvent().changes.forEach { it.consume() }
+        }
+    }
+}
 
 @Composable
 fun Ios5App() {
@@ -128,7 +146,23 @@ fun Ios5App() {
     }
 
     Ios5Backdrop {
+        // iOS5 翻转：内容面 / 播放面，前半程内容转走，后半程播放页转入
+        val flipDensity = LocalDensity.current
+        val flip by animateFloatAsState(
+            targetValue = if (playerState.expanded) 1f else 0f,
+            animationSpec = tween(600, easing = FastOutSlowInEasing),
+            label = "playerFlip",
+        )
         Box(Modifier.fillMaxSize()) {
+            // ---- 内容面 ----
+            Box(
+                Modifier.fillMaxSize()
+                    .graphicsLayer {
+                        rotationY = flip * 180f
+                        cameraDistance = 8 * flipDensity.density
+                        alpha = if (flip < 0.5f) 1f else 0f
+                    },
+            ) {
             Column(Modifier.fillMaxSize()) {
                 // ---- 上栏：当前页面 ----
                 // Mini 条是悬在 Tab 栏上方的覆盖层（56dp），有歌时内容区底部预留，
@@ -467,8 +501,7 @@ fun Ios5App() {
                     }
                 }
 
-                // ---- 下栏：Tab（不透明，背景直贴系统栏，内容避让手势区） ----
-                // Mini 条已并入全屏 Ios5PlayerDeck（p=0 时即为 Mini 形态）
+                // ---- 下栏：Mini 条 + Tab（不透明，背景直贴系统栏，内容避让手势区） ----
                 Box(
                     Modifier.fillMaxWidth().background(Ios5Colors.tabBrush),
                 ) {
@@ -476,26 +509,49 @@ fun Ios5App() {
                         Modifier.fillMaxWidth()
                             .windowInsetsPadding(WindowInsets.navigationBars),
                     ) {
+                        if (playerState.hasTrack && flip < 0.5f) {
+                            Ios5MiniStrip(
+                                state = playerState,
+                                onExpand = { playerVM.setExpanded(true) },
+                                onTogglePlay = { playerVM.togglePlay() },
+                                onNext = { playerVM.next() },
+                            )
+                        }
                         Ios5TabBar(tabHighlight) { navigateTopLevel(it) }
                     }
                 }
             }
+            } // 内容面
 
-            // ---- 手指跟随的播放器：一张卡片 0（Mini）..1（90% 浮窗），含暗化背景 ----
-            Ios5PlayerDeck(
-                playerVM = playerVM,
-                state = playerState,
-                onOpenQueue = { showQueue = true },
-                onNavigateEqualizer = { navController.navigate(Ios5Routes.SETTINGS_EQ) },
-                onNavigateAlbum = {
-                    val id = playerState.current.albumId
-                    if (id.isNotBlank()) openDetail("album", id)
-                },
-                onNavigateArtist = {
-                    val id = playerState.current.artistId
-                    if (id.isNotBlank()) openDetail("artist", id)
-                },
-            )
+            // ---- 播放面（整页 iPod 播放器，翻转进入） ----
+            // 可见时吞掉多余手势；不可见时不挂任何手势，让触摸穿透回主界面。
+            // 动画结束后卸载，避免两棵树常驻耗性能。
+            if (playerState.expanded || flip > 0.02f) {
+            Box(
+                Modifier.fillMaxSize()
+                    .graphicsLayer {
+                        rotationY = flip * 180f - 180f
+                        cameraDistance = 8 * flipDensity.density
+                        alpha = if (flip >= 0.5f) 1f else 0f
+                    }
+                    .then(if (flip >= 0.5f) Modifier.blockTouch() else Modifier),
+            ) {
+                if (playerState.hasTrack) {
+                    Ios5PlayerPage(
+                        state = playerState,
+                        onCollapse = { playerVM.setExpanded(false) },
+                        onTogglePlay = { playerVM.togglePlay() },
+                        onNext = { playerVM.next() },
+                        onPrevious = { playerVM.previous() },
+                        onSeek = { playerVM.seekTo(it) },
+                        onToggleLike = { playerVM.toggleLikeCurrent() },
+                        onToggleShuffle = { playerVM.toggleShuffle() },
+                        onCycleRepeat = { playerVM.cycleRepeat() },
+                        onOpenQueue = { showQueue = true },
+                    )
+                }
+            }
+            }
 
             AnimatedVisibility(
                 visible = showQueue,
@@ -522,7 +578,7 @@ fun Ios5App() {
         }
     }
 
-    // player collapse BackHandler lives in Ios5PlayerDeck (progress-aware)
+    BackHandler(enabled = playerState.expanded) { playerVM.setExpanded(false) }
     BackHandler(enabled = showQueue) { showQueue = false }
 
     // keep liked flags warm for visible tracks
