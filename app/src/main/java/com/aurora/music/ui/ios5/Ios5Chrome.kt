@@ -100,7 +100,7 @@ fun Ios5NavBar(
                 color = Color.White,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Serif,
+                fontFamily = Ios5Sans,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
@@ -233,7 +233,8 @@ fun Ios5Cell(
         leading?.invoke()
         if (leading != null) Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, color = Ios5Colors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // iOS5 列表主标题统一粗体（cell textLabel = Helvetica-Bold），副标题常规
+            Text(title, color = Ios5Colors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (subtitle.isNotBlank()) {
                 Text(subtitle, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -360,7 +361,7 @@ fun Ios5SongRow(
                 song.title.ifBlank { "未知曲目" },
                 color = if (isCurrent) Ios5Colors.IosBlue else Ios5Colors.TextPrimary,
                 fontSize = 15.sp,
-                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

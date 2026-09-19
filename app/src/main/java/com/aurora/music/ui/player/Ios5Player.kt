@@ -74,6 +74,7 @@ import androidx.compose.ui.unit.sp
 import com.aurora.music.ui.components.Artwork
 import com.aurora.music.ui.components.formatTime
 import com.aurora.music.ui.ios5.Ios5Colors
+import com.aurora.music.ui.ios5.Ios5Sans
 import com.aurora.music.viewmodel.PlayerUiState
 import com.aurora.music.viewmodel.PlayerViewModel
 import com.aurora.music.viewmodel.RepeatMode
@@ -224,7 +225,7 @@ fun Ios5PlayerDeck(
                     Column(Modifier.weight(1f)) {
                         Text(
                             song.title.ifBlank { "未在播放" },
-                            fontSize = 13.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium,
+                            fontSize = 13.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold,
                             color = Ios5Colors.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
                         val sub = listOf(song.artist, song.album).filter { it.isNotBlank() }.joinToString(" — ")
@@ -272,7 +273,7 @@ fun Ios5PlayerDeck(
                         Text(
                             "正在播放", Modifier.weight(1f),
                             color = Ios5Colors.TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center, fontFamily = FontFamily.Serif,
+                            textAlign = TextAlign.Center, fontFamily = Ios5Sans,
                         )
                         Icon(
                             Icons.Filled.QueueMusic, "队列",
@@ -295,7 +296,7 @@ fun Ios5PlayerDeck(
                         ) {
                         Text(
                             song.title.ifBlank { "未在播放" },
-                            fontSize = 20.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Serif,
+                            fontSize = 20.sp, fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
                             color = Ios5Colors.TextPrimary, textAlign = TextAlign.Center,
                             maxLines = 2, overflow = TextOverflow.Ellipsis,
                         )

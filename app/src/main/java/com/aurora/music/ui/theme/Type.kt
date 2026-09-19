@@ -7,18 +7,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.aurora.music.data.ThemeStyle
 
-// Fork baseline: Circular Std is a commercial font not in the repo (see README).
-// Use the system font family so a fresh clone compiles without licensed .otf files.
-// TODO(classical-fork): bundle an OSS face (e.g. Inter/Manrope) under res/font if branded typography is needed.
-val Circular: FontFamily = FontFamily.Default
+// iOS5 rewrite: whole app runs on Arial (Latin) + system CJK fallback (Heiti-style).
+val Circular: FontFamily = com.aurora.music.ui.ios5.Ios5Sans
 
 fun auroraTypography(scale: Float = 1f, style: Int = ThemeStyle.AURORA): Typography {
     val s = scale.coerceIn(0.8f, 1.4f)
-    val family = when (style) {
-        ThemeStyle.RETRO -> FontFamily.Monospace
-        ThemeStyle.AERO -> FontFamily.SansSerif
-        else -> Circular
-    }
+    val family = Circular
     fun t(weight: FontWeight, size: Float, line: Float, letter: Float = 0f) = TextStyle(
         fontFamily = family,
         fontWeight = when {

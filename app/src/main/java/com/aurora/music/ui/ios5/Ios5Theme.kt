@@ -3,7 +3,21 @@ package com.aurora.music.ui.ios5
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.aurora.music.R
+
+/**
+ * App typeface: TeX Gyre Heros (open Helvetica-metric clone, GUST license)
+ * for Latin/digits, system Noto Sans CJK fallback for Chinese (Heiti-style).
+ * This mirrors the real iOS5 split: Helvetica(Neue) + STHeiti SC.
+ */
+val Ios5Sans: FontFamily = FontFamily(
+    Font(R.font.heros_regular, FontWeight.Normal),
+    Font(R.font.heros_bold, FontWeight.Bold),
+)
 
 /**
  * iOS5 skeuomorphic tokens. Fixed light look, does not follow system dark mode.

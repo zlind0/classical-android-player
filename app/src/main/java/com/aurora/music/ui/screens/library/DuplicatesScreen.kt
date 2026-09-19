@@ -102,7 +102,7 @@ private fun GroupRows(group: DuplicateGroup, currentSongId: String, onPlay: (Son
             Artwork(s.artworkUrl, s.accent, Modifier.size(40.dp), corner = 6.dp)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text(s.album.ifBlank { unknownAlbum }, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(s.album.ifBlank { unknownAlbum }, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(specLine(s, unknownFormat), color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (s.id == currentSongId) {

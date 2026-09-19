@@ -155,7 +155,7 @@ private fun ShelfRow(
                     corner = 8.dp,
                 )
                 Text(
-                    a.title, fontSize = 13.sp, lineHeight = 15.sp, fontWeight = FontWeight.Medium,
+                    a.title, fontSize = 13.sp, lineHeight = 15.sp, fontWeight = FontWeight.Bold,
                     color = com.aurora.music.ui.ios5.Ios5Colors.TextPrimary,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp),
                 )

@@ -242,7 +242,7 @@ private fun QueueTrackRow(
         val alpha = if (dimmed) 0.6f else 1f
         Column(Modifier.weight(1f)) {
             Text(
-                song.title, color = Ios5Colors.TextPrimary.copy(alpha = alpha), fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                song.title, color = Ios5Colors.TextPrimary.copy(alpha = alpha), fontSize = 15.sp, fontWeight = FontWeight.Bold,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             Text(song.artist, color = Ios5Colors.TextSecondary.copy(alpha = alpha), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
