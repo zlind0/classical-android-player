@@ -91,7 +91,13 @@ class LocalBackend(
         library.ensureLoaded()
         return when (kind) {
             "album" -> {
-                val tracks = library.songsByAlbumId(id)
+                // 碟号 → 曲号 → 标题 → 文件名；缺号的沉底，不断尾
+                val tracks = library.songsByAlbumId(id).sortedWith(
+                    compareBy<Song> { if (it.discNumber == 0) Int.MAX_VALUE else it.discNumber }
+                        .thenBy { if (it.trackNumber == 0) Int.MAX_VALUE else it.trackNumber }
+                        .thenBy { it.title.lowercase() }
+                        .thenBy { it.path.substringAfterLast('/').lowercase() },
+                )
                 val album = library.albums.firstOrNull { it.id == id } ?: return null
                 DetailData(
                     info = DetailInfo(album.title, album.artist, album.artworkUrl, accentFor(id), false, tracks.size, album.typeLabel),

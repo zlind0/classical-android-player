@@ -110,6 +110,10 @@ fun Ios5App() {
         container.repository.detail(kind, id)
             ?.let { if (it.tracks.isNotEmpty()) playerVM.playCollection(kind, id, it.tracks, 0, it.info.songCount) }
     }
+    fun shuffleCollection(kind: String, id: String) = scope.launch {
+        container.repository.detail(kind, id)
+            ?.let { if (it.tracks.isNotEmpty()) playerVM.shuffleCollection(kind, id, it.tracks, it.info.songCount) }
+    }
     fun playById(id: String) = scope.launch {
         container.repository.songFor(id)?.let { playerVM.play(it) }
     }
@@ -263,6 +267,8 @@ fun Ios5App() {
                                         onBack = { navController.popBackStack() },
                                         onSearch = { navController.navigate(Ios5Routes.search("all")) },
                                         onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
+                                        onPlayAll = { if (songs.isNotEmpty()) playerVM.playAll(songs, 0) },
+                                        onShuffleAll = { if (songs.isNotEmpty()) playerVM.shufflePlay(songs) },
                                     )
                                 }
                                 "composer" -> {
@@ -274,6 +280,8 @@ fun Ios5App() {
                                         onBack = { navController.popBackStack() },
                                         onSearch = { navController.navigate(Ios5Routes.search("all")) },
                                         onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
+                                        onPlayAll = { if (songs.isNotEmpty()) playerVM.playAll(songs, 0) },
+                                        onShuffleAll = { if (songs.isNotEmpty()) playerVM.shufflePlay(songs) },
                                     )
                                 }
                                 else -> Ios5Detail(
@@ -286,6 +294,7 @@ fun Ios5App() {
                                     onOpenDetail = { k, i, t -> openDetail(k, i, t) },
                                     onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
                                     onPlayCollection = { k, i -> playCollection(k, i) },
+                                    onShuffleCollection = { k, i -> shuffleCollection(k, i) },
                                 )
                             }
                         }

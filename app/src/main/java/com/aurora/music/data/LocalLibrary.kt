@@ -126,6 +126,7 @@ class LocalLibrary(
             MediaStore.Audio.Media.DISPLAY_NAME,
             MediaStore.Audio.Media.MIME_TYPE,
             MediaStore.Audio.Media.COMPOSER,
+            MediaStore.Audio.Media.TRACK,
             @Suppress("DEPRECATION") MediaStore.Audio.Media.DATA,
         )
         if (Build.VERSION.SDK_INT >= 30) {
@@ -155,6 +156,9 @@ class LocalLibrary(
                 val bitrateCol = c.getColumnIndex(MediaStore.Audio.Media.BITRATE)
                 val genreCol = if (Build.VERSION.SDK_INT >= 30) c.getColumnIndex(MediaStore.Audio.Media.GENRE) else -1
                 val composerCol = c.getColumnIndex(MediaStore.Audio.Media.COMPOSER)
+                val trackCol = c.getColumnIndex(MediaStore.Audio.Media.TRACK)
+                // 非标准列：AOSP provider 没有，OEM 有就顺手读，没有返回 -1
+                val discCol = c.getColumnIndex("disc_number")
                 @Suppress("DEPRECATION") val dataCol = c.getColumnIndex(MediaStore.Audio.Media.DATA)
                 while (c.moveToNext()) {
                     val id = c.getLong(idCol)
@@ -175,6 +179,14 @@ class LocalLibrary(
                     val data = if (dataCol >= 0) c.getString(dataCol).orEmpty() else ""
                     if (data.contains('/')) dirs[id.toString()] = data.substringBeforeLast('/')
                     val rg = if (data.isNotBlank()) gainProvider(data) else null
+                    val rawTrack = if (trackCol >= 0) runCatching { c.getInt(trackCol) }.getOrDefault(0) else 0
+                    var discNo = if (discCol >= 0) runCatching { c.getInt(discCol) }.getOrDefault(0) else 0
+                    var trackNo = rawTrack
+                    // 部分实现把 disc 打包进 TRACK 高位（disc * 1000 + track）
+                    if (discNo == 0 && trackNo >= 1000) {
+                        discNo = trackNo / 1000
+                        trackNo %= 1000
+                    }
                     val sidAlbum = albumId.toString()
                     if (added > (albumDateAdded[sidAlbum] ?: 0L)) albumDateAdded[sidAlbum] = added
                     if (year > 0 && albumYear[sidAlbum] == null) albumYear[sidAlbum] = year
@@ -196,6 +208,8 @@ class LocalLibrary(
                         replayGainAlbum = rg?.second ?: 0f,
                         genre = if (genreCol >= 0) c.getString(genreCol).orEmpty() else "",
                         composer = if (composerCol >= 0) c.getString(composerCol).orEmpty() else "",
+                        discNumber = discNo,
+                        trackNumber = trackNo,
                         dateAddedSec = added,
                     )
                 }

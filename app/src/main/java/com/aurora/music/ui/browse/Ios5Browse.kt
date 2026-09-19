@@ -1,14 +1,20 @@
 package com.aurora.music.ui.browse
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -137,6 +143,8 @@ fun Ios5GroupDetail(
     onBack: () -> Unit,
     onSearch: () -> Unit,
     onPlaySongs: (List<Song>, Int) -> Unit,
+    onPlayAll: () -> Unit,
+    onShuffleAll: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = title, onBack = onBack, onSearch = onSearch)
@@ -144,6 +152,10 @@ fun Ios5GroupDetail(
             Ios5Empty("这里没有歌曲")
         } else {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    Ios5PlayButtons(onPlayAll = onPlayAll, onShuffleAll = onShuffleAll)
+                }
                 item { Ios5SectionTitle("歌曲（${songs.size}）") }
                 ios5Rows(songs, key = { it.id }) { i, s ->
                     Ios5SongRow(s, s.id == player.current.id, player.isPlaying) {
@@ -152,6 +164,27 @@ fun Ios5GroupDetail(
                 }
             }
         }
+    }
+}
+
+/** 播放全部 + 随机播放：文字配经典图标，详情页标配。 */
+@Composable
+private fun Ios5PlayButtons(
+    onPlayAll: () -> Unit,
+    onShuffleAll: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        com.aurora.music.ui.ios5.Ios5GlossButton(
+            "播放全部", onClick = onPlayAll,
+            modifier = Modifier.weight(1f), icon = Icons.Filled.PlayArrow,
+        )
+        com.aurora.music.ui.ios5.Ios5GlossButton(
+            "随机播放", onClick = onShuffleAll,
+            modifier = Modifier.weight(1f), icon = Icons.Filled.Shuffle,
+        )
     }
 }
 
@@ -233,6 +266,7 @@ fun Ios5Detail(
     onOpenDetail: (kind: String, id: String, title: String) -> Unit,
     onPlaySongs: (List<Song>, Int) -> Unit,
     onPlayCollection: (kind: String, id: String) -> Unit,
+    onShuffleCollection: (kind: String, id: String) -> Unit,
 ) {
     val vm: DetailViewModel = viewModel()
     LaunchedEffect(kind, id) { vm.load(kind, id) }
@@ -281,16 +315,10 @@ fun Ios5Detail(
                             }
                         }
                         Spacer(Modifier.height(8.dp))
-                        androidx.compose.foundation.layout.Row(
-                            Modifier.fillMaxSize().padding(horizontal = 12.dp),
-                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
-                        ) {
-                            com.aurora.music.ui.ios5.Ios5GlossButton(
-                                "播放全部",
-                                { onPlayCollection(kind, id) },
-                                Modifier.weight(1f),
-                            )
-                        }
+                        Ios5PlayButtons(
+                            onPlayAll = { onPlayCollection(kind, id) },
+                            onShuffleAll = { onShuffleCollection(kind, id) },
+                        )
                     }
                     if (d.albums.isNotEmpty()) {
                         item { Ios5SectionTitle("专辑（${d.albums.size}）") }
@@ -306,8 +334,13 @@ fun Ios5Detail(
                     }
                     if (d.tracks.isNotEmpty()) {
                         item { Ios5SectionTitle("歌曲（${d.tracks.size}）") }
+                        // 专辑内：同一张碟，只留曲名
+                        val minimal = kind == "album"
                         ios5Rows(d.tracks, key = { it.id }) { i, s ->
-                            Ios5SongRow(s, s.id == player.current.id, player.isPlaying) {
+                            Ios5SongRow(
+                                s, s.id == player.current.id, player.isPlaying,
+                                showArtwork = !minimal, showSubtitle = !minimal,
+                            ) {
                                 onPlaySongs(d.tracks, i)
                             }
                         }

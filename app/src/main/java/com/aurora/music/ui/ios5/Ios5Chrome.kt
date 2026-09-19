@@ -312,18 +312,28 @@ fun <T> LazyListScope.ios5Rows(
     }
 }
 
-/** Glossy blue iOS5 button. */
+/** Glossy blue iOS5 button, optional leading icon. */
 @Composable
-fun Ios5GlossButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Box(
+fun Ios5GlossButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
+) {
+    Row(
         modifier.clip(RoundedCornerShape(10.dp))
             .background(Ios5Colors.glossBrush)
             .border(1.dp, Ios5Colors.IosBlueDark, RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 10.dp),
-        contentAlignment = Alignment.Center,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
     ) {
-        Text(text, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        if (icon != null) {
+            Icon(icon, null, tint = Color.White, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(text, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -334,6 +344,7 @@ fun Ios5SongRow(
     isCurrent: Boolean,
     isPlaying: Boolean,
     showArtwork: Boolean = true,
+    showSubtitle: Boolean = true,
     onClick: () -> Unit,
 ) {
     Row(
@@ -353,9 +364,11 @@ fun Ios5SongRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            val sub = listOf(song.artist, song.album).filter { it.isNotBlank() }.joinToString(" — ")
-            if (sub.isNotBlank()) {
-                Text(sub, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (showSubtitle) {
+                val sub = listOf(song.artist, song.album).filter { it.isNotBlank() }.joinToString(" — ")
+                if (sub.isNotBlank()) {
+                    Text(sub, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
         if (isCurrent && isPlaying) {
