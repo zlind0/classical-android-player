@@ -11,16 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material3.Button
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -36,15 +26,21 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aurora.music.AuroraApplication
 import com.aurora.music.R
 import com.aurora.music.data.StorageType
-import com.aurora.music.data.StorageVolume
-import com.aurora.music.data.hasStorageRead
-import com.aurora.music.data.storageReadPermission
+import com.aurora.music.ui.ios5.Ios5Cell
+import com.aurora.music.ui.ios5.Ios5CellDivider
+import com.aurora.music.ui.ios5.Ios5CheckRow
+import com.aurora.music.ui.ios5.Ios5Colors
+import com.aurora.music.ui.ios5.Ios5GlossButton
+import com.aurora.music.ui.ios5.Ios5SettingsPage
+import com.aurora.music.ui.ios5.Ios5StaticText
+import com.aurora.music.ui.ios5.ios5Section
 import java.io.File
 
 // Classical fork v0.3 (plan §4/§56): traditional file-system folder picker.
@@ -77,7 +73,7 @@ fun FolderPickerScreen(
         onDispose { owner.lifecycle.removeObserver(obs) }
     }
     resumeTick
-    val hasRead = remember(resumeTick) { hasStorageRead(ctx) }
+    val hasRead = remember(resumeTick) { com.aurora.music.data.hasStorageRead(ctx) }
     val readLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { resumeTick++ }
 
     val dirs = remember(current) { container.volumeManager.listDirs(current) ?: emptyList() }
@@ -86,110 +82,100 @@ fun FolderPickerScreen(
         runCatching { f.isDirectory && f.canRead() }.getOrDefault(false)
     }
 
-    Column(Modifier.fillMaxWidth()) {
-        SettingsTopBar(stringResource(R.string.picker_title), onBack)
+    val strTitle = stringResource(R.string.picker_title)
+    val strNoPermission = stringResource(R.string.picker_no_permission)
+    val strGrant = stringResource(R.string.picker_grant)
+    val strStorage = stringResource(R.string.picker_storage)
+    val strFolder = stringResource(R.string.picker_folder)
+    val strUnavailable = stringResource(R.string.picker_unavailable)
+    val strUp = stringResource(R.string.picker_up)
+    val strNoStorage = stringResource(R.string.picker_no_storage)
+    val strNoSubfolders = stringResource(R.string.picker_no_subfolders)
+    val strSelectThis = stringResource(R.string.picker_select_this)
+    val bottomPad = contentPadding.calculateBottomPadding()
+    val root = volume?.rootPath.orEmpty()
+    val crumbs = remember(current) { crumbs(current, root, strRootLabel) }
+    val crumbLine = crumbs.joinToString(" / ")
+    val currentLine = current.ifBlank { strNoRoot }
+    val emptyHint = if (current.isBlank()) strNoStorage else strNoSubfolders
+    val selVolume = volume
+    val selName = if (selVolume != null) File(current).name.ifBlank { selVolume.label } else ""
+    val selLabel = if (selVolume != null) "$selName (${selVolume.label})" else ""
+
+    Ios5SettingsPage(title = strTitle, onBack = onBack) {
         if (!hasRead) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
-                Text(
-                    stringResource(R.string.picker_no_permission),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                Spacer(Modifier.height(8.dp))
-                Button(onClick = { readLauncher.launch(storageReadPermission()) }) {
-                    Text(stringResource(R.string.picker_grant))
+            ios5Section(strTitle) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    Ios5StaticText(strNoPermission)
+                    Spacer(Modifier.height(8.dp))
+                    Ios5GlossButton(text = strGrant, onClick = { readLauncher.launch(com.aurora.music.data.storageReadPermission()) })
                 }
             }
         }
-        LazyColumn(Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(bottom = 8.dp)) {
-            item { SettingsSectionTitle(stringResource(R.string.picker_storage)) }
-            items(volumes, key = { it.id }) { v ->
-                Row(
-                    Modifier.fillMaxWidth().clickable {
+        ios5Section(strStorage) {
+            volumes.forEachIndexed { vi, v ->
+                Ios5CheckRow(
+                    title = v.label,
+                    subtitle = v.rootPath + if (!v.available) strUnavailable else "",
+                    checked = v.id == volume?.id,
+                    onClick = {
                         volume = v
                         current = v.rootPath
-                    }.padding(horizontal = 20.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(v.label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            v.rootPath + if (!v.available) stringResource(R.string.picker_unavailable) else "",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    if (v.id == volume?.id) Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary)
-                }
+                    },
+                )
+                if (vi < volumes.size - 1) Ios5CellDivider()
             }
-            item { SettingsSectionTitle(stringResource(R.string.picker_folder)) }
-            item {
-                // breadcrumb: jump to any ancestor (never above the volume root)
-                val root = volume?.rootPath.orEmpty()
-                val crumbs = remember(current) { crumbs(current, root, strRootLabel) }
-                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.picker_up),
-                        tint = MaterialTheme.colorScheme.primary,
+        }
+        ios5Section(strFolder) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "‹ $strUp",
+                        color = Ios5Colors.IosBlue, fontSize = 15.sp, fontWeight = FontWeight.Bold,
                         modifier = Modifier.clickable(enabled = current != root) {
                             current = File(current).parent ?: root
-                        }.padding(8.dp),
+                        }.padding(vertical = 6.dp),
                     )
-                    Spacer(Modifier.width(4.dp))
+                    Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(
-                            current.ifBlank { strNoRoot },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Text(currentLine, color = Ios5Colors.TextSecondary, fontSize = 13.sp)
                         if (crumbs.size > 1) {
-                            Text(
-                                crumbs.joinToString(" / "),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                maxLines = 2, overflow = TextOverflow.Ellipsis,
-                            )
+                            Text(crumbLine, color = Ios5Colors.IosBlue, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
             }
             if (dirs.isEmpty()) {
-                item {
-                    Text(
-                        if (current.isBlank()) stringResource(R.string.picker_no_storage)
-                        else stringResource(R.string.picker_no_subfolders),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-                    )
-                }
+                Ios5StaticText(emptyHint)
             }
-            items(dirs, key = { it.absolutePath }) { d ->
-                Row(
-                    Modifier.fillMaxWidth().clickable { current = d.absolutePath }
-                        .padding(horizontal = 20.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Filled.Folder, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.width(12.dp))
-                    Text(d.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            item { Spacer(Modifier.height(16.dp)) }
         }
-        Button(
-            onClick = {
-                val v = volume ?: return@Button
-                val name = File(current).name.ifBlank { v.label }
-                onPicked(current, "$name (${v.label})", v.type)
-            },
-            enabled = canSelect && current.isNotBlank(),
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-                .padding(bottom = contentPadding.calculateBottomPadding()),
-        ) {
-            Text(stringResource(R.string.picker_select_this))
+        if (dirs.isNotEmpty()) {
+            ios5Section(strFolder) {
+                dirs.forEachIndexed { di, d ->
+                    Ios5Cell(
+                        title = d.name,
+                        onClick = { current = d.absolutePath },
+                    )
+                    if (di < dirs.size - 1) Ios5CellDivider()
+                }
+            }
+        }
+        item {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).padding(bottom = bottomPad)) {
+                if (canSelect && current.isNotBlank()) {
+                    Ios5GlossButton(
+                        text = strSelectThis,
+                        onClick = {
+                            val v = selVolume ?: return@Ios5GlossButton
+                            onPicked(current, selLabel, v.type)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    Ios5StaticText(strSelectThis)
+                }
+                Spacer(Modifier.height(8.dp))
+            }
         }
     }
 }

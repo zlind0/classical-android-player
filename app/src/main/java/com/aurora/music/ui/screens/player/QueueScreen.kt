@@ -1,46 +1,31 @@
 package com.aurora.music.ui.screens.player
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LocalContentColor
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -50,22 +35,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.aurora.music.R
 import com.aurora.music.model.Song
 import com.aurora.music.ui.components.Artwork
-import com.aurora.music.ui.components.Eyebrow
 import com.aurora.music.ui.components.formatTime
-import com.aurora.music.util.rememberDominantColor
+import com.aurora.music.ui.ios5.Ios5ActionRow
+import com.aurora.music.ui.ios5.Ios5CellDivider
+import com.aurora.music.ui.ios5.Ios5Colors
+import com.aurora.music.ui.ios5.Ios5Group
+import com.aurora.music.ui.ios5.Ios5NavBar
+import com.aurora.music.ui.ios5.Ios5SectionTitle
 import kotlin.math.roundToInt
 
 @Composable
@@ -84,7 +72,6 @@ fun QueueScreen(
     val startIdx = (currentIndex + 1).coerceAtLeast(0)
     val upcoming = (startIdx until queue.size).toList()
     val played = (currentIndex - 1 downTo 0).toList()
-    val accent by rememberDominantColor(current?.artworkUrl ?: "", MaterialTheme.colorScheme.primary)
     val rowHeight = 64.dp
     val rowPx = with(LocalDensity.current) { rowHeight.toPx() }
 
@@ -94,83 +81,74 @@ fun QueueScreen(
     var showSaveDialog by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
-    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(accent.copy(alpha = 0.55f), accent.copy(alpha = 0.14f), MaterialTheme.colorScheme.background, MaterialTheme.colorScheme.background)
-                    )
-                )
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
-        ) {
-            Column(
-                Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars).padding(horizontal = 16.dp),
-            ) {
-                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.KeyboardArrowDown, stringResource(R.string.queue_close), modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onClose).padding(6.dp))
-                    Spacer(Modifier.weight(1f))
-                    Text(stringResource(R.string.queue_title), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
-                    Spacer(Modifier.weight(1f))
-                    Icon(
-                        Icons.Filled.PlaylistAdd, stringResource(R.string.queue_save_as),
-                        tint = if (queue.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f) else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(40.dp).clip(CircleShape)
-                            .clickable(enabled = queue.isNotEmpty()) { showSaveDialog = true }.padding(8.dp),
-                    )
-                    Icon(
-                        Icons.Filled.DeleteSweep, stringResource(R.string.queue_clear),
-                        tint = if (upcoming.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f) else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(40.dp).clip(CircleShape)
-                            .clickable(enabled = upcoming.isNotEmpty(), onClick = onClear).padding(8.dp),
-                    )
-                }
+    val strTitle = stringResource(R.string.queue_title)
+    val strNowPlaying = stringResource(R.string.queue_now_playing)
+    val strPreviously = stringResource(R.string.queue_previously, played.size)
+    val strNothingUpNext = stringResource(R.string.queue_nothing_up_next)
+    val strUpNext = if (upcoming.isEmpty()) strNothingUpNext else stringResource(R.string.queue_up_next, upcoming.size)
+    val strSaveAs = stringResource(R.string.queue_save_as)
+    val strClear = stringResource(R.string.queue_clear)
 
-                if (current != null) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Artwork(current.artworkUrl, accent, Modifier.size(64.dp), corner = 14.dp)
-                        Spacer(Modifier.width(14.dp))
-                        Column(Modifier.weight(1f)) {
-                            Eyebrow(stringResource(R.string.queue_now_playing), accent)
-                            Spacer(Modifier.height(2.dp))
-                            Text(current.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(current.artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                        Icon(Icons.Filled.GraphicEq, null, tint = accent, modifier = Modifier.size(26.dp))
+    Column(Modifier.fillMaxSize()) {
+        Ios5NavBar(title = strTitle, onBack = onClose)
+        LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().weight(1f)) {
+            item {
+                Ios5Group(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    if (queue.isNotEmpty()) {
+                        Ios5ActionRow(title = strSaveAs, onClick = { showSaveDialog = true })
+                    } else {
+                        Ios5StaticHint(strSaveAs)
+                    }
+                    Ios5CellDivider()
+                    if (upcoming.isNotEmpty()) {
+                        Ios5ActionRow(title = strClear, danger = true, onClick = onClear)
+                    } else {
+                        Ios5StaticHint(strClear)
                     }
                 }
-
-                LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().weight(1f)) {
-                    if (played.isNotEmpty()) {
-                        item {
-                            Row(
-                                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-                                    .clickable { showHistory = !showHistory }.padding(vertical = 8.dp, horizontal = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(Icons.Filled.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    stringResource(R.string.queue_previously, played.size),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Black,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                Icon(
-                                    if (showHistory) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp),
-                                )
+            }
+            if (current != null) {
+                item { Ios5SectionTitle(strNowPlaying) }
+                item {
+                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Artwork(current.artworkUrl, current.accent, Modifier.size(52.dp), corner = 8.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(current.title, color = Ios5Colors.IosBlue, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(current.artist, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            if (isPlaying) {
+                                Text("♪", color = Ios5Colors.IosBlue, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                             }
                         }
+                    }
+                }
+            }
+            if (played.isNotEmpty()) {
+                item { Ios5SectionTitle(strPreviously) }
+                item {
+                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth().clickable { showHistory = !showHistory }.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                strPreviously,
+                                color = Ios5Colors.TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Icon(
+                                if (showHistory) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null,
+                                tint = Ios5Colors.TextSecondary, modifier = Modifier.size(20.dp),
+                            )
+                        }
                         if (showHistory) {
-                            items(played.size) { hi ->
-                                val i = played[hi]
+                            played.forEach { i ->
+                                Ios5CellDivider()
                                 QueueTrackRow(
                                     song = queue[i], index = null, rowHeight = rowHeight,
                                     dimmed = true, onClick = { onJump(i) }, onRemove = null, dragHandle = null,
@@ -178,44 +156,42 @@ fun QueueScreen(
                             }
                         }
                     }
-
-                    item {
-                        Text(
-                            if (upcoming.isEmpty()) stringResource(R.string.queue_nothing_up_next) else stringResource(R.string.queue_up_next, upcoming.size),
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Black,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 8.dp),
-                        )
-                    }
-                    items(upcoming.size) { vi ->
-                        val i = upcoming[vi]
-                        val dragging = i == dragIndex
-                        QueueTrackRow(
-                            song = queue[i],
-                            index = vi + 1,
-                            rowHeight = rowHeight,
-                            dragging = dragging,
-                            dragOffset = if (dragging) dragOffset else 0f,
-                            onClick = { onJump(i) },
-                            onRemove = { onRemove(i) },
-                            // key on i/startIdx so gesture re-captures fresh indices when current advances or rows shift
-                            dragHandle = Modifier.pointerInput(queue.size, i, startIdx) {
-                                detectDragGestures(
-                                    onDragStart = { dragIndex = i; dragOffset = 0f },
-                                    onDragEnd = {
-                                        val target = (dragIndex + (dragOffset / rowPx).roundToInt()).coerceIn(startIdx, queue.size - 1)
-                                        if (target != dragIndex && dragIndex >= 0) onMove(dragIndex, target)
-                                        dragIndex = -1; dragOffset = 0f
-                                    },
-                                    onDragCancel = { dragIndex = -1; dragOffset = 0f },
-                                    onDrag = { change, amount -> change.consume(); dragOffset += amount.y },
-                                )
-                            },
-                        )
+                }
+            }
+            item { Ios5SectionTitle(strUpNext) }
+            if (upcoming.isNotEmpty()) {
+                item {
+                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
+                        upcoming.forEachIndexed { vi, i ->
+                            if (vi > 0) Ios5CellDivider()
+                            val dragging = i == dragIndex
+                            QueueTrackRow(
+                                song = queue[i],
+                                index = vi + 1,
+                                rowHeight = rowHeight,
+                                dragging = dragging,
+                                dragOffset = if (dragging) dragOffset else 0f,
+                                onClick = { onJump(i) },
+                                onRemove = { onRemove(i) },
+                                // key on i/startIdx so gesture re-captures fresh indices when current advances or rows shift
+                                dragHandle = Modifier.pointerInput(queue.size, i, startIdx) {
+                                    detectDragGestures(
+                                        onDragStart = { dragIndex = i; dragOffset = 0f },
+                                        onDragEnd = {
+                                            val target = (dragIndex + (dragOffset / rowPx).roundToInt()).coerceIn(startIdx, queue.size - 1)
+                                            if (target != dragIndex && dragIndex >= 0) onMove(dragIndex, target)
+                                            dragIndex = -1; dragOffset = 0f
+                                        },
+                                        onDragCancel = { dragIndex = -1; dragOffset = 0f },
+                                        onDrag = { change, amount -> change.consume(); dragOffset += amount.y },
+                                    )
+                                },
+                            )
+                        }
                     }
                 }
             }
+            item { Spacer(Modifier.height(24.dp)) }
         }
     }
 
@@ -225,6 +201,14 @@ fun QueueScreen(
             onDismiss = { showSaveDialog = false },
         )
     }
+}
+
+@Composable
+private fun Ios5StaticHint(text: String) {
+    Text(
+        text, color = Ios5Colors.TextSecondary.copy(alpha = 0.5f), fontSize = 16.sp, fontWeight = FontWeight.Medium,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+    )
 }
 
 // index null = history row no number/drag, dragHandle null = no reorder handle
@@ -249,38 +233,37 @@ private fun QueueTrackRow(
                 translationY = dragOffset
                 if (dragging) { shadowElevation = 16f; scaleX = 1.02f; scaleY = 1.02f }
             }
-            .clip(RoundedCornerShape(14.dp))
-            .background(if (dragging) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent)
+            .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp),
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.width(26.dp), contentAlignment = Alignment.Center) {
-            if (index != null) Text("$index", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (index != null) {
+            Text("$index", color = Ios5Colors.TextSecondary, fontSize = 13.sp, modifier = Modifier.width(26.dp))
+            Spacer(Modifier.width(8.dp))
         }
-        Spacer(Modifier.width(8.dp))
-        Artwork(song.artworkUrl, song.accent, Modifier.size(44.dp), corner = 10.dp)
-        Spacer(Modifier.width(12.dp))
+        Artwork(song.artworkUrl, song.accent, Modifier.size(44.dp), corner = 6.dp)
+        Spacer(Modifier.width(10.dp))
         val alpha = if (dimmed) 0.6f else 1f
         Column(Modifier.weight(1f)) {
             Text(
-                song.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                song.title, color = Ios5Colors.TextPrimary.copy(alpha = alpha), fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            Text(song.artist, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(song.artist, color = Ios5Colors.TextSecondary.copy(alpha = alpha), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Text(formatTime(song.durationSec), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 4.dp))
+        Text(formatTime(song.durationSec), color = Ios5Colors.TextSecondary, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 4.dp))
         if (onRemove != null) {
             Icon(
                 Icons.Filled.Close, stringResource(R.string.queue_remove),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = Ios5Colors.TextSecondary,
                 modifier = Modifier.size(32.dp).clip(CircleShape).clickable(onClick = onRemove).padding(7.dp),
             )
         }
         if (dragHandle != null) {
             Icon(
                 Icons.Filled.DragHandle, stringResource(R.string.queue_reorder),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = Ios5Colors.TextSecondary,
                 modifier = Modifier.size(34.dp).padding(6.dp).then(dragHandle),
             )
         }

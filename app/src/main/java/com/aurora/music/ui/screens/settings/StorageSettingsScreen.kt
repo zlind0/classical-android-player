@@ -1,8 +1,6 @@
 package com.aurora.music.ui.screens.settings
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -12,12 +10,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.DownloadDone
-import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -28,10 +20,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.R
+import com.aurora.music.ui.ios5.Ios5ActionRow
+import com.aurora.music.ui.ios5.Ios5CellDivider
+import com.aurora.music.ui.ios5.Ios5Colors
+import com.aurora.music.ui.ios5.Ios5SettingsPage
+import com.aurora.music.ui.ios5.Ios5StaticText
+import com.aurora.music.ui.ios5.ios5FootNote
+import com.aurora.music.ui.ios5.ios5Section
 
 @Composable
 fun StorageSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
@@ -39,90 +40,75 @@ fun StorageSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val downloads by container.downloadManager.downloads.collectAsStateWithLifecycle()
     val bytes = remember(downloads) { container.downloadManager.totalBytes() }
 
-    Column(Modifier.fillMaxWidth()) {
-        SettingsTopBar(stringResource(R.string.storage_title), onBack)
-        Column(Modifier.fillMaxWidth().padding(bottom = contentPadding.calculateBottomPadding() + 24.dp)) {
-            Row(
-                Modifier.fillMaxWidth().padding(16.dp).clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(18.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Filled.DownloadDone, null, tint = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.storage_downloaded_fmt, downloads.size), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text(stringResource(R.string.storage_used_fmt, formatBytes(bytes)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
+    val strTitle = stringResource(R.string.storage_title)
+    val strDownloaded = stringResource(R.string.storage_downloaded_fmt, downloads.size)
+    val strUsed = stringResource(R.string.storage_used_fmt, formatBytes(bytes))
+    val strVolumeLeveling = stringResource(R.string.storage_volume_leveling)
+    val strManage = stringResource(R.string.storage_manage)
+    val strRemoveAll = stringResource(R.string.storage_remove_all)
+    val strPrivateNote = stringResource(R.string.storage_private_note)
+    val strRgApplies = stringResource(R.string.storage_rg_applies)
+    val bottomPad = contentPadding.calculateBottomPadding()
 
-            // ReplayGain scan measures on-device files (EBU R128) to level playback volume.
-            run {
-                val rg by container.replayGainScanner.progress.collectAsStateWithLifecycle()
-                SettingsSectionTitle(stringResource(R.string.storage_volume_leveling))
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-                        .clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                        .clickable(enabled = !rg.running) { container.replayGainScanner.scan() }
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (rg.running) {
+    // ReplayGain scan measures on-device files (EBU R128) to level playback volume.
+    val rg by container.replayGainScanner.progress.collectAsStateWithLifecycle()
+    val strScanningRg = stringResource(R.string.storage_scanning_rg)
+    val strScanRg = stringResource(R.string.storage_scan_rg)
+    val strRgHint = stringResource(R.string.storage_rg_hint)
+    val strCancel = stringResource(R.string.common_cancel)
+    val rgRunning = rg.running
+    val rgHeadline = if (rgRunning) strScanningRg else strScanRg
+    val rgProgressLine = if (rgRunning) stringResource(R.string.storage_rg_progress, rg.done, rg.total, rg.current) else ""
+    val rgAvg = container.replayGainStore.avgLufs()?.let { stringResource(R.string.storage_rg_avg, it) } ?: ""
+    val rgDoneLine = stringResource(R.string.storage_rg_done, container.replayGainStore.size, rgAvg)
+    val rgSub = when {
+        rgRunning -> rgProgressLine
+        container.replayGainStore.size > 0 -> rgDoneLine
+        else -> strRgHint
+    }
+    val downloadsEmpty = downloads.isEmpty()
+
+    Ios5SettingsPage(title = strTitle, onBack = onBack) {
+        ios5Section(strTitle) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
+                Text(strDownloaded, color = Ios5Colors.TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                Text(strUsed, color = Ios5Colors.TextSecondary, fontSize = 13.sp)
+            }
+        }
+        ios5Section(strVolumeLeveling) {
+            Column(
+                Modifier.fillMaxWidth().clickable(enabled = !rgRunning) { container.replayGainScanner.scan() }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(rgHeadline, color = Ios5Colors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                        Text(rgSub, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (rgRunning) {
                         androidx.compose.material3.CircularProgressIndicator(
                             modifier = Modifier.width(22.dp).height(22.dp), strokeWidth = 2.dp,
                         )
-                    } else {
-                        Icon(Icons.Filled.GraphicEq, null, tint = MaterialTheme.colorScheme.primary)
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
+                        Spacer(Modifier.width(8.dp))
                         Text(
-                            if (rg.running) stringResource(R.string.storage_scanning_rg) else stringResource(R.string.storage_scan_rg),
-                            style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium,
+                            strCancel, fontSize = 15.sp, color = Ios5Colors.IosBlue,
+                            modifier = Modifier.clip(RoundedCornerShape(50)).clickable { container.replayGainScanner.cancel() }.padding(horizontal = 10.dp, vertical = 6.dp),
                         )
-                        Text(
-                            when {
-                                rg.running -> stringResource(R.string.storage_rg_progress, rg.done, rg.total, rg.current)
-                                container.replayGainStore.size > 0 -> {
-                                    val avg = container.replayGainStore.avgLufs()?.let { stringResource(R.string.storage_rg_avg, it) } ?: ""
-                                    stringResource(R.string.storage_rg_done, container.replayGainStore.size, avg)
-                                }
-                                else -> stringResource(R.string.storage_rg_hint)
-                            },
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        )
-                    }
-                    if (rg.running) {
-                        Text(stringResource(R.string.common_cancel), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.clip(RoundedCornerShape(50)).clickable { container.replayGainScanner.cancel() }.padding(horizontal = 10.dp, vertical = 6.dp))
                     }
                 }
-                Text(
-                    stringResource(R.string.storage_rg_applies),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-                )
             }
-
-            SettingsSectionTitle(stringResource(R.string.storage_manage))
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-                    .clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .clickable(enabled = downloads.isNotEmpty()) { container.downloadManager.clearAll() }
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Filled.DeleteSweep, null, tint = MaterialTheme.colorScheme.error)
-                Spacer(Modifier.width(12.dp))
-                Text(stringResource(R.string.storage_remove_all), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.error)
-            }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                stringResource(R.string.storage_private_note),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-            )
+            Ios5CellDivider()
+            Ios5StaticText(strRgApplies)
         }
+        ios5Section(strManage) {
+            if (downloadsEmpty) {
+                Ios5StaticText(strRemoveAll)
+            } else {
+                Ios5ActionRow(title = strRemoveAll, danger = true, onClick = { container.downloadManager.clearAll() })
+            }
+        }
+        ios5FootNote(strPrivateNote)
+        item { Spacer(Modifier.height(bottomPad)) }
     }
 }
 

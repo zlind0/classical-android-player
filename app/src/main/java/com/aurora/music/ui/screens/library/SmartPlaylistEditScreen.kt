@@ -8,30 +8,23 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,16 +33,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.sp
 import com.aurora.music.R
 import com.aurora.music.data.SmartPlaylist
 import com.aurora.music.data.SmartRule
-import com.aurora.music.ui.screens.settings.SegmentedRow
-import com.aurora.music.ui.screens.settings.SettingsGroup
-import com.aurora.music.ui.screens.settings.SettingsTopBar
+import com.aurora.music.ui.ios5.Ios5ActionRow
+import com.aurora.music.ui.ios5.Ios5CellDivider
+import com.aurora.music.ui.ios5.Ios5Colors
+import com.aurora.music.ui.ios5.Ios5GlossButton
+import com.aurora.music.ui.ios5.Ios5SegmentRow
+import com.aurora.music.ui.ios5.Ios5SettingsPage
+import com.aurora.music.ui.ios5.Ios5TextRow
+import com.aurora.music.ui.ios5.ios5Section
 
 // keys must match SmartPlaylistEngine
 private const val TYPE_TEXT = 0
@@ -136,70 +135,85 @@ fun SmartPlaylistEditScreen(
     onSave: () -> Unit,
     onBack: () -> Unit,
 ) {
-    Column(Modifier.fillMaxSize()) {
-        SettingsTopBar(title = if (isNew) stringResource(R.string.smart_title_new) else stringResource(R.string.smart_title_edit), onBack = onBack)
-        Column(
-            Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
-                .padding(bottom = contentPadding.calculateBottomPadding() + 24.dp),
-        ) {
-            OutlinedTextField(
+    val strTitleNew = stringResource(R.string.smart_title_new)
+    val strTitleEdit = stringResource(R.string.smart_title_edit)
+    val strName = stringResource(R.string.smart_name)
+    val strMatch = stringResource(R.string.smart_match)
+    val strAllRules = stringResource(R.string.smart_all_rules)
+    val strAnyRule = stringResource(R.string.smart_any_rule)
+    val strRules = stringResource(R.string.smart_rules)
+    val strAddRule = stringResource(R.string.smart_add_rule)
+    val strSort = stringResource(R.string.smart_sort)
+    val strLimit = stringResource(R.string.smart_limit)
+    val strCreate = stringResource(R.string.smart_create)
+    val strSaveChanges = stringResource(R.string.smart_save_changes)
+    val strDesc = stringResource(R.string.smart_desc)
+    val strAsc = stringResource(R.string.smart_asc)
+    val bottomPad = contentPadding.calculateBottomPadding()
+    val rules = playlist.rules.orEmpty()
+    val sortOptions = listOf(
+        sortLabel("title"), sortLabel("artist"), sortLabel("album"), sortLabel("duration"),
+        sortLabel("playCount"), sortLabel("lastPlayed"), sortLabel("random"),
+    )
+    val sortSelected = SORTS.indexOf(playlist.sortBy ?: "title").coerceAtLeast(0)
+    val limitText = (playlist.limit ?: 0).takeIf { it > 0 }?.toString() ?: ""
+
+    Ios5SettingsPage(title = if (isNew) strTitleNew else strTitleEdit, onBack = onBack) {
+        ios5Section(strName) {
+            Ios5TextRow(
+                title = strName,
                 value = playlist.name.orEmpty(),
+                placeholder = strName,
                 onValueChange = { v -> onUpdate { it.copy(name = v) } },
-                label = { Text(stringResource(R.string.smart_name)) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             )
-            Spacer(Modifier.height(14.dp))
-
-            SettingsGroup {
-                SegmentedRow(
-                    title = stringResource(R.string.smart_match),
-                    options = listOf(stringResource(R.string.smart_all_rules), stringResource(R.string.smart_any_rule)),
-                    selected = if (playlist.matchAll != false) 0 else 1,
-                    onSelect = { i -> onUpdate { it.copy(matchAll = i == 0) } },
-                )
+        }
+        ios5Section(strMatch) {
+            Ios5SegmentRow(
+                title = strMatch,
+                options = listOf(strAllRules, strAnyRule),
+                selected = if (playlist.matchAll != false) 0 else 1,
+                onSelect = { i -> onUpdate { it.copy(matchAll = i == 0) } },
+            )
+        }
+        ios5Section(strRules) {
+            if (rules.isEmpty()) {
+                Ios5ActionRow(title = strAddRule, onClick = { onUpdate { it.copy(rules = rules + SmartRule()) } })
+            } else {
+                rules.forEachIndexed { i, rule ->
+                    RuleRow(
+                        rule = rule,
+                        onChange = { r -> onUpdate { it.copy(rules = rules.toMutableList().apply { set(i, r) }) } },
+                        onRemove = { onUpdate { it.copy(rules = rules.toMutableList().apply { removeAt(i) }) } },
+                    )
+                    if (i < rules.size - 1) Ios5CellDivider()
+                }
+                Ios5ActionRow(title = strAddRule, onClick = { onUpdate { it.copy(rules = rules + SmartRule()) } })
             }
-            Spacer(Modifier.height(14.dp))
-
-            Text(stringResource(R.string.smart_rules), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 20.dp))
-            Spacer(Modifier.height(6.dp))
-            val rules = playlist.rules.orEmpty()
-            rules.forEachIndexed { i, rule ->
-                RuleRow(
-                    rule = rule,
-                    onChange = { r -> onUpdate { it.copy(rules = rules.toMutableList().apply { set(i, r) }) } },
-                    onRemove = { onUpdate { it.copy(rules = rules.toMutableList().apply { removeAt(i) }) } },
-                )
-            }
-            TextButton(onClick = { onUpdate { it.copy(rules = rules + SmartRule()) } }, modifier = Modifier.padding(horizontal = 12.dp)) {
-                Icon(Icons.Filled.Add, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(stringResource(R.string.smart_add_rule))
-            }
-            Spacer(Modifier.height(14.dp))
-
-            SettingsGroup {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.smart_sort), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+        }
+        ios5Section(strSort) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(strSort, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
                     Dropdown(
-                        options = SORTS.map { sortLabel(it) },
-                        selected = SORTS.indexOf(playlist.sortBy ?: "title").coerceAtLeast(0),
+                        options = sortOptions,
+                        selected = sortSelected,
                         onSelect = { i -> onUpdate { it.copy(sortBy = SORTS[i]) } },
                     )
                     Spacer(Modifier.width(8.dp))
                     val desc = playlist.descending == true
                     Icon(
                         if (desc) Icons.Filled.ArrowDownward else Icons.Filled.ArrowUpward,
-                        if (desc) stringResource(R.string.smart_desc) else stringResource(R.string.smart_asc),
-                        tint = MaterialTheme.colorScheme.primary,
+                        if (desc) strDesc else strAsc,
+                        tint = Ios5Colors.IosBlue,
                         modifier = Modifier.size(36.dp).clip(CircleShape)
                             .clickable { onUpdate { it.copy(descending = !desc) } }.padding(7.dp),
                     )
                 }
-                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.smart_limit), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                Ios5CellDivider()
+                Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(strLimit, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
                     OutlinedTextField(
-                        value = (playlist.limit ?: 0).takeIf { it > 0 }?.toString() ?: "",
+                        value = limitText,
                         onValueChange = { v -> onUpdate { it.copy(limit = v.filter { c -> c.isDigit() }.toIntOrNull() ?: 0) } },
                         placeholder = { Text("0") },
                         singleLine = true,
@@ -207,13 +221,19 @@ fun SmartPlaylistEditScreen(
                     )
                 }
             }
-            Spacer(Modifier.height(20.dp))
-
-            Button(
-                onClick = onSave,
-                enabled = !playlist.name.isNullOrBlank(),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            ) { Text(if (isNew) stringResource(R.string.smart_create) else stringResource(R.string.smart_save_changes), fontWeight = FontWeight.Bold) }
+        }
+        item {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).padding(bottom = bottomPad)) {
+                if (!playlist.name.isNullOrBlank()) {
+                    Ios5GlossButton(
+                        text = if (isNew) strCreate else strSaveChanges,
+                        onClick = onSave,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    Text(strName, color = Ios5Colors.TextSecondary, fontSize = 13.sp, modifier = Modifier.padding(vertical = 6.dp))
+                }
+            }
         }
     }
 }
@@ -222,15 +242,29 @@ fun SmartPlaylistEditScreen(
 private fun RuleRow(rule: SmartRule, onChange: (SmartRule) -> Unit, onRemove: () -> Unit) {
     val spec = fieldSpec(rule.field)
     val ops = opsFor(spec.type)
+    val strRemoveRule = stringResource(R.string.smart_remove_rule)
+    val strNumberHint = stringResource(R.string.smart_number_hint)
+    val strTextHint = stringResource(R.string.smart_text_hint)
+    val fieldOptions = listOf(
+        fieldLabel("title"), fieldLabel("artist"), fieldLabel("album"), fieldLabel("genre"),
+        fieldLabel("format"), fieldLabel("duration"), fieldLabel("bitrate"),
+        fieldLabel("playCount"), fieldLabel("lastPlayedDays"),
+        fieldLabel("liked"), fieldLabel("downloaded"),
+    )
+    val opOptions = when (spec.type) {
+        TYPE_NUMBER -> listOf(opLabel("gt"), opLabel("lt"), opLabel("eq"))
+        TYPE_BOOL -> listOf(opLabel("isTrue"), opLabel("isFalse"))
+        else -> listOf(opLabel("contains"), opLabel("notContains"), opLabel("is"), opLabel("isNot"), opLabel("startsWith"))
+    }
     Column(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.45f))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Ios5Colors.GroupBg)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Dropdown(
-                options = FIELDS.map { fieldLabel(it.key) },
+                options = fieldOptions,
                 selected = FIELDS.indexOfFirst { it.key == spec.key }.coerceAtLeast(0),
                 onSelect = { i ->
                     val f = FIELDS[i]
@@ -241,13 +275,13 @@ private fun RuleRow(rule: SmartRule, onChange: (SmartRule) -> Unit, onRemove: ()
                 modifier = Modifier.weight(1f),
             )
             Dropdown(
-                options = ops.map { opLabel(it) },
+                options = opOptions,
                 selected = ops.indexOf(rule.op).coerceAtLeast(0),
                 onSelect = { i -> onChange(rule.copy(op = ops[i])) },
             )
             Icon(
-                Icons.Filled.Close, stringResource(R.string.smart_remove_rule),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                Icons.Filled.Close, strRemoveRule,
+                tint = Ios5Colors.TextSecondary,
                 modifier = Modifier.size(32.dp).clip(CircleShape).clickable(onClick = onRemove).padding(6.dp),
             )
         }
@@ -256,7 +290,7 @@ private fun RuleRow(rule: SmartRule, onChange: (SmartRule) -> Unit, onRemove: ()
             OutlinedTextField(
                 value = rule.value.orEmpty(),
                 onValueChange = { v -> onChange(rule.copy(value = if (spec.type == TYPE_NUMBER) v.filter { it.isDigit() } else v)) },
-                placeholder = { Text(if (spec.type == TYPE_NUMBER) stringResource(R.string.smart_number_hint) else stringResource(R.string.smart_text_hint)) },
+                placeholder = { Text(if (spec.type == TYPE_NUMBER) strNumberHint else strTextHint) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -269,18 +303,18 @@ private fun Dropdown(options: List<String>, selected: Int, onSelect: (Int) -> Un
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
         Row(
-            Modifier.clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            Modifier.clip(RoundedCornerShape(8.dp))
+                .background(Ios5Colors.GroupBg)
                 .clickable { open = true }
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 options.getOrElse(selected) { options.first() },
-                style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium,
+                fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Ios5Colors.TextPrimary,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
             )
-            Icon(Icons.Filled.ArrowDropDown, null, modifier = Modifier.size(20.dp))
+            Icon(Icons.Filled.ArrowDropDown, null, tint = Ios5Colors.TextSecondary, modifier = Modifier.size(20.dp))
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             options.forEachIndexed { i, opt ->

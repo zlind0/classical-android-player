@@ -12,30 +12,13 @@ import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Alarm
-import androidx.compose.material.icons.filled.BatteryStd
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Fullscreen
-import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Usb
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -45,18 +28,23 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aurora.music.R
+import com.aurora.music.ui.ios5.Ios5CellDivider
+import com.aurora.music.ui.ios5.Ios5Colors
+import com.aurora.music.ui.ios5.Ios5GlossButton
+import com.aurora.music.ui.ios5.Ios5SettingsPage
+import com.aurora.music.ui.ios5.ios5FootNote
+import com.aurora.music.ui.ios5.ios5Section
 
 @Composable
 fun PermissionsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
@@ -95,115 +83,79 @@ fun PermissionsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
         }
     }
 
-    Column(Modifier.fillMaxWidth()) {
-        SettingsTopBar(stringResource(R.string.perms_title), onBack)
-        LazyColumn(
-            Modifier.fillMaxWidth(),
-            contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp),
-        ) {
-            item {
-                Text(
-                    stringResource(R.string.perms_intro),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 4.dp),
-                )
+    val strTitle = stringResource(R.string.perms_title)
+    val strIntro = stringResource(R.string.perms_intro)
+    val strSection = stringResource(R.string.perms_title)
+    val strUsbNote = stringResource(R.string.perms_usb_note)
+    val needsAllFiles = com.aurora.music.data.needsAllFilesRow()
+    val fullOk = if (needsAllFiles) com.aurora.music.data.hasAllFilesAccess(ctx) else false
+    val dacSub = when {
+        dac == null -> stringResource(R.string.perms_usb_none)
+        dacOk -> stringResource(R.string.perms_usb_granted, dac.productName ?: "the DAC")
+        else -> stringResource(R.string.perms_usb_tap, dac.productName ?: "the DAC")
+    }
+
+    Ios5SettingsPage(strTitle, onBack) {
+        ios5FootNote(strIntro)
+        ios5Section(strSection) {
+            PermRow(stringResource(R.string.perms_notifications), stringResource(R.string.perms_notifications_sub), notifOk) {
+                if (Build.VERSION.SDK_INT >= 33) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                else open(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
             }
-            item {
-                PermRow(Icons.Filled.Notifications, stringResource(R.string.perms_notifications), stringResource(R.string.perms_notifications_sub), notifOk) {
-                    if (Build.VERSION.SDK_INT >= 33) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    else open(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                }
+            Ios5CellDivider()
+            PermRow(stringResource(R.string.perms_music), stringResource(R.string.perms_music_sub), audioOk) {
+                audioLauncher.launch(audioPerm)
             }
-            item {
-                PermRow(Icons.Filled.LibraryMusic, stringResource(R.string.perms_music), stringResource(R.string.perms_music_sub), audioOk) {
-                    audioLauncher.launch(audioPerm)
-                }
+            if (needsAllFiles) {
+                Ios5CellDivider()
+                PermRow(
+                    stringResource(R.string.perms_all_files),
+                    stringResource(R.string.perms_all_files_sub),
+                    fullOk,
+                ) { com.aurora.music.data.openAllFilesSettings(ctx) }
             }
-            if (com.aurora.music.data.needsAllFilesRow()) {
-                item {
-                    val fullOk = com.aurora.music.data.hasAllFilesAccess(ctx)
-                    PermRow(
-                        Icons.Filled.LibraryMusic, stringResource(R.string.perms_all_files),
-                        stringResource(R.string.perms_all_files_sub),
-                        fullOk,
-                    ) { com.aurora.music.data.openAllFilesSettings(ctx) }
-                }
+            Ios5CellDivider()
+            PermRow(stringResource(R.string.perms_battery), stringResource(R.string.perms_battery_sub), batteryOk) {
+                open(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, withPackage = true)
             }
-            item {
-                PermRow(Icons.Filled.BatteryStd, stringResource(R.string.perms_battery), stringResource(R.string.perms_battery_sub), batteryOk) {
-                    open(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, withPackage = true)
-                }
+            Ios5CellDivider()
+            PermRow(stringResource(R.string.perms_alarm), stringResource(R.string.perms_alarm_sub), exactOk) {
+                if (Build.VERSION.SDK_INT >= 31) open(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
             }
-            item {
-                PermRow(Icons.Filled.Alarm, stringResource(R.string.perms_alarm), stringResource(R.string.perms_alarm_sub), exactOk) {
-                    if (Build.VERSION.SDK_INT >= 31) open(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
-                }
+            Ios5CellDivider()
+            PermRow(stringResource(R.string.perms_fs_alarm), stringResource(R.string.perms_fs_alarm_sub), fsOk) {
+                if (Build.VERSION.SDK_INT >= 34) open(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, withPackage = true)
             }
-            item {
-                PermRow(Icons.Filled.Fullscreen, stringResource(R.string.perms_fs_alarm), stringResource(R.string.perms_fs_alarm_sub), fsOk) {
-                    if (Build.VERSION.SDK_INT >= 34) open(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, withPackage = true)
-                }
-            }
-            item {
-                val sub = when {
-                    dac == null -> stringResource(R.string.perms_usb_none)
-                    dacOk -> stringResource(R.string.perms_usb_granted, dac.productName ?: "the DAC")
-                    else -> stringResource(R.string.perms_usb_tap, dac.productName ?: "the DAC")
-                }
-                PermRow(Icons.Filled.Usb, stringResource(R.string.perms_usb), sub, dacOk, enabled = dac != null) {
-                    dac?.let { usbDev.requestPermission(it) { refresh++ } }
-                }
-            }
-            item {
-                Text(
-                    stringResource(R.string.perms_usb_note),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
-                )
+            Ios5CellDivider()
+            PermRow(stringResource(R.string.perms_usb), dacSub, dacOk, enabled = dac != null) {
+                dac?.let { usbDev.requestPermission(it) { refresh++ } }
             }
         }
+        ios5FootNote(strUsbNote)
     }
 }
 
 @Composable
 private fun PermRow(
-    icon: ImageVector,
     title: String,
     subtitle: String,
     granted: Boolean,
     enabled: Boolean = true,
     onGrant: () -> Unit,
 ) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .clickable(enabled = enabled && !granted, onClick = onGrant)
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            Modifier.size(38.dp).clip(RoundedCornerShape(10.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-            contentAlignment = Alignment.Center,
-        ) { Icon(icon, null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(20.dp)) }
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Spacer(Modifier.width(10.dp))
-        if (granted) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(4.dp))
-                Text(stringResource(R.string.common_granted), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(title, color = Ios5Colors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                if (subtitle.isNotBlank()) {
+                    Text(subtitle, color = Ios5Colors.TextSecondary, fontSize = 13.sp)
+                }
             }
-        } else if (enabled) {
-            Box(
-                Modifier.clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.primary)
-                    .clickable(onClick = onGrant).padding(horizontal = 14.dp, vertical = 7.dp),
-            ) {
-                Text(stringResource(R.string.common_grant), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
+            Spacer(Modifier.width(10.dp))
+            if (granted) {
+                Text("✓ " + stringResource(R.string.common_granted), color = Ios5Colors.IosBlue, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            } else if (enabled) {
+                Ios5GlossButton(stringResource(R.string.common_grant), onClick = onGrant)
             }
         }
     }

@@ -1,44 +1,36 @@
 package com.aurora.music.ui.screens.stats
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.R
 import com.aurora.music.AuroraApplication
-import com.aurora.music.data.PlayEvent
 import com.aurora.music.ui.components.Artwork
+import com.aurora.music.ui.ios5.Ios5CellDivider
+import com.aurora.music.ui.ios5.Ios5Colors
+import com.aurora.music.ui.ios5.Ios5Empty
+import com.aurora.music.ui.ios5.Ios5SettingsPage
+import com.aurora.music.ui.ios5.ios5Section
 import com.aurora.music.util.accentFor
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -50,49 +42,43 @@ fun ListeningHistoryScreen(contentPadding: PaddingValues, onBack: () -> Unit, on
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val context = LocalContext.current
     val history by container.playHistory.history.collectAsStateWithLifecycle()
-    val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val timeFmt = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
 
-    Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().padding(top = topInset + 6.dp, start = 8.dp, end = 16.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.common_back), modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onBack).padding(8.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(stringResource(R.string.history_title), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+    val strTitle = stringResource(R.string.history_title)
+    val strEmpty = stringResource(R.string.history_empty)
+    val strToday = context.getString(R.string.hist_today)
+    val strYesterday = context.getString(R.string.hist_yesterday)
+    val bottomPad = contentPadding.calculateBottomPadding()
+
+    if (history.isEmpty()) {
+        Ios5SettingsPage(title = strTitle, onBack = onBack) {
+            item { Ios5Empty(strEmpty) }
+            item { Spacer(Modifier.height(bottomPad)) }
         }
-        if (history.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Filled.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(56.dp))
-                    Spacer(Modifier.size(12.dp))
-                    Text(stringResource(R.string.history_empty), style = MaterialTheme.typography.titleMedium)
-                    Text(stringResource(R.string.history_empty_sub), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            return@Column
-        }
-        val grouped = history.groupBy { dayLabel(it.timestamp, context.getString(R.string.hist_today), context.getString(R.string.hist_yesterday)) }
-        LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp)) {
-            grouped.forEach { (day, events) ->
-                item {
-                    Text(day, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 20.dp, top = 16.dp, bottom = 6.dp))
-                }
-                items(events.size) { i ->
-                    val e = events[i]
+        return
+    }
+    val grouped = history.groupBy { dayLabel(it.timestamp, strToday, strYesterday) }
+    Ios5SettingsPage(title = strTitle, onBack = onBack) {
+        grouped.forEach { (day, events) ->
+            ios5Section(day) {
+                events.forEachIndexed { i, e ->
                     Row(
-                        Modifier.fillMaxWidth().clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp)).clickable { onPlay(e.songId) }.padding(horizontal = 16.dp, vertical = 8.dp),
+                        Modifier.fillMaxWidth().clickable { onPlay(e.songId) }.padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Artwork(e.artworkUrl, accentFor(e.songId), Modifier.size(48.dp), corner = 10.dp)
-                        Spacer(Modifier.width(12.dp))
+                        Artwork(e.artworkUrl, accentFor(e.songId), Modifier.size(44.dp), corner = 6.dp)
+                        Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(e.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(e.artist, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(e.title, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(e.artist, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        Text(timeFmt.format(Date(e.timestamp)), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(timeFmt.format(Date(e.timestamp)), color = Ios5Colors.TextSecondary, fontSize = 13.sp)
                     }
+                    if (i < events.size - 1) Ios5CellDivider()
                 }
             }
         }
+        item { Spacer(Modifier.height(bottomPad)) }
     }
 }
 

@@ -4,31 +4,19 @@ import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoFixHigh
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -40,16 +28,25 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.sp
 import com.aurora.music.R
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.AudioTags
 import com.aurora.music.data.remote.MetadataMatch
 import com.aurora.music.ui.components.Artwork
-import com.aurora.music.ui.screens.settings.SettingsTopBar
+import com.aurora.music.ui.ios5.Ios5CellDivider
+import com.aurora.music.ui.ios5.Ios5Colors
+import com.aurora.music.ui.ios5.Ios5GlossButton
+import com.aurora.music.ui.ios5.Ios5Loading
+import com.aurora.music.ui.ios5.Ios5SettingsPage
+import com.aurora.music.ui.ios5.Ios5StaticText
+import com.aurora.music.ui.ios5.Ios5TextRow
+import com.aurora.music.ui.ios5.ios5FootNote
+import com.aurora.music.ui.ios5.ios5Section
 import com.aurora.music.viewmodel.TagEditState
 import kotlinx.coroutines.launch
 
@@ -113,101 +110,137 @@ fun TagEditScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize()) {
-        SettingsTopBar(stringResource(R.string.common_edit_tags), onBack)
-        if (state.loading) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-            return
+    val strTitle = stringResource(R.string.common_edit_tags)
+    val strUntitled = stringResource(R.string.tag_untitled)
+    val strCoverStaged = stringResource(R.string.tags_cover_staged)
+    val strMatch = stringResource(R.string.tags_match)
+    val strAutoId = stringResource(R.string.tag_autoidentify)
+    val strIdentifying = stringResource(R.string.tag_identifying)
+    val strFTtitle = stringResource(R.string.tag_f_title)
+    val strFArtist = stringResource(R.string.tag_f_artist)
+    val strFAlbum = stringResource(R.string.tag_f_album)
+    val strFAlbumArtist = stringResource(R.string.tag_f_albumartist)
+    val strFGenre = stringResource(R.string.tag_f_genre)
+    val strFYear = stringResource(R.string.tag_f_year)
+    val strFTrack = stringResource(R.string.tag_f_track)
+    val strSaving = stringResource(R.string.tag_saving)
+    val strSaveTags = stringResource(R.string.tag_save_tags)
+    val strFootnote = if (state.localFile) stringResource(R.string.tag_footnote_file) else stringResource(R.string.tag_footnote_server)
+    val strMatchSection = stringResource(R.string.tags_match)
+    val strFieldsSection = stringResource(R.string.common_edit_tags)
+    val bottomPad = contentPadding.calculateBottomPadding()
+    val isSaving = saving
+    val fileName = state.path.substringAfterLast('/')
+
+    if (state.loading) {
+        Ios5SettingsPage(title = strTitle, onBack = onBack) {
+            item { Ios5Loading() }
+            item { Spacer(Modifier.height(bottomPad)) }
         }
-        Column(
-            Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp).padding(bottom = contentPadding.calculateBottomPadding() + 24.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Artwork(state.pickedCoverUrl.ifBlank { state.artUrl }, MaterialTheme.colorScheme.primary, Modifier.size(72.dp), corner = 12.dp)
-                Spacer(Modifier.width(12.dp))
+        return
+    }
+    Ios5SettingsPage(title = strTitle, onBack = onBack) {
+        ios5Section(strTitle) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Artwork(state.pickedCoverUrl.ifBlank { state.artUrl }, Ios5Colors.IosBlue, Modifier.size(56.dp), corner = 8.dp)
+                Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(state.tags.title.ifBlank { stringResource(R.string.tag_untitled) }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(state.path.substringAfterLast('/'), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (state.pickedCoverUrl.isNotBlank()) Text(stringResource(R.string.tags_cover_staged), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    Text(state.tags.title.ifBlank { strUntitled }, color = Ios5Colors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(fileName, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (state.pickedCoverUrl.isNotBlank()) Text(strCoverStaged, color = Ios5Colors.IosBlue, fontSize = 12.sp)
                 }
             }
-            Spacer(Modifier.height(12.dp))
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onMatch, enabled = !state.matching) {
-                    if (state.matching) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                    else Icon(Icons.Filled.AutoFixHigh, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.tags_match))
-                }
-                if (onIdentify != null) {
-                    OutlinedButton(onClick = onIdentify, enabled = !identifying) {
-                        if (identifying) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Text(if (identifying) stringResource(R.string.tag_identifying) else stringResource(R.string.tag_autoidentify))
-                    }
-                }
-            }
-            state.matchError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 4.dp)) }
-            state.matches.forEach { m -> MatchRow(m) { onApplyMatch(m) } }
-
-            Spacer(Modifier.height(8.dp))
-            TagField(stringResource(R.string.tag_f_title), state.tags.title) { v -> onEdit { it.copy(title = v) } }
-            TagField(stringResource(R.string.tag_f_artist), state.tags.artist) { v -> onEdit { it.copy(artist = v) } }
-            TagField(stringResource(R.string.tag_f_album), state.tags.album) { v -> onEdit { it.copy(album = v) } }
-            TagField(stringResource(R.string.tag_f_albumartist), state.tags.albumArtist) { v -> onEdit { it.copy(albumArtist = v) } }
-            TagField(stringResource(R.string.tag_f_genre), state.tags.genre) { v -> onEdit { it.copy(genre = v) } }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(Modifier.weight(1f)) { TagField(stringResource(R.string.tag_f_year), state.tags.year) { v -> onEdit { it.copy(year = v.filter { c -> c.isDigit() }) } } }
-                Box(Modifier.weight(1f)) { TagField(stringResource(R.string.tag_f_track), state.tags.trackNumber) { v -> onEdit { it.copy(trackNumber = v.filter { c -> c.isDigit() }) } } }
-            }
-            Spacer(Modifier.height(16.dp))
-            Button(onClick = onSave, enabled = !saving, modifier = Modifier.fillMaxWidth()) {
-                if (saving) { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)) }
-                Text(if (saving) stringResource(R.string.tag_saving) else stringResource(R.string.tag_save_tags), fontWeight = FontWeight.Bold)
-            }
-            Text(
-                if (state.localFile) stringResource(R.string.tag_footnote_file)
-                else stringResource(R.string.tag_footnote_server),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 8.dp),
-            )
         }
+        ios5Section(strMatchSection) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Ios5GlossButton(text = strMatch, onClick = onMatch, modifier = Modifier.weight(1f))
+                if (onIdentify != null) {
+                    Ios5GlossButton(
+                        text = if (identifying) strIdentifying else strAutoId,
+                        onClick = onIdentify,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            if (state.matching) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Ios5StaticText(strMatch)
+                }
+                Ios5CellDivider()
+            }
+            if (identifying) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Ios5StaticText(strIdentifying)
+                }
+                Ios5CellDivider()
+            }
+            state.matchError?.let { Ios5StaticText(it) }
+            state.matches.forEachIndexed { i, m ->
+                MatchRow(m) { onApplyMatch(m) }
+                if (i < state.matches.size - 1) Ios5CellDivider()
+            }
+        }
+        ios5Section(strFieldsSection) {
+            Ios5TextRow(title = strFTtitle, value = state.tags.title, placeholder = strFTtitle) { v -> onEdit { it.copy(title = v) } }
+            Ios5CellDivider()
+            Ios5TextRow(title = strFArtist, value = state.tags.artist, placeholder = strFArtist) { v -> onEdit { it.copy(artist = v) } }
+            Ios5CellDivider()
+            Ios5TextRow(title = strFAlbum, value = state.tags.album, placeholder = strFAlbum) { v -> onEdit { it.copy(album = v) } }
+            Ios5CellDivider()
+            Ios5TextRow(title = strFAlbumArtist, value = state.tags.albumArtist, placeholder = strFAlbumArtist) { v -> onEdit { it.copy(albumArtist = v) } }
+            Ios5CellDivider()
+            Ios5TextRow(title = strFGenre, value = state.tags.genre, placeholder = strFGenre) { v -> onEdit { it.copy(genre = v) } }
+            Ios5CellDivider()
+            Ios5TextRow(title = strFYear, value = state.tags.year, placeholder = strFYear) { v -> onEdit { it.copy(year = v.filter { c -> c.isDigit() }) } }
+            Ios5CellDivider()
+            Ios5TextRow(title = strFTrack, value = state.tags.trackNumber, placeholder = strFTrack) { v -> onEdit { it.copy(trackNumber = v.filter { c -> c.isDigit() }) } }
+        }
+        item {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).padding(bottom = bottomPad)) {
+                if (isSaving) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text(strSaving, color = Ios5Colors.TextSecondary, fontSize = 15.sp)
+                    }
+                } else {
+                    Ios5GlossButton(text = strSaveTags, onClick = onSave, modifier = Modifier.fillMaxWidth())
+                }
+            }
+        }
+        ios5FootNote(strFootnote)
+        item { Spacer(Modifier.height(bottomPad)) }
     }
 }
 
 @Composable
-private fun TagField(label: String, value: String, onChange: (String) -> Unit) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onChange,
-        label = { Text(label) },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-    )
-}
-
-@Composable
 private fun MatchRow(m: MetadataMatch, onApply: () -> Unit) {
+    val strApply = stringResource(R.string.tags_apply)
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 4.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.5f))
-            .clickable(onClick = onApply)
-            .padding(10.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (m.coverUrl.isNotBlank()) {
-            Artwork(m.coverUrl, MaterialTheme.colorScheme.primary, Modifier.size(40.dp), corner = 8.dp)
+            Artwork(m.coverUrl, Ios5Colors.IosBlue, Modifier.size(40.dp), corner = 8.dp)
             Spacer(Modifier.width(10.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(m.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(m.title, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 listOfNotNull(m.artist.ifBlank { null }, m.album.ifBlank { null }, m.year.ifBlank { null }).joinToString(" • "),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
-        Text(stringResource(R.string.tags_apply), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        Text(
+            strApply, fontSize = 15.sp, color = Ios5Colors.IosBlue,
+            modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onApply).padding(horizontal = 8.dp, vertical = 6.dp),
+        )
     }
 }

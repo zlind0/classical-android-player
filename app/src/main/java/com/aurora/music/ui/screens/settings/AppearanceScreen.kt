@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.selectable
@@ -41,6 +40,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.R
@@ -48,12 +48,19 @@ import com.aurora.music.util.AppLocale
 import com.aurora.music.data.AccentMode
 import com.aurora.music.data.CornerStyle
 import com.aurora.music.data.HomeSection
-import com.aurora.music.data.MiniProgress
-import com.aurora.music.data.MiniStyle
 import com.aurora.music.data.SeekStyle
 import com.aurora.music.data.ThemeMode
 import com.aurora.music.data.ThemeStyle
 import com.aurora.music.data.UiPrefs
+import com.aurora.music.ui.ios5.Ios5CellDivider
+import com.aurora.music.ui.ios5.Ios5Colors
+import com.aurora.music.ui.ios5.Ios5SegmentRow
+import com.aurora.music.ui.ios5.Ios5SettingsPage
+import com.aurora.music.ui.ios5.Ios5SliderRow
+import com.aurora.music.ui.ios5.Ios5StaticText
+import com.aurora.music.ui.ios5.Ios5SwitchRow
+import com.aurora.music.ui.ios5.ios5FootNote
+import com.aurora.music.ui.ios5.ios5Section
 import com.aurora.music.ui.theme.AccentPresets
 import com.aurora.music.ui.theme.LocalUiPrefs
 import com.aurora.music.ui.theme.ThemeIdentities
@@ -83,66 +90,60 @@ fun AppearanceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
         HomeSection.ARTISTS to stringResource(R.string.appearance_home_artists),
         HomeSection.NEW to stringResource(R.string.appearance_home_new),
     )
+    val strTitle = stringResource(R.string.appearance_title)
+    val strLangSection = stringResource(R.string.appearance_section_language)
+    val strLangSub = stringResource(R.string.appearance_language_sub)
+    val strThemeSection = stringResource(R.string.appearance_section_theme)
+    val strAccentSection = stringResource(R.string.appearance_section_accent)
+    val strDisplaySection = stringResource(R.string.appearance_section_display)
+    val strPlayerSection = stringResource(R.string.appearance_section_player)
+    val strMiniSection = stringResource(R.string.appearance_section_mini)
+    val strLibrarySection = stringResource(R.string.appearance_section_library)
+    val strHomeSection = stringResource(R.string.appearance_section_home)
+    val strHint = when (prefs.themeMode) {
+        ThemeMode.AMOLED -> stringResource(R.string.appearance_hint_amoled)
+        ThemeMode.SYSTEM -> stringResource(R.string.appearance_hint_system)
+        else -> ""
+    }
 
-    Column(Modifier.fillMaxWidth()) {
-        SettingsTopBar(stringResource(R.string.appearance_title), onBack)
-        LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp)) {
+    Ios5SettingsPage(strTitle, onBack) {
+        ios5Section(strLangSection) {
+            val ctx = LocalContext.current
+            var langTag by remember { mutableStateOf(AppLocale.persistedTag(ctx)) }
+            Ios5SegmentRow(
+                stringResource(R.string.appearance_language),
+                AppLocale.options.map { stringResource(AppLocale.displayName(it)) },
+                AppLocale.options.indexOf(langTag).coerceAtLeast(0),
+            ) { i ->
+                langTag = AppLocale.options[i]
+                AppLocale.setTag(ctx, langTag)
+            }
+        }
+        ios5FootNote(strLangSub)
 
-            item { SettingsSectionTitle(stringResource(R.string.appearance_section_language)) }
-            item {
-                val ctx = LocalContext.current
-                var langTag by remember { mutableStateOf(AppLocale.persistedTag(ctx)) }
-                SegmentedRow(
-                    stringResource(R.string.appearance_language),
-                    AppLocale.options.map { stringResource(AppLocale.displayName(it)) },
-                    AppLocale.options.indexOf(langTag).coerceAtLeast(0),
-                ) { i ->
-                    langTag = AppLocale.options[i]
-                    AppLocale.setTag(ctx, langTag)
-                }
+        ios5Section(strThemeSection) {
+            ThemeStylePicker(prefs) { style -> scope.launch { store.setThemeStyle(style) } }
+            Ios5CellDivider()
+            Ios5SegmentRow(
+                stringResource(R.string.appearance_mode),
+                listOf(
+                    stringResource(R.string.appearance_mode_system),
+                    stringResource(R.string.appearance_mode_light),
+                    stringResource(R.string.appearance_mode_dark),
+                    stringResource(R.string.appearance_mode_amoled),
+                ),
+                prefs.themeMode,
+            ) { i ->
+                scope.launch { store.setThemeMode(i) }
             }
-            item {
-                Text(
-                    stringResource(R.string.appearance_language_sub),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 20.dp),
-                )
-            }
+        }
+        if (strHint.isNotBlank()) {
+            ios5FootNote(strHint)
+        }
 
-            item { SettingsSectionTitle(stringResource(R.string.appearance_section_theme)) }
-            item { ThemeStylePicker(prefs) { style -> scope.launch { store.setThemeStyle(style) } } }
-            item {
-                SegmentedRow(
-                    stringResource(R.string.appearance_mode),
-                    listOf(
-                        stringResource(R.string.appearance_mode_system),
-                        stringResource(R.string.appearance_mode_light),
-                        stringResource(R.string.appearance_mode_dark),
-                        stringResource(R.string.appearance_mode_amoled),
-                    ),
-                    prefs.themeMode,
-                ) { i ->
-                    scope.launch { store.setThemeMode(i) }
-                }
-            }
-            item {
-                Text(
-                    when (prefs.themeMode) {
-                        ThemeMode.AMOLED -> stringResource(R.string.appearance_hint_amoled)
-                        ThemeMode.SYSTEM -> stringResource(R.string.appearance_hint_system)
-                        else -> ""
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 20.dp),
-                )
-            }
-
-            if (prefs.themeStyle == ThemeStyle.AURORA) {
-            item { SettingsSectionTitle(stringResource(R.string.appearance_section_accent)) }
-            item {
-                SegmentedRow(
+        if (prefs.themeStyle == ThemeStyle.AURORA) {
+            ios5Section(strAccentSection) {
+                Ios5SegmentRow(
                     stringResource(R.string.appearance_source),
                     listOf(
                         stringResource(R.string.appearance_presets),
@@ -153,37 +154,27 @@ fun AppearanceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                 ) { i ->
                     scope.launch { store.setAccentMode(i) }
                 }
-            }
-
-            when (prefs.accentMode) {
-                AccentMode.PRESET -> item {
-                    AccentPresetGrid(selected = prefs.accentPreset) { i -> scope.launch { store.setAccentPreset(i) } }
-                }
-                AccentMode.CUSTOM -> item {
-                    CustomColorPicker(initialArgb = prefs.accentColor.toInt()) { argb ->
+                Ios5CellDivider()
+                when (prefs.accentMode) {
+                    AccentMode.PRESET -> AccentPresetGrid(selected = prefs.accentPreset) { i -> scope.launch { store.setAccentPreset(i) } }
+                    AccentMode.CUSTOM -> CustomColorPicker(initialArgb = prefs.accentColor.toInt()) { argb ->
                         scope.launch { store.setAccentColor(argb.toLong() and 0xFFFFFFFFL) }
                     }
-                }
-                else -> item {
-                    Text(
+                    else -> Ios5StaticText(
                         if (materialYouSupported) stringResource(R.string.appearance_myou_on)
                         else stringResource(R.string.appearance_myou_off),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                     )
                 }
             }
-            }
+        }
 
-            item { SettingsSectionTitle(stringResource(R.string.appearance_section_display)) }
-            item {
-                SettingsSliderRow(stringResource(R.string.appearance_font_size), "${(prefs.fontScale * 100).roundToInt()}%", prefs.fontScale, 0.85f..1.3f) { v ->
-                    scope.launch { store.setFontScale(v) }
-                }
+        ios5Section(strDisplaySection) {
+            Ios5SliderRow(stringResource(R.string.appearance_font_size), "${(prefs.fontScale * 100).roundToInt()}%", prefs.fontScale, 0.85f..1.3f) { v ->
+                scope.launch { store.setFontScale(v) }
             }
-            if (prefs.themeStyle == ThemeStyle.AURORA) item {
-                SegmentedRow(
+            if (prefs.themeStyle == ThemeStyle.AURORA) {
+                Ios5CellDivider()
+                Ios5SegmentRow(
                     stringResource(R.string.appearance_corners),
                     listOf(
                         stringResource(R.string.appearance_corner_sharp),
@@ -196,83 +187,78 @@ fun AppearanceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                     scope.launch { store.setCornerStyle(i) }
                 }
             }
+        }
 
-            item { SettingsSectionTitle(stringResource(R.string.appearance_section_player)) }
-            item {
-                SegmentedRow(
-                    stringResource(R.string.appearance_seek_bar),
-                    listOf(stringResource(R.string.appearance_waveform), stringResource(R.string.appearance_bar)),
-                    prefs.playerSeekStyle,
-                ) { i ->
-                    scope.launch { store.setPlayerSeekStyle(i) }
-                }
+        ios5Section(strPlayerSection) {
+            Ios5SegmentRow(
+                stringResource(R.string.appearance_seek_bar),
+                listOf(stringResource(R.string.appearance_waveform), stringResource(R.string.appearance_bar)),
+                prefs.playerSeekStyle,
+            ) { i ->
+                scope.launch { store.setPlayerSeekStyle(i) }
             }
             if (prefs.playerSeekStyle == SeekStyle.WAVEFORM) {
-                item {
-                    SettingsSliderRow(stringResource(R.string.appearance_waveform_bars), "${prefs.playerWaveBars}", prefs.playerWaveBars.toFloat(), 24f..96f) { v ->
-                        scope.launch { store.setPlayerWaveBars(v.roundToInt()) }
-                    }
+                Ios5CellDivider()
+                Ios5SliderRow(stringResource(R.string.appearance_waveform_bars), "${prefs.playerWaveBars}", prefs.playerWaveBars.toFloat(), 24f..96f) { v ->
+                    scope.launch { store.setPlayerWaveBars(v.roundToInt()) }
                 }
             }
-            item {
-                SettingsSliderRow(stringResource(R.string.appearance_artwork_size), "${(prefs.playerArtSize * 100).roundToInt()}%", prefs.playerArtSize, 0.6f..1f) { v ->
-                    scope.launch { store.setPlayerArtSize(v) }
-                }
+            Ios5CellDivider()
+            Ios5SliderRow(stringResource(R.string.appearance_artwork_size), "${(prefs.playerArtSize * 100).roundToInt()}%", prefs.playerArtSize, 0.6f..1f) { v ->
+                scope.launch { store.setPlayerArtSize(v) }
             }
-            if (prefs.themeStyle == ThemeStyle.AURORA) item {
-                SettingsSliderRow(stringResource(R.string.appearance_gradient), "${(prefs.playerGradient * 100).roundToInt()}%", prefs.playerGradient, 0f..1.5f) { v ->
+            if (prefs.themeStyle == ThemeStyle.AURORA) {
+                Ios5CellDivider()
+                Ios5SliderRow(stringResource(R.string.appearance_gradient), "${(prefs.playerGradient * 100).roundToInt()}%", prefs.playerGradient, 0f..1.5f) { v ->
                     scope.launch { store.setPlayerGradient(v) }
                 }
             }
-            item {
-                SettingsSwitchRow(title = stringResource(R.string.appearance_bottom_utils), subtitle = stringResource(R.string.appearance_bottom_utils_sub), checked = prefs.playerShowUtilities) { v ->
-                    scope.launch { store.setPlayerShowUtilities(v) }
-                }
+            Ios5CellDivider()
+            Ios5SwitchRow(title = stringResource(R.string.appearance_bottom_utils), subtitle = stringResource(R.string.appearance_bottom_utils_sub), checked = prefs.playerShowUtilities) { v ->
+                scope.launch { store.setPlayerShowUtilities(v) }
             }
+        }
 
-            item { SettingsSectionTitle(stringResource(R.string.appearance_section_mini)) }
-            item {
-                SegmentedRow(
-                    stringResource(R.string.appearance_style),
-                    listOf(
-                        stringResource(R.string.appearance_standard),
-                        stringResource(R.string.appearance_compact),
-                        stringResource(R.string.appearance_prominent),
-                    ),
-                    prefs.miniStyle,
-                ) { i ->
-                    scope.launch { store.setMiniStyle(i) }
-                }
+        ios5Section(strMiniSection) {
+            Ios5SegmentRow(
+                stringResource(R.string.appearance_style),
+                listOf(
+                    stringResource(R.string.appearance_standard),
+                    stringResource(R.string.appearance_compact),
+                    stringResource(R.string.appearance_prominent),
+                ),
+                prefs.miniStyle,
+            ) { i ->
+                scope.launch { store.setMiniStyle(i) }
             }
-            item {
-                SegmentedRow(
-                    stringResource(R.string.appearance_progress),
-                    listOf(
-                        stringResource(R.string.appearance_line),
-                        stringResource(R.string.appearance_bar_opt),
-                        stringResource(R.string.appearance_none),
-                    ),
-                    prefs.miniProgress,
-                ) { i ->
-                    scope.launch { store.setMiniProgress(i) }
-                }
+            Ios5CellDivider()
+            Ios5SegmentRow(
+                stringResource(R.string.appearance_progress),
+                listOf(
+                    stringResource(R.string.appearance_line),
+                    stringResource(R.string.appearance_bar_opt),
+                    stringResource(R.string.appearance_none),
+                ),
+                prefs.miniProgress,
+            ) { i ->
+                scope.launch { store.setMiniProgress(i) }
             }
+        }
 
-            item { SettingsSectionTitle(stringResource(R.string.appearance_section_library)) }
-            item {
-                SegmentedRow(stringResource(R.string.appearance_grid_columns), listOf("2", "3", "4"), (prefs.libraryColumns - 2).coerceIn(0, 2)) { i ->
-                    scope.launch { store.setLibraryColumns(i + 2) }
-                }
+        ios5Section(strLibrarySection) {
+            Ios5SegmentRow(stringResource(R.string.appearance_grid_columns), listOf("2", "3", "4"), (prefs.libraryColumns - 2).coerceIn(0, 2)) { i ->
+                scope.launch { store.setLibraryColumns(i + 2) }
             }
+        }
 
-            item { SettingsSectionTitle(stringResource(R.string.appearance_section_home)) }
+        ios5Section(strHomeSection) {
             val homeSections = listOf(
                 HomeSection.HERO, HomeSection.RECENT, HomeSection.PLAYLISTS, HomeSection.FAVOURITE,
                 HomeSection.MOST, HomeSection.ARTISTS, HomeSection.NEW,
             )
-            items(homeSections.size) { idx ->
-                val id = homeSections[idx]
-                SettingsSwitchRow(title = homeSectionLabels[id] ?: id, checked = id !in prefs.hiddenHomeSections) { v ->
+            homeSections.forEachIndexed { idx, id ->
+                if (idx > 0) Ios5CellDivider()
+                Ios5SwitchRow(title = homeSectionLabels[id] ?: id, checked = id !in prefs.hiddenHomeSections) { v ->
                     scope.launch { store.setHomeSectionHidden(id, !v) }
                 }
             }
@@ -283,33 +269,33 @@ fun AppearanceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
 @Composable
 private fun ThemeStylePicker(prefs: UiPrefs, onSelect: (Int) -> Unit) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.3f
-    Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         ThemeIdentities.chunked(2).forEach { row ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 row.forEach { identity ->
                     val selected = identity.id == prefs.themeStyle
                     Column(
                         Modifier.weight(1f)
-                            .clip(MaterialTheme.shapes.medium)
-                            .background(MaterialTheme.colorScheme.surface)
-                            .border(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Ios5Colors.CellBg)
+                            .border(if (selected) 2.dp else 1.dp, if (selected) Ios5Colors.IosBlue else Ios5Colors.CellDivider, RoundedCornerShape(8.dp))
                             .selectable(selected = selected, role = Role.RadioButton, onClick = { onSelect(identity.id) })
                             .padding(4.dp),
                     ) {
                         ThemePreview(identity, prefs, dark)
                         Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 6.dp, top = 10.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(themeName(identity.id), style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                            if (selected) Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                            Text(themeName(identity.id), color = Ios5Colors.TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            if (selected) Icon(Icons.Filled.Check, null, tint = Ios5Colors.IosBlue, modifier = Modifier.size(18.dp))
                         }
                     }
                 }
             }
         }
         val current = ThemeIdentities.firstOrNull { it.id == prefs.themeStyle } ?: ThemeIdentities.first()
-        Text(themeDescription(current.id), style = MaterialTheme.typography.titleSmall)
-        Text(themeDetail(current.id), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(themeDescription(current.id), color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        Text(themeDetail(current.id), color = Ios5Colors.TextSecondary, fontSize = 13.sp)
         if (prefs.themeStyle != ThemeStyle.AURORA) {
-            Text(stringResource(R.string.appearance_non_aurora_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(R.string.appearance_non_aurora_note), color = Ios5Colors.TextSecondary, fontSize = 13.sp)
         }
     }
 }
@@ -375,16 +361,16 @@ private fun ThemePreview(identity: ThemeIdentity, prefs: UiPrefs, dark: Boolean)
 
 @Composable
 private fun AccentPresetGrid(selected: Int, onSelect: (Int) -> Unit) {
-    Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         AccentPresets.chunked(5).forEachIndexed { rowIdx, row ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 row.forEachIndexed { colIdx, preset ->
                     val index = rowIdx * 5 + colIdx
                     val isSel = index == selected
                     Box(
-                        Modifier.weight(1f).height(56.dp).clip(RoundedCornerShape(16.dp))
+                        Modifier.weight(1f).height(56.dp).clip(RoundedCornerShape(8.dp))
                             .background(preset.seed)
-                            .then(if (isSel) Modifier.border(3.dp, MaterialTheme.colorScheme.onBackground, RoundedCornerShape(16.dp)) else Modifier)
+                            .then(if (isSel) Modifier.border(3.dp, Ios5Colors.IosBlue, RoundedCornerShape(8.dp)) else Modifier)
                             .clickable { onSelect(index) },
                         contentAlignment = Alignment.Center,
                     ) {
@@ -414,13 +400,15 @@ private fun CustomColorPicker(initialArgb: Int, onChange: (Int) -> Unit) {
     val preview = Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, bri)))
 
     Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(56.dp).clip(CircleShape).background(preview).border(2.dp, MaterialTheme.colorScheme.outline, CircleShape))
-            Text(stringResource(R.string.appearance_live_preview), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(44.dp).clip(CircleShape).background(preview).border(1.dp, Ios5Colors.CellDivider, CircleShape))
+            Ios5StaticText(stringResource(R.string.appearance_live_preview))
         }
-        SettingsSliderRow(stringResource(R.string.appearance_hue), "${hue.roundToInt()}°", hue, 0f..360f) { hue = it; push() }
-        SettingsSliderRow(stringResource(R.string.appearance_saturation), "${(sat * 100).roundToInt()}%", sat, 0f..1f) { sat = it; push() }
-        SettingsSliderRow(stringResource(R.string.appearance_brightness), "${(bri * 100).roundToInt()}%", bri, 0f..1f) { bri = it; push() }
+        Ios5SliderRow(stringResource(R.string.appearance_hue), "${hue.roundToInt()}°", hue, 0f..360f) { hue = it; push() }
+        Ios5CellDivider()
+        Ios5SliderRow(stringResource(R.string.appearance_saturation), "${(sat * 100).roundToInt()}%", sat, 0f..1f) { sat = it; push() }
+        Ios5CellDivider()
+        Ios5SliderRow(stringResource(R.string.appearance_brightness), "${(bri * 100).roundToInt()}%", bri, 0f..1f) { bri = it; push() }
     }
 }
 

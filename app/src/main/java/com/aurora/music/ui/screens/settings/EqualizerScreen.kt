@@ -1,55 +1,29 @@
 package com.aurora.music.ui.screens.settings
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.material.icons.filled.AutoFixHigh
-import androidx.compose.material.icons.filled.Compress
-import androidx.compose.material.icons.filled.DirectionsCar
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Headset
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.SurroundSound
-import androidx.compose.material.icons.filled.SwapHoriz
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.VerticalAlignBottom
-import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material.icons.filled.Whatshot
-import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.snapshots.SnapshotStateMap
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -63,13 +37,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.R
@@ -91,7 +69,17 @@ import com.aurora.music.data.SettingsStore
 import com.aurora.music.playback.DspBand
 import com.aurora.music.playback.DspCoeffBuilder
 import com.aurora.music.playback.DspParams
-import androidx.compose.ui.graphics.Color
+import com.aurora.music.ui.ios5.Ios5ActionRow
+import com.aurora.music.ui.ios5.Ios5CellDivider
+import com.aurora.music.ui.ios5.Ios5CheckRow
+import com.aurora.music.ui.ios5.Ios5Colors
+import com.aurora.music.ui.ios5.Ios5GlossButton
+import com.aurora.music.ui.ios5.Ios5Group
+import com.aurora.music.ui.ios5.Ios5SectionTitle
+import com.aurora.music.ui.ios5.Ios5SegmentRow
+import com.aurora.music.ui.ios5.Ios5SettingsPage
+import com.aurora.music.ui.ios5.Ios5SliderRow
+import com.aurora.music.ui.ios5.Ios5SwitchRow
 import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -117,89 +105,79 @@ fun EqualizerScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     var tab by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(0) }
     val rgLabels = listOf(stringResource(R.string.eq_rg_off), stringResource(R.string.eq_rg_track), stringResource(R.string.eq_rg_album))
 
-    Column(Modifier.fillMaxWidth()) {
-        SettingsTopBar(stringResource(R.string.eq_title), onBack)
-        LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp)) {
-
-            collapsible("profiles", ctx.getString(R.string.eq_profiles), Icons.Filled.Person, "${audioProfiles.size} saved", expanded) {
-                AudioProfilesPanel(container, prefs, activeCorrectionId, audioProfiles, deviceProfiles, store, scope)
-            }
-
-            item {
-                PillSelector(listOf(stringResource(R.string.eq_tab_correction), stringResource(R.string.eq_tab_user), stringResource(R.string.eq_tab_dynamics)), tab) { tab = it }
-            }
-            when (tab) {
-                0 -> correctionTab(ctx, prefs, activeCorrection, corrections, activeCorrectionId, store, scope, container, expanded)
-                1 -> userEqTab(ctx, prefs, activeCorrection, store, scope, container, expanded, activeCorrectionId)
-                else -> dynamicsTab(ctx, prefs, store, scope, expanded, container)
-            }
-
-            item { SettingsSectionTitle(stringResource(R.string.playback_section_output)) }
-            collapsible("rg", ctx.getString(R.string.eq_volume_leveling), Icons.Filled.VolumeUp, ctx.getString(R.string.eq_rg_fmt, rgLabels[prefs.replayGain.coerceIn(0, 2)]), expanded) {
-                SegmentedRow("Mode", rgLabels, prefs.replayGain) { i -> scope.launch { store.setReplayGain(i) } }
-            }
+    Ios5SettingsPage(title = stringResource(R.string.eq_title), onBack = onBack) {
+        collapsible("profiles", ctx.getString(R.string.eq_profiles), "${audioProfiles.size} saved", expanded) {
+            AudioProfilesPanel(container, prefs, activeCorrectionId, audioProfiles, deviceProfiles, store, scope)
         }
-    }
-}
 
-@Composable
-private fun CollapsibleSection(
-    title: String, icon: ImageVector, summary: String?, open: Boolean, onToggle: () -> Unit,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    Column(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp)
-            .clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.5f)),
-    ) {
-        Row(Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(38.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest),
-                contentAlignment = Alignment.Center,
-            ) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp)) }
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                if (!summary.isNullOrBlank()) Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-            }
-            Icon(if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        item {
+            PillSelector(listOf(stringResource(R.string.eq_tab_correction), stringResource(R.string.eq_tab_user), stringResource(R.string.eq_tab_dynamics)), tab) { tab = it }
         }
-        AnimatedVisibility(visible = open) {
-            Column(Modifier.padding(bottom = 10.dp), content = content)
+        when (tab) {
+            0 -> correctionTab(ctx, prefs, activeCorrection, corrections, activeCorrectionId, store, scope, container, expanded)
+            1 -> userEqTab(ctx, prefs, activeCorrection, store, scope, container, expanded, activeCorrectionId)
+            else -> dynamicsTab(ctx, prefs, store, scope, expanded, container)
         }
+
+        item { Ios5SectionTitle(stringResource(R.string.playback_section_output)) }
+        collapsible("rg", ctx.getString(R.string.eq_volume_leveling), ctx.getString(R.string.eq_rg_fmt, rgLabels[prefs.replayGain.coerceIn(0, 2)]), expanded) {
+            Ios5SegmentRow("Mode", rgLabels, prefs.replayGain) { i -> scope.launch { store.setReplayGain(i) } }
+        }
+
+        item { Spacer(Modifier.height(contentPadding.calculateBottomPadding())) }
     }
 }
 
 private fun LazyListScope.collapsible(
-    key: String, title: String, icon: ImageVector, summary: String?,
+    key: String, title: String, summary: String?,
     expanded: SnapshotStateMap<String, Boolean>, defaultOpen: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
-) = item(key = key) {
-    val open = expanded[key] ?: defaultOpen
-    CollapsibleSection(title, icon, summary, open, { expanded[key] = !open }, content)
+) {
+    item(key = "${key}_title") { Ios5SectionTitle(title) }
+    item(key = key) {
+        val open = expanded[key] ?: defaultOpen
+        Ios5Group(Modifier.padding(horizontal = 12.dp)) {
+            Row(
+                Modifier.fillMaxWidth().clickable { expanded[key] = !open }.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(title, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                    if (!summary.isNullOrBlank()) {
+                        Text(summary, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 1)
+                    }
+                }
+                Text(if (open) "▲" else "▼", color = Ios5Colors.TextSecondary, fontSize = 13.sp)
+            }
+            AnimatedVisibility(visible = open) {
+                Column(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                    Ios5CellDivider()
+                    content()
+                }
+            }
+        }
+    }
 }
 
 @Composable
 private fun HeadroomRow(peak: Float, preamp: Float, onAuto: () -> Unit) {
     val over = peak + preamp                 // positive means the curve can clip
     val clip = over > 0.1f
-    val color = if (clip) Color(0xFFFF6B6B) else MaterialTheme.colorScheme.onSurfaceVariant
-    Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+    val color = if (clip) Color(0xFFD63A3A) else Ios5Colors.TextSecondary
+    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text(stringResource(R.string.eq_headroom_title), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
+            Text(stringResource(R.string.eq_headroom_title), color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
             Text(
                 when {
                     peak <= 0.1f -> stringResource(R.string.eq_headroom_ok_none)
                     clip -> stringResource(R.string.eq_headroom_clipping, peak, over)
                     else -> stringResource(R.string.eq_headroom_ok, peak, -over)
                 },
-                style = MaterialTheme.typography.bodySmall, color = color,
+                color = color, fontSize = 13.sp,
             )
         }
-        Box(
-            Modifier.clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.primary)
-                .clickable(onClick = onAuto).padding(horizontal = 16.dp, vertical = 8.dp),
-            contentAlignment = Alignment.Center,
-        ) { Text(stringResource(R.string.eq_auto), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary) }
+        Spacer(Modifier.width(10.dp))
+        Ios5GlossButton(text = stringResource(R.string.eq_auto), onClick = onAuto)
     }
 }
 
@@ -227,28 +205,24 @@ private fun ConvolutionPanel(prefs: AudioPrefs, store: SettingsStore, scope: Cor
         }
     }
     Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.eq_conv_enable), style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    if (prefs.dspConvIrName.isNotBlank()) "IR: ${prefs.dspConvIrName}" else stringResource(R.string.eq_conv_hint),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(checked = prefs.dspConvEnabled, onCheckedChange = { v -> scope.launch { store.setDspConvEnabled(v) } })
-        }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Box(
-                Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .clickable { runCatching { picker.launch(arrayOf("*/*")) } }.padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center,
-            ) { Text(if (prefs.dspConvIrName.isBlank()) stringResource(R.string.eq_conv_load) else stringResource(R.string.eq_conv_replace), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
+        Ios5SwitchRow(
+            title = stringResource(R.string.eq_conv_enable),
+            subtitle = if (prefs.dspConvIrName.isNotBlank()) "IR: ${prefs.dspConvIrName}" else stringResource(R.string.eq_conv_hint),
+            checked = prefs.dspConvEnabled,
+            onCheckedChange = { v -> scope.launch { store.setDspConvEnabled(v) } },
+        )
+        Ios5CellDivider()
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Ios5GlossButton(
+                text = if (prefs.dspConvIrName.isBlank()) stringResource(R.string.eq_conv_load) else stringResource(R.string.eq_conv_replace),
+                onClick = { runCatching { picker.launch(arrayOf("*/*")) } },
+                modifier = Modifier.weight(1f),
+            )
             if (prefs.dspConvIrName.isNotBlank()) {
-                Box(
-                    Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                        .clickable { scope.launch { store.setDspConvIr("", ""); store.setDspConvEnabled(false) } }.padding(horizontal = 16.dp, vertical = 12.dp),
-                    contentAlignment = Alignment.Center,
-                ) { Text(stringResource(R.string.eq_conv_remove), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error) }
+                Ios5GlossButton(
+                    text = stringResource(R.string.eq_conv_remove),
+                    onClick = { scope.launch { store.setDspConvIr("", ""); store.setDspConvEnabled(false) } },
+                )
             }
         }
         DbSliderRow(stringResource(R.string.eq_conv_makeup), prefs.dspConvMakeupDb, -12f..12f) { v -> scope.launch { store.setDspConvMakeup(v) } }
@@ -257,26 +231,7 @@ private fun ConvolutionPanel(prefs: AudioPrefs, store: SettingsStore, scope: Cor
 
 @Composable
 private fun PillSelector(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 6.dp).clip(RoundedCornerShape(50))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        options.forEachIndexed { i, opt ->
-            val active = i == selected
-            Box(
-                Modifier.weight(1f).clip(RoundedCornerShape(50))
-                    .background(if (active) MaterialTheme.colorScheme.primary else Color.Transparent)
-                    .clickable { onSelect(i) }.padding(vertical = 8.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    opt, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold,
-                    color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface, maxLines = 1,
-                )
-            }
-        }
-    }
+    Ios5SegmentRow(title = "", options = options, selected = selected, onSelect = onSelect)
 }
 
 @Composable
@@ -317,18 +272,18 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
         }
     }
 
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+    Column(Modifier.fillMaxWidth()) {
         PillSelector(listOf(stringResource(R.string.eq_source_device), stringResource(R.string.eq_source_squig)), source) { source = it }
         if (source == 0) {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(vertical = 6.dp)) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(vertical = 6.dp, horizontal = 12.dp)) {
                 items(EqDeviceKind.entries.size) { i ->
                     val kind = EqDeviceKind.entries[i]
                     PresetChip(eqKindLabel(kind), selected = kind == category) { categoryName = kind.name }
                 }
             }
-            Text(eqKindDescription(category), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 6.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 8.dp)) {
+            Text(eqKindDescription(category), color = Ios5Colors.TextSecondary, fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 8.dp, start = 12.dp, end = 12.dp)) {
                 items(category.examples.size) { i ->
                     val example = category.examples[i]
                     PresetChip(example, selected = query == example) { query = example }
@@ -342,37 +297,36 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
             PillSelector(SQUIG_TARGETS.map { it.first }, tgtIdx) { i -> scope.launch { store.setSquigTarget(SQUIG_TARGETS[i].second) } }
             Text(
                 stringResource(R.string.eq_squig_hint, SQUIG_TARGETS.getOrNull(tgtIdx)?.first ?: "Harman"),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 4.dp),
+                color = Ios5Colors.TextSecondary, fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
             )
         }
         Spacer(Modifier.height(4.dp))
         if (active.isNotBlank()) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 6.dp)) {
-                Icon(Icons.Filled.Headset, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.width(20.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 12.dp).padding(bottom = 6.dp)) {
+                Text(stringResource(R.string.eq_applied_prefix, active), color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.eq_applied_prefix, active), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.weight(1f))
-                Text(stringResource(R.string.eq_clear), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary,
+                Text(stringResource(R.string.eq_clear), color = Ios5Colors.IosBlue, fontSize = 14.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.clip(RoundedCornerShape(50)).clickable {
                         scope.launch { store.setActiveCorrectionId("flat"); store.setDspPreamp(0f); store.setActiveEqProfile("") }
                     }.padding(horizontal = 8.dp, vertical = 4.dp))
             }
+            Ios5CellDivider()
         }
         TextField(
             value = query,
             onValueChange = { query = it },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
             placeholder = { Text(if (source == 0) stringResource(R.string.eq_search_device) else stringResource(R.string.eq_search_squig)) },
-            leadingIcon = { Icon(Icons.Filled.Search, null, tint = MaterialTheme.colorScheme.primary) },
-            trailingIcon = { if (query.isNotEmpty()) Icon(Icons.Filled.Close, stringResource(R.string.eq_clear), modifier = Modifier.clip(RoundedCornerShape(50)).clickable { query = "" }.padding(4.dp)) },
+            leadingIcon = { Icon(Icons.Filled.Search, null, tint = Ios5Colors.TextSecondary) },
+            trailingIcon = { if (query.isNotEmpty()) Icon(Icons.Filled.Close, stringResource(R.string.eq_clear), tint = Ios5Colors.TextSecondary, modifier = Modifier.clip(RoundedCornerShape(50)).clickable { query = "" }.padding(4.dp)) },
             singleLine = true,
-            shape = RoundedCornerShape(14.dp),
+            shape = RoundedCornerShape(10.dp),
             colors = TextFieldDefaults.colors(
-                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                focusedContainerColor = Color.White,
+                unfocusedContainerColor = Color.White,
                 focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent,
-                cursorColor = MaterialTheme.colorScheme.primary,
+                cursorColor = Ios5Colors.IosBlue,
             ),
         )
         if (working || searching) {
@@ -388,8 +342,8 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
                     results.isEmpty() -> stringResource(R.string.eq_no_results)
                     else -> stringResource(R.string.eq_results_fmt, results.size, minOf(visibleCount, results.size))
                 },
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 8.dp),
+                color = Ios5Colors.TextSecondary, fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             )
         }
         results.take(visibleCount).forEach { p ->
@@ -421,14 +375,14 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
                         }
                         working = false
                     }
-                }.padding(horizontal = 4.dp, vertical = 10.dp),
+                }.padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text(p.name, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
-                    Text("${p.source} · ${eqKindLabel(p.kind)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                    Text(p.name, color = Ios5Colors.TextPrimary, fontSize = 15.sp, maxLines = 2)
+                    Text("${p.source} · ${eqKindLabel(p.kind)}", color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 2)
                 }
-                Icon(Icons.Filled.Add, stringResource(R.string.common_apply), tint = MaterialTheme.colorScheme.primary)
+                Icon(Icons.Filled.Add, stringResource(R.string.common_apply), tint = Ios5Colors.IosBlue)
             }
         }
         if (results.size > visibleCount) {
@@ -436,33 +390,34 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
         }
 
         Spacer(Modifier.height(6.dp))
-        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.eq_autoswitch), style = MaterialTheme.typography.bodyLarge)
-                Text(stringResource(R.string.eq_autoswitch_sub), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Switch(checked = autoSwitch, onCheckedChange = { v -> scope.launch { store.setAutoEqAutoSwitch(v) } })
-        }
+        Ios5CellDivider()
+        Ios5SwitchRow(
+            title = stringResource(R.string.eq_autoswitch),
+            subtitle = stringResource(R.string.eq_autoswitch_sub),
+            checked = autoSwitch,
+            onCheckedChange = { v -> scope.launch { store.setAutoEqAutoSwitch(v) } },
+        )
         if (active.isNotBlank()) {
             val activeCorrectionId by store.activeCorrectionId.collectAsStateWithLifecycle(initialValue = "flat")
-            Box(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .clickable {
-                        scope.launch {
-                            store.upsertEqBinding(EqBinding(container.autoEqController.currentOutputKey(), outLabel, active, prefs.dspPreampDb, prefs.dspParametric, correctionId = activeCorrectionId))
-                            store.setAutoEqAutoSwitch(true)
-                        }
-                    }.padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center,
-            ) { Text(stringResource(R.string.eq_bind_to, active, outLabel), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
+            Ios5CellDivider()
+            Ios5ActionRow(
+                title = stringResource(R.string.eq_bind_to, active, outLabel),
+                onClick = {
+                    scope.launch {
+                        store.upsertEqBinding(EqBinding(container.autoEqController.currentOutputKey(), outLabel, active, prefs.dspPreampDb, prefs.dspParametric, correctionId = activeCorrectionId))
+                        store.setAutoEqAutoSwitch(true)
+                    }
+                },
+            )
         }
-        bindings.forEach { b ->
-            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        bindings.forEachIndexed { index, b ->
+            if (index > 0 || active.isNotBlank()) Ios5CellDivider()
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(b.deviceLabel, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, maxLines = 1)
-                    Text(b.profileName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                    Text(b.deviceLabel, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                    Text(b.profileName, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 1)
                 }
-                Icon(Icons.Filled.Close, "Unbind", tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                Icon(Icons.Filled.Close, "Unbind", tint = Ios5Colors.TextSecondary,
                     modifier = Modifier.clip(RoundedCornerShape(50)).clickable { scope.launch { store.removeEqBinding(b.deviceKey) } }.padding(4.dp))
             }
         }
@@ -489,14 +444,14 @@ private fun LazyListScope.correctionTab(
             parametric = prefs.dspParametric, preampDb = prefs.dspPreampDb,
         )
     }
-    collapsible("corr_list", ctx.getString(R.string.eq_correction_profile), Icons.Filled.Headset,
+    collapsible("corr_list", ctx.getString(R.string.eq_correction_profile),
         activeCorrection?.name?.ifBlank { ctx.getString(R.string.eq_flat) } ?: ctx.getString(R.string.eq_flat), expanded, defaultOpen = true) {
         CorrectionProfilesPanel(corrections, activeCorrectionId, activeCorrection, store, scope)
     }
-    collapsible("autoeq", ctx.getString(R.string.eq_device_presets), Icons.Filled.Headset, ctx.getString(R.string.eq_device_presets_sub), expanded) {
+    collapsible("autoeq", ctx.getString(R.string.eq_device_presets), ctx.getString(R.string.eq_device_presets_sub), expanded) {
         AutoEqPanel(container, prefs, store, scope)
     }
-    collapsible("conv", ctx.getString(R.string.eq_convolution), Icons.Filled.GraphicEq, if (prefs.dspConvEnabled && prefs.dspConvIrName.isNotBlank()) prefs.dspConvIrName else ctx.getString(R.string.eq_conv_off), expanded) {
+    collapsible("conv", ctx.getString(R.string.eq_convolution), if (prefs.dspConvEnabled && prefs.dspConvIrName.isNotBlank()) prefs.dspConvIrName else ctx.getString(R.string.eq_conv_off), expanded) {
         ConvolutionPanel(prefs, store, scope)
     }
 }
@@ -525,12 +480,12 @@ private fun LazyListScope.userEqTab(
     val graphic = (0 until nBands).map { prefs.dspGraphicBands.getOrElse(it) { 0f } }
     val anyGraphic = graphic.any { it != 0f }
 
-    collapsible("c_graphic", ctx.getString(R.string.eq_graphic), Icons.Filled.Tune, "${layout.name}${if (anyGraphic) ctx.getString(R.string.eq_active_suffix) else ""}", expanded, defaultOpen = true) {
-        SegmentedRow("Bands", DspCoeffBuilder.GRAPHIC_LAYOUTS.map { it.name }, prefs.dspGraphicLayout) { i ->
+    collapsible("c_graphic", ctx.getString(R.string.eq_graphic), "${layout.name}${if (anyGraphic) ctx.getString(R.string.eq_active_suffix) else ""}", expanded, defaultOpen = true) {
+        Ios5SegmentRow("Bands", DspCoeffBuilder.GRAPHIC_LAYOUTS.map { it.name }, prefs.dspGraphicLayout) { i ->
             scope.launch { store.setDspGraphicLayout(i); store.setDspGraphicBands(List(DspCoeffBuilder.GRAPHIC_LAYOUTS[i].freqs.size) { 0f }) }
         }
         if (prefs.dspGraphicLayout == DspCoeffBuilder.USER_EQ_LAYOUT) {
-            LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyRow(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(USER_EQ_PRESETS.size) { i ->
                     val presetName = when (i) {
                         1 -> stringResource(R.string.eq_preset_classical)
@@ -545,6 +500,7 @@ private fun LazyListScope.userEqTab(
             }
         }
         graphic.forEachIndexed { i, g ->
+            if (i > 0) Ios5CellDivider()
             DbSliderRow(freqLabel(layout.freqs[i].toInt()), g, -12f..12f) { v ->
                 val updated = graphic.toMutableList().also { it[i] = v }
                 scope.launch { store.setDspGraphicBands(updated) }
@@ -553,8 +509,9 @@ private fun LazyListScope.userEqTab(
         TextLink(stringResource(R.string.eq_reset_graphic)) { scope.launch { store.setDspGraphicBands(List(nBands) { 0f }) } }
     }
 
-    collapsible("c_param", ctx.getString(R.string.eq_parametric), Icons.Filled.GraphicEq, ctx.getString(R.string.eq_bands_unit, prefs.dspParametric.size, if (prefs.dspParametric.size == 1) "" else "s"), expanded) {
+    collapsible("c_param", ctx.getString(R.string.eq_parametric), ctx.getString(R.string.eq_bands_unit, prefs.dspParametric.size, if (prefs.dspParametric.size == 1) "" else "s"), expanded) {
         prefs.dspParametric.forEachIndexed { i, band ->
+            if (i > 0) Ios5CellDivider()
             ParametricBandCard(
                 band = band,
                 onChange = { nb -> scope.launch { store.setDspParametric(prefs.dspParametric.toMutableList().also { it[i] = nb }) } },
@@ -566,34 +523,40 @@ private fun LazyListScope.userEqTab(
         }
     }
 
-    collapsible("c_gain", ctx.getString(R.string.eq_gain_headroom), Icons.Filled.VolumeUp, ctx.getString(R.string.eq_preamp_fmt, prefs.dspPreampDb), expanded) {
-        SettingsSwitchRow(Icons.Filled.VolumeUp, stringResource(R.string.eq_auto_headroom), stringResource(R.string.eq_auto_headroom_sub), prefs.dspAutoHeadroom) { v ->
+    collapsible("c_gain", ctx.getString(R.string.eq_gain_headroom), ctx.getString(R.string.eq_preamp_fmt, prefs.dspPreampDb), expanded) {
+        Ios5SwitchRow(stringResource(R.string.eq_auto_headroom), stringResource(R.string.eq_auto_headroom_sub), prefs.dspAutoHeadroom) { v ->
             scope.launch { store.setDspAutoHeadroom(v) }
         }
+        Ios5CellDivider()
         DbSliderRow(stringResource(R.string.eq_preamp_trim), prefs.dspPreampDb, -12f..12f) { v -> scope.launch { store.setDspPreamp(v) } }
         val peak = androidx.compose.runtime.remember(prefs.dspGraphicBands, prefs.dspParametric, prefs.dspGraphicLayout, activeCorrection) {
             val base = DspCoeffBuilder.eqPeakDb(DspParams(graphic = graphic.toFloatArray(), graphicFreqs = layout.freqs, graphicQ = layout.q, parametric = prefs.dspParametric.map { DspBand(it.freqHz, it.gainDb, it.q, it.type) }))
             maxOf(base, activeCorrection?.takeIf { it.enabled }?.maxGain ?: 0f)
         }
         HeadroomRow(peak = peak, preamp = prefs.dspPreampDb) { scope.launch { store.setDspPreamp((-peak).coerceIn(-12f, 0f)) } }
+        Ios5CellDivider()
         FloatSliderRow(stringResource(R.string.eq_balance), prefs.dspBalance, -1f..1f, valueText = balanceLabel(prefs.dspBalance)) { v -> scope.launch { store.setDspBalance(v) } }
     }
 
     val spatial = buildList { if (prefs.dspWidth != 1f) add("Width %.2f×".format(prefs.dspWidth)); if (prefs.dspCrossfeed > 0f) add("Crossfeed ${(prefs.dspCrossfeed * 100).roundToInt()}%") }.joinToString(" · ").ifBlank { ctx.getString(R.string.eq_spatial_off) }
-    collapsible("c_spatial", ctx.getString(R.string.eq_spatial), Icons.Filled.SurroundSound, spatial, expanded) {
+    collapsible("c_spatial", ctx.getString(R.string.eq_spatial), spatial, expanded) {
         FloatSliderRow(stringResource(R.string.eq_width), prefs.dspWidth, 0f..2f, valueText = "%.2f×".format(prefs.dspWidth)) { v -> scope.launch { store.setDspWidth(v) } }
+        Ios5CellDivider()
         FloatSliderRow(stringResource(R.string.eq_crossfeed), prefs.dspCrossfeed, 0f..1f, valueText = if (prefs.dspCrossfeed <= 0f) stringResource(R.string.eq_crossfeed_off) else "${(prefs.dspCrossfeed * 100).roundToInt()}%") { v -> scope.launch { store.setDspCrossfeed(v) } }
     }
 
-    collapsible("c_harm", ctx.getString(R.string.eq_harmonics), Icons.Filled.Whatshot, if (prefs.dspSaturation > 0f) ctx.getString(R.string.eq_tube_fmt, (prefs.dspSaturation * 100).roundToInt()) else ctx.getString(R.string.eq_harm_off), expanded) {
+    collapsible("c_harm", ctx.getString(R.string.eq_harmonics), if (prefs.dspSaturation > 0f) ctx.getString(R.string.eq_tube_fmt, (prefs.dspSaturation * 100).roundToInt()) else ctx.getString(R.string.eq_harm_off), expanded) {
         FloatSliderRow(stringResource(R.string.eq_tube), prefs.dspSaturation, 0f..1f, valueText = if (prefs.dspSaturation <= 0f) stringResource(R.string.eq_harm_off) else "${(prefs.dspSaturation * 100).roundToInt()}%") { v -> scope.launch { store.setDspSaturation(v) } }
     }
 
     val aligned = prefs.dspDelayLeftMs > 0f || prefs.dspDelayRightMs > 0f || prefs.dspTrimLeftDb != 0f || prefs.dspTrimRightDb != 0f
-    collapsible("c_align", ctx.getString(R.string.eq_alignment), Icons.Filled.SwapHoriz, if (aligned) ctx.getString(R.string.eq_align_adjusted) else ctx.getString(R.string.eq_align_off), expanded) {
+    collapsible("c_align", ctx.getString(R.string.eq_alignment), if (aligned) ctx.getString(R.string.eq_align_adjusted) else ctx.getString(R.string.eq_align_off), expanded) {
         FloatSliderRow(stringResource(R.string.eq_delay_left), prefs.dspDelayLeftMs, 0f..20f, valueText = "%.1f ms".format(prefs.dspDelayLeftMs)) { v -> scope.launch { store.setDspDelayLeft(v) } }
+        Ios5CellDivider()
         FloatSliderRow(stringResource(R.string.eq_delay_right), prefs.dspDelayRightMs, 0f..20f, valueText = "%.1f ms".format(prefs.dspDelayRightMs)) { v -> scope.launch { store.setDspDelayRight(v) } }
+        Ios5CellDivider()
         DbSliderRow(stringResource(R.string.eq_trim_left), prefs.dspTrimLeftDb, -12f..0f) { v -> scope.launch { store.setDspTrimLeft(v) } }
+        Ios5CellDivider()
         DbSliderRow(stringResource(R.string.eq_trim_right), prefs.dspTrimRightDb, -12f..0f) { v -> scope.launch { store.setDspTrimRight(v) } }
     }
 }
@@ -607,11 +570,11 @@ private fun LazyListScope.dynamicsTab(
     container: AppContainer,
 ) {
     // v0.6 driving loudness (plan §35, §38)
-    collapsible("c_drive", ctx.getString(R.string.eq_driving), Icons.Filled.DirectionsCar,
+    collapsible("c_drive", ctx.getString(R.string.eq_driving),
         DrivingMode.label(prefs.dspDriveMode) + if (prefs.dspDriveMode != DrivingMode.OFF) ctx.getString(R.string.eq_drive_target_fmt, prefs.dspDriveTargetDb) else "",
         expanded, defaultOpen = true) {
         val modes = listOf(DrivingMode.OFF, DrivingMode.NATURAL, DrivingMode.BALANCED, DrivingMode.STRONG, DrivingMode.CUSTOM)
-        SegmentedRow("Mode", modes.map { DrivingMode.label(it) }, modes.indexOf(prefs.dspDriveMode).coerceAtLeast(0)) { i ->
+        Ios5SegmentRow("Mode", modes.map { DrivingMode.label(it) }, modes.indexOf(prefs.dspDriveMode).coerceAtLeast(0)) { i ->
             scope.launch { store.setDspDriveMode(modes[i]) }
         }
         Text(
@@ -622,8 +585,8 @@ private fun LazyListScope.dynamicsTab(
                 DrivingMode.CUSTOM -> stringResource(R.string.eq_drive_custom_hint)
                 else -> stringResource(R.string.eq_drive_off_hint)
             },
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+            color = Ios5Colors.TextSecondary, fontSize = 13.sp,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
         )
         if (prefs.dspDriveMode == DrivingMode.CUSTOM) {
             FloatSliderRow(stringResource(R.string.eq_target_loudness), prefs.dspDriveTargetDb, -24f..-8f, valueText = "%.0f LUFS".format(prefs.dspDriveTargetDb)) { v -> scope.launch { store.setDspDriveTarget(v) } }
@@ -635,37 +598,45 @@ private fun LazyListScope.dynamicsTab(
         if (prefs.dspLimiterEnabled) add(ctx.getString(R.string.eq_lim))
         if (prefs.dspCompEnabled && prefs.dspDriveMode == DrivingMode.OFF) add(ctx.getString(R.string.eq_compressor))
     }.joinToString(" · ").ifBlank { ctx.getString(R.string.eq_mode_off) }
-    collapsible("c_dyn", ctx.getString(R.string.eq_compressor), Icons.Filled.Compress, dyn, expanded) {
+    collapsible("c_dyn", ctx.getString(R.string.eq_compressor), dyn, expanded) {
         if (prefs.dspDriveMode == DrivingMode.OFF) {
-            SettingsSwitchRow(Icons.Filled.GraphicEq, stringResource(R.string.eq_compressor), stringResource(R.string.eq_comp_on_sub), prefs.dspCompEnabled) { v -> scope.launch { store.setDspCompEnabled(v) } }
+            Ios5SwitchRow(stringResource(R.string.eq_compressor), stringResource(R.string.eq_comp_on_sub), prefs.dspCompEnabled) { v -> scope.launch { store.setDspCompEnabled(v) } }
         } else {
             Text(stringResource(R.string.eq_driven_note),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+                color = Ios5Colors.TextSecondary, fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
         }
         val showParams = prefs.dspCompEnabled && prefs.dspDriveMode == DrivingMode.OFF || prefs.dspDriveMode == DrivingMode.CUSTOM
         if (showParams) {
+            Ios5CellDivider()
             FloatSliderRow(stringResource(R.string.eq_threshold), prefs.dspCompThreshDb, -40f..0f, valueText = "%.0f dB".format(prefs.dspCompThreshDb)) { v -> scope.launch { store.setDspCompThresh(v) } }
+            Ios5CellDivider()
             FloatSliderRow(stringResource(R.string.eq_ratio), prefs.dspCompRatio, 1f..10f, valueText = "%.1f:1".format(prefs.dspCompRatio)) { v -> scope.launch { store.setDspCompRatio(v) } }
+            Ios5CellDivider()
             FloatSliderRow(stringResource(R.string.eq_attack), prefs.dspCompAttackMs, 1f..200f, valueText = "%.0f ms".format(prefs.dspCompAttackMs)) { v -> scope.launch { store.setDspCompAttack(v) } }
+            Ios5CellDivider()
             FloatSliderRow(stringResource(R.string.eq_release), prefs.dspCompReleaseMs, 50f..1000f, valueText = "%.0f ms".format(prefs.dspCompReleaseMs)) { v -> scope.launch { store.setDspCompRelease(v) } }
+            Ios5CellDivider()
             FloatSliderRow(stringResource(R.string.eq_knee), prefs.dspCompKneeDb, 0f..12f, valueText = "%.0f dB".format(prefs.dspCompKneeDb)) { v -> scope.launch { store.setDspCompKnee(v) } }
-            SettingsSwitchRow(Icons.Filled.GraphicEq, stringResource(R.string.eq_makeup_auto), stringResource(R.string.eq_makeup_auto_sub), prefs.dspMakeupAuto) { v -> scope.launch { store.setDspMakeupAuto(v) } }
+            Ios5CellDivider()
+            Ios5SwitchRow(stringResource(R.string.eq_makeup_auto), stringResource(R.string.eq_makeup_auto_sub), prefs.dspMakeupAuto) { v -> scope.launch { store.setDspMakeupAuto(v) } }
             if (!prefs.dspMakeupAuto) {
+                Ios5CellDivider()
                 DbSliderRow(stringResource(R.string.eq_makeup), prefs.dspCompMakeupDb, -6f..12f) { v -> scope.launch { store.setDspCompMakeup(v) } }
             }
         }
         GainReductionMeter(container)
     }
 
-    collapsible("c_lim", ctx.getString(R.string.eq_lim), Icons.Filled.VerticalAlignBottom,
+    collapsible("c_lim", ctx.getString(R.string.eq_lim),
         if (prefs.dspLimiterEnabled) "%.1f dBTP".format(prefs.dspLimiterCeilingDb) else ctx.getString(R.string.eq_mode_off), expanded) {
-        SettingsSwitchRow(Icons.Filled.GraphicEq, stringResource(R.string.eq_lim), stringResource(R.string.eq_lim_sub), prefs.dspLimiterEnabled) { v -> scope.launch { store.setDspLimiterEnabled(v) } }
+        Ios5SwitchRow(stringResource(R.string.eq_lim), stringResource(R.string.eq_lim_sub), prefs.dspLimiterEnabled) { v -> scope.launch { store.setDspLimiterEnabled(v) } }
         if (prefs.dspLimiterEnabled) {
+            Ios5CellDivider()
             FloatSliderRow(stringResource(R.string.eq_tp_ceiling), prefs.dspLimiterCeilingDb, -6f..0f, valueText = "%.1f dBTP".format(prefs.dspLimiterCeilingDb)) { v -> scope.launch { store.setDspCeiling(v) } }
             Text(stringResource(R.string.eq_tp_hint),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+                color = Ios5Colors.TextSecondary, fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
         }
         GainReductionMeter(container)
     }
@@ -674,7 +645,7 @@ private fun LazyListScope.dynamicsTab(
 @Composable
 private fun GainReductionMeter(container: AppContainer) {
     val meters by container.dspMeters.collectAsStateWithLifecycle(initialValue = com.aurora.music.data.DspMeters())
-    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
         GrBar(stringResource(R.string.eq_gr), meters.compGrDb)
         Spacer(Modifier.height(6.dp))
         GrBar(stringResource(R.string.eq_lim), meters.limGrDb)
@@ -686,45 +657,45 @@ private fun GrBar(label: String, grDb: Float) {
     // grDb is 0..-30; bar fills leftwards from 0
     val frac = (-grDb / 30f).coerceIn(0f, 1f)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(110.dp))
+        Text(label, color = Ios5Colors.TextSecondary, fontSize = 12.sp, modifier = Modifier.width(110.dp))
         Box(
             Modifier.weight(1f).height(10.dp).clip(RoundedCornerShape(50))
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                .background(Color(0xFFD6DAE0)),
         ) {
             Box(
                 Modifier.fillMaxWidth(frac).height(10.dp).clip(RoundedCornerShape(50))
-                    .background(if (grDb < -0.5f) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)),
+                    .background(if (grDb < -0.5f) Ios5Colors.IosBlue else Color(0xFF9AA0AB).copy(alpha = 0.4f)),
             )
         }
         Spacer(Modifier.width(8.dp))
         Text(if (grDb > -0.05f) "0.0" else "%.1f".format(grDb),
-            style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(40.dp))
+            color = Ios5Colors.TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(40.dp))
     }
 }
 
 @Composable
 private fun TextLink(text: String, onClick: () -> Unit) {
     Text(
-        text, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).clip(RoundedCornerShape(50)).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 6.dp),
+        text, color = Ios5Colors.IosBlue, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp).clip(RoundedCornerShape(50)).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 6.dp),
     )
 }
 
 @Composable
 private fun ParametricBandCard(band: ParamBand, onChange: (ParamBand) -> Unit, onRemove: () -> Unit) {
     Column(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color.White)
+            .border(1.dp, Color(0xFFD4D9E0), RoundedCornerShape(10.dp))
+            .padding(horizontal = 4.dp, vertical = 6.dp),
     ) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(freqLabel(band.freqHz.toInt()), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            Text(stringResource(R.string.eq_band_fmt, band.gainDb, band.q), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(freqLabel(band.freqHz.toInt()), color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            Text(stringResource(R.string.eq_band_fmt, band.gainDb, band.q), color = Ios5Colors.TextSecondary, fontSize = 12.sp)
             Icon(
                 Icons.Filled.Close, stringResource(R.string.eq_remove_band),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = Ios5Colors.TextSecondary,
                 modifier = Modifier.width(28.dp).clip(RoundedCornerShape(50)).clickable(onClick = onRemove).padding(start = 8.dp),
             )
         }
@@ -738,44 +709,22 @@ private fun ParametricBandCard(band: ParamBand, onChange: (ParamBand) -> Unit, o
 private fun PresetChip(label: String, selected: Boolean, onClick: () -> Unit) {
     Box(
         Modifier.clip(RoundedCornerShape(50))
-            .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
+            .background(if (selected) Ios5Colors.IosBlue else Color.White)
+            .border(1.dp, if (selected) Ios5Colors.IosBlueDark else Color(0xFFC7CCD4), RoundedCornerShape(50))
             .clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 9.dp),
     ) {
-        Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
+        Text(label, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = if (selected) Color.White else Ios5Colors.IosBlue)
     }
 }
 
 @Composable
 private fun DbSliderRow(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
-    Column(Modifier.padding(horizontal = 20.dp, vertical = 2.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, modifier = Modifier.width(72.dp))
-            Slider(
-                value = value,
-                onValueChange = onChange,
-                valueRange = range,
-                colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary),
-                modifier = Modifier.weight(1f),
-            )
-            Text("%+.1f".format(value), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(52.dp))
-        }
-    }
+    Ios5SliderRow(title = label, valueLabel = "%+.1f".format(value), value = value, range = range, onValueChange = onChange)
 }
 
 @Composable
 private fun FloatSliderRow(title: String, value: Float, range: ClosedFloatingPointRange<Float>, valueText: String, onChange: (Float) -> Unit) {
-    Column(Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
-        Row(Modifier.fillMaxWidth()) {
-            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
-            Text(valueText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Slider(
-            value = value,
-            onValueChange = onChange,
-            valueRange = range,
-            colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary),
-        )
-    }
+    Ios5SliderRow(title = title, valueLabel = valueText, value = value, range = range, onValueChange = onChange)
 }
 
 @Composable
@@ -847,6 +796,7 @@ private fun CorrectionProfilesPanel(
         CorrectionRow(stringResource(R.string.eq_flat), stringResource(R.string.eq_no_correction), activeId == "flat", canDelete = false,
             onSelect = { scope.launch { store.setActiveCorrectionId("flat") } }, onDelete = {})
         corrections.forEach { p ->
+            Ios5CellDivider()
             CorrectionRow(
                 name = p.name,
                 subtitle = listOf(
@@ -861,6 +811,7 @@ private fun CorrectionProfilesPanel(
             )
         }
         if (active != null && active.id != "flat") {
+            Ios5CellDivider()
             DbSliderRow(stringResource(R.string.eq_correction_trim), active.preampDb, -6f..6f) { v ->
                 scope.launch { store.upsertCorrectionProfile(active.copy(preampDb = v)) }
             }
@@ -871,18 +822,17 @@ private fun CorrectionProfilesPanel(
                 scope.launch { store.upsertCorrectionProfile(active.copy(strengthPct = v)) }
             }
             Text(stringResource(R.string.eq_strength_hint),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                color = Ios5Colors.TextSecondary, fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
         }
-        Box(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
-                .clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .clickable { runCatching { picker.launch(arrayOf("text/plain", "*/*")) } }.padding(vertical = 12.dp),
-            contentAlignment = Alignment.Center,
-        ) { Text(stringResource(R.string.eq_import), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
+        Ios5CellDivider()
+        Ios5ActionRow(
+            title = stringResource(R.string.eq_import),
+            onClick = { runCatching { picker.launch(arrayOf("text/plain", "*/*")) } },
+        )
         if (importMsg != null) {
-            Text(importMsg!!, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            Text(importMsg!!, color = Color(0xFFD63A3A), fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
         }
     }
 }
@@ -892,19 +842,13 @@ private fun CorrectionRow(
     name: String, subtitle: String, selected: Boolean, canDelete: Boolean,
     onSelect: () -> Unit, onDelete: () -> Unit,
 ) {
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onSelect)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(name, style = MaterialTheme.typography.bodyMedium, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.weight(1f)) {
+            Ios5CheckRow(title = name, subtitle = subtitle, checked = selected, onClick = onSelect)
         }
-        if (selected) Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary)
         if (canDelete) {
-            Icon(Icons.Filled.Close, stringResource(R.string.common_delete), tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.clip(RoundedCornerShape(50)).clickable(onClick = onDelete).padding(4.dp))
+            Icon(Icons.Filled.Close, stringResource(R.string.common_delete), tint = Ios5Colors.TextSecondary,
+                modifier = Modifier.clip(RoundedCornerShape(50)).clickable(onClick = onDelete).padding(8.dp))
         }
     }
 }
@@ -924,57 +868,59 @@ private fun AudioProfilesPanel(
     val outKey = container.autoEqController.currentOutputKey()
     val outLabel = container.autoEqController.currentOutputLabel()
     Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             TextField(
                 value = name, onValueChange = { name = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text(stringResource(R.string.eq_new_profile_hint)) }, singleLine = true, shape = RoundedCornerShape(14.dp),
+                placeholder = { Text(stringResource(R.string.eq_new_profile_hint)) }, singleLine = true, shape = RoundedCornerShape(10.dp),
                 colors = TextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    focusedContainerColor = Color.White,
+                    unfocusedContainerColor = Color.White,
                     focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent,
+                    cursorColor = Ios5Colors.IosBlue,
                 ),
             )
             Spacer(Modifier.width(8.dp))
-            Box(
-                Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.primary)
-                    .clickable(enabled = name.isNotBlank()) {
-                        scope.launch {
-                            container.autoEqController.snapshotCurrent(name.trim(), prefs, activeCorrectionId)
-                            name = ""
-                        }
-                    }.padding(horizontal = 16.dp, vertical = 12.dp),
-                contentAlignment = Alignment.Center,
-            ) { Text(stringResource(R.string.eq_save), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary) }
+            Ios5GlossButton(
+                text = stringResource(R.string.eq_save),
+                onClick = {
+                    scope.launch {
+                        container.autoEqController.snapshotCurrent(name.trim(), prefs, activeCorrectionId)
+                        name = ""
+                    }
+                },
+            )
         }
-        profiles.forEach { p ->
+        Ios5CellDivider()
+        profiles.forEachIndexed { index, p ->
+            if (index > 0) Ios5CellDivider()
             val bound = deviceProfiles[outKey] == p.id
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable {
+                Modifier.fillMaxWidth().clickable {
                     scope.launch { container.autoEqController.applyAudioProfile(p) }
-                }.padding(horizontal = 16.dp, vertical = 10.dp),
+                }.padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text(p.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, maxLines = 1)
+                    Text(p.name, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                     Text(p.describe() + if (bound) " · bound to $outLabel" else "",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                        color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 1)
                 }
-                Text(stringResource(R.string.eq_bind), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary,
+                Text(stringResource(R.string.eq_bind), color = Ios5Colors.IosBlue, fontSize = 14.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.clip(RoundedCornerShape(50)).clickable {
                         scope.launch {
                             store.bindDeviceProfile(outKey, if (bound) "" else p.id)
                             store.setAutoEqAutoSwitch(true)
                         }
                     }.padding(horizontal = 8.dp, vertical = 4.dp))
-                Icon(Icons.Filled.Close, stringResource(R.string.common_delete), tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                Icon(Icons.Filled.Close, stringResource(R.string.common_delete), tint = Ios5Colors.TextSecondary,
                     modifier = Modifier.clip(RoundedCornerShape(50)).clickable { scope.launch { store.removeAudioProfile(p.id) } }.padding(4.dp))
             }
         }
         if (profiles.isEmpty()) {
             Text(stringResource(R.string.eq_profile_save_hint),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                color = Ios5Colors.TextSecondary, fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
         }
     }
 }

@@ -8,23 +8,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.LocalFireDepartment
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -34,24 +24,31 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.R
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.RankedItem
 import com.aurora.music.ui.components.Artwork
-import com.aurora.music.ui.components.SectionHeader
+import com.aurora.music.ui.ios5.Ios5CellDivider
+import com.aurora.music.ui.ios5.Ios5Colors
+import com.aurora.music.ui.ios5.Ios5SegmentRow
+import com.aurora.music.ui.ios5.Ios5SettingsPage
+import com.aurora.music.ui.ios5.Ios5StaticText
+import com.aurora.music.ui.ios5.ios5FootNote
+import com.aurora.music.ui.ios5.ios5Section
 import com.aurora.music.util.accentFor
 
 @Composable
 fun ListeningStatsScreen(contentPadding: PaddingValues, onBack: () -> Unit, onPlay: (String) -> Unit, onOpenDetail: (String, String) -> Unit) {
     val store = (LocalContext.current.applicationContext as AuroraApplication).container.playHistory
     val history by store.history.collectAsStateWithLifecycle()
-    val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     var range by remember { mutableIntStateOf(0) } // 0 week 1 month 2 all
 
     val now = System.currentTimeMillis()
@@ -68,123 +65,134 @@ fun ListeningStatsScreen(contentPadding: PaddingValues, onBack: () -> Unit, onPl
     val byHour = remember(events) { store.playsByHour(events) }
     val streak = remember(history) { store.streak() }
 
-    Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().padding(top = topInset + 6.dp, start = 8.dp, end = 16.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.common_back), modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onBack).padding(8.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(stringResource(R.string.stats_title), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+    val strTitle = stringResource(R.string.stats_title)
+    val strWeek = stringResource(R.string.stats_week)
+    val strMonth = stringResource(R.string.stats_month)
+    val strAll = stringResource(R.string.stats_alltime)
+    val strRange = stringResource(R.string.stats_title)
+    val strOverview = stringResource(R.string.stats_title)
+    val strPlays = stringResource(R.string.stats_plays)
+    val strMinutes = stringResource(R.string.stats_minutes)
+    val strArtists = stringResource(R.string.stats_artists)
+    val strEmptyPeriod = stringResource(R.string.stats_empty_period)
+    val strStreak = stringResource(R.string.stats_title)
+    val strClock = stringResource(R.string.stats_clock)
+    val strTopArtists = stringResource(R.string.stats_top_artists)
+    val strTopSongs = stringResource(R.string.stats_top_songs)
+    val strTopAlbums = stringResource(R.string.stats_top_albums)
+    val bottomPad = contentPadding.calculateBottomPadding()
+    val streakCurrent = streak.first
+    val streakLongest = streak.second
+    val strStreakNow = if (streakCurrent > 0) stringResource(R.string.stats_streak_fmt, streakCurrent) else stringResource(R.string.stats_no_streak)
+    val strStreakLong = stringResource(R.string.stats_longest, streakLongest, if (streakLongest == 1) "" else "s")
+    val strUnknown = stringResource(R.string.stats_unknown)
+
+    Ios5SettingsPage(title = strTitle, onBack = onBack) {
+        ios5Section(strRange) {
+            Ios5SegmentRow(
+                title = strRange,
+                options = listOf(strWeek, strMonth, strAll),
+                selected = range,
+                onSelect = { range = it },
+            )
         }
-
-        LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp)) {
-            item {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(stringResource(R.string.stats_week), stringResource(R.string.stats_month), stringResource(R.string.stats_alltime)).forEachIndexed { i, label ->
-                        val sel = i == range
-                        Box(
-                            Modifier.weight(1f).clip(RoundedCornerShape(50)).background(if (sel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh).clickable { range = i }.padding(vertical = 10.dp),
-                            contentAlignment = Alignment.Center,
-                        ) { Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = if (sel) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface) }
-                    }
-                }
-            }
-            item {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    StatCard("${events.size}", stringResource(R.string.stats_plays), Modifier.weight(1f))
-                    StatCard("$minutes", stringResource(R.string.stats_minutes), Modifier.weight(1f))
-                    StatCard("${artists.size}", stringResource(R.string.stats_artists), Modifier.weight(1f))
-                }
-            }
-
-            if (events.isEmpty()) {
-                item { Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) { Text(stringResource(R.string.stats_empty_period), color = MaterialTheme.colorScheme.onSurfaceVariant) } }
-            }
-
-            if (streak.second > 0) {
-                item { StreakCard(current = streak.first, longest = streak.second) }
-            }
-            if (events.isNotEmpty()) {
-                item { ListeningClock(byHour) }
-            }
-
-            if (artists.isNotEmpty()) {
-                item { SectionHeader(stringResource(R.string.stats_top_artists), Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
-                items(artists.size) { i -> RankRow(i + 1, artists[i], circle = true) { if (artists[i].id.isNotBlank()) onOpenDetail("artist", artists[i].id) } }
-            }
-            if (songs.isNotEmpty()) {
-                item { SectionHeader(stringResource(R.string.stats_top_songs), Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
-                items(songs.size) { i -> RankRow(i + 1, songs[i], circle = false) { onPlay(songs[i].id) } }
-            }
-            if (albums.isNotEmpty()) {
-                item { SectionHeader(stringResource(R.string.stats_top_albums), Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
-                items(albums.size) { i -> RankRow(i + 1, albums[i], circle = false) { if (albums[i].id.isNotBlank()) onOpenDetail("album", albums[i].id) } }
+        ios5Section(strOverview) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                StatCell("${events.size}", strPlays, Modifier.weight(1f))
+                StatCell("$minutes", strMinutes, Modifier.weight(1f))
+                StatCell("${artists.size}", strArtists, Modifier.weight(1f))
             }
         }
+        if (events.isEmpty()) {
+            item { Ios5StaticText(strEmptyPeriod) }
+        }
+        if (streakLongest > 0) {
+            ios5Section(strStreak) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    Text(strStreakNow, color = Ios5Colors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text(strStreakLong, color = Ios5Colors.TextSecondary, fontSize = 13.sp)
+                }
+            }
+        }
+        if (events.isNotEmpty()) {
+            ios5Section(strClock) {
+                ListeningClockIos5(byHour)
+            }
+        }
+        if (artists.isNotEmpty()) {
+            ios5Section(strTopArtists) {
+                artists.forEachIndexed { i, a ->
+                    RankRowIos5(i + 1, a, circle = true, unknown = strUnknown) { if (a.id.isNotBlank()) onOpenDetail("artist", a.id) }
+                    if (i < artists.size - 1) Ios5CellDivider()
+                }
+            }
+        }
+        if (songs.isNotEmpty()) {
+            ios5Section(strTopSongs) {
+                songs.forEachIndexed { i, s ->
+                    RankRowIos5(i + 1, s, circle = false, unknown = strUnknown) { onPlay(s.id) }
+                    if (i < songs.size - 1) Ios5CellDivider()
+                }
+            }
+        }
+        if (albums.isNotEmpty()) {
+            ios5Section(strTopAlbums) {
+                albums.forEachIndexed { i, a ->
+                    RankRowIos5(i + 1, a, circle = false, unknown = strUnknown) { if (a.id.isNotBlank()) onOpenDetail("album", a.id) }
+                    if (i < albums.size - 1) Ios5CellDivider()
+                }
+            }
+        }
+        if (events.isEmpty()) {
+            ios5FootNote(strEmptyPeriod)
+        }
+        item { Spacer(Modifier.height(bottomPad)) }
     }
 }
 
 @Composable
-private fun StreakCard(current: Int, longest: Int) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Filled.LocalFireDepartment, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(if (current > 0) stringResource(R.string.stats_streak_fmt, current) else stringResource(R.string.stats_no_streak), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-            Text(stringResource(R.string.stats_longest, longest, if (longest == 1) "" else "s"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun ListeningClock(byHour: IntArray) {
+private fun ListeningClockIos5(byHour: IntArray) {
     val max = (byHour.maxOrNull() ?: 0).coerceAtLeast(1)
-    Column(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(16.dp),
-    ) {
-        Text(stringResource(R.string.stats_clock), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(12.dp))
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
+        Spacer(Modifier.height(4.dp))
         Row(Modifier.fillMaxWidth().height(80.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             for (h in 0 until 24) {
                 val frac = (byHour[h].toFloat() / max).coerceIn(0.03f, 1f)
                 Box(
                     Modifier.weight(1f).fillMaxHeight(frac).clip(RoundedCornerShape(3.dp))
-                        .background(if (byHour[h] > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
+                        .background(if (byHour[h] > 0) Ios5Colors.IosBlue else Color.Black.copy(alpha = 0.12f)),
                 )
             }
         }
         Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             listOf("12a", "6a", "12p", "6p", "11p").forEach {
-                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(it, color = Ios5Colors.TextSecondary, fontSize = 11.sp)
             }
         }
     }
 }
 
 @Composable
-private fun StatCard(value: String, label: String, modifier: Modifier) {
-    Column(modifier.clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
-        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun StatCell(value: String, label: String, modifier: Modifier) {
+    Column(modifier.padding(vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, color = Ios5Colors.IosBlue, fontSize = 22.sp, fontWeight = FontWeight.Black)
+        Text(label, color = Ios5Colors.TextSecondary, fontSize = 12.sp)
     }
 }
 
 @Composable
-private fun RankRow(rank: Int, item: RankedItem, circle: Boolean, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("$rank", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(28.dp))
-        Artwork(item.artworkUrl, accentFor(item.id.ifBlank { item.name }), Modifier.size(48.dp), corner = if (circle) 48.dp else 10.dp)
-        Spacer(Modifier.width(12.dp))
+private fun RankRowIos5(rank: Int, item: RankedItem, circle: Boolean, unknown: String, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("$rank", color = Ios5Colors.TextSecondary, fontSize = 16.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(28.dp))
+        Artwork(item.artworkUrl, accentFor(item.id.ifBlank { item.name }), Modifier.size(44.dp), corner = if (circle) 44.dp else 6.dp)
+        Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(item.name.ifBlank { stringResource(R.string.stats_unknown) }, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(item.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(item.name.ifBlank { unknown }, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(item.subtitle, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Box(Modifier.clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)).padding(horizontal = 10.dp, vertical = 4.dp)) {
-            Text("${item.count}×", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        Box(Modifier.clip(RoundedCornerShape(50)).background(Ios5Colors.IosBlue.copy(alpha = 0.14f)).padding(horizontal = 10.dp, vertical = 4.dp)) {
+            Text("${item.count}×", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Ios5Colors.IosBlue)
         }
     }
 }

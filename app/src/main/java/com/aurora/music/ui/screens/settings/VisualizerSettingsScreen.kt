@@ -7,11 +7,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -37,8 +38,16 @@ import com.aurora.music.AuroraApplication
 import com.aurora.music.R
 import com.aurora.music.data.VisualizerPrefs
 import com.aurora.music.data.VisualizerStyle
-import com.aurora.music.data.VizBackground
 import com.aurora.music.data.VizColor
+import com.aurora.music.ui.ios5.Ios5CellDivider
+import com.aurora.music.ui.ios5.Ios5CheckRow
+import com.aurora.music.ui.ios5.Ios5Colors
+import com.aurora.music.ui.ios5.Ios5Group
+import com.aurora.music.ui.ios5.Ios5SegmentRow
+import com.aurora.music.ui.ios5.Ios5SettingsPage
+import com.aurora.music.ui.ios5.Ios5SliderRow
+import com.aurora.music.ui.ios5.Ios5SwitchRow
+import com.aurora.music.ui.ios5.ios5Section
 import com.aurora.music.ui.screens.visualizer.VisualizerCanvas
 import com.aurora.music.ui.screens.visualizer.VizColors
 import kotlinx.coroutines.launch
@@ -59,6 +68,7 @@ fun VisualizerSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) 
     fun save(p: VisualizerPrefs) { scope.launch { store.setVisualizer(p) } }
 
     // Hoisted: stringResource is @Composable-only and illegal in LazyColumn DSL / plain lambdas.
+    val strTitle = stringResource(R.string.settings_visualizer)
     val strStyle = stringResource(R.string.viz_style)
     val strColour = stringResource(R.string.viz_colour)
     val strColourSource = stringResource(R.string.viz_colour_source)
@@ -95,112 +105,77 @@ fun VisualizerSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) 
         controller.applyPrefs(prefs)
     }
 
-    Column(Modifier.fillMaxWidth()) {
-        SettingsTopBar(stringResource(R.string.settings_visualizer), onBack)
-        LazyColumn(
-            Modifier.fillMaxWidth(),
-            contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp),
-        ) {
-            item { VisualizerPreview(prefs) }
+    Ios5SettingsPage(title = strTitle, onBack = onBack) {
+        item { VisualizerPreview(prefs) }
 
-            item { SettingsSectionTitle(strStyle) }
-            item {
-                LazyRow(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp),
-                ) {
-                    items((0 until VisualizerStyle.count).toList()) { s ->
-                        val selected = s == prefs.style
-                        Box(
-                            Modifier.clip(RoundedCornerShape(50))
-                                .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
-                                .clickable { save(prefs.copy(style = s)) }
-                                .padding(horizontal = 14.dp, vertical = 9.dp),
-                        ) {
-                            Text(
-                                vizStyleName(s),
-                                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                style = MaterialTheme.typography.labelMedium,
-                            )
-                        }
-                    }
-                }
-            }
-
-            item { SettingsSectionTitle(strColour) }
-            item {
-                SettingsGroup {
-                    SegmentedRow(strColourSource, vizSrcOptions(), prefs.colorSource) { save(prefs.copy(colorSource = it)) }
-                }
-            }
-            if (prefs.colorSource == VizColor.CUSTOM || prefs.colorSource == VizColor.GRADIENT) {
-                item { Swatches(strPrimary, prefs.primaryColor) { save(prefs.copy(primaryColor = it)) } }
-            }
-            if (prefs.colorSource == VizColor.GRADIENT) {
-                item { Swatches(strSecondary, prefs.secondaryColor) { save(prefs.copy(secondaryColor = it)) } }
-            }
-
-            item { SettingsSectionTitle(strBackground) }
-            item {
-                SettingsGroup {
-                    SegmentedRow(strBackdrop, vizBgOptions(), prefs.background) { save(prefs.copy(background = it)) }
-                }
-            }
-
-            item { SettingsSectionTitle(strSpectrum) }
-            item {
-                SettingsGroup {
-                    SettingsSliderRow(strBarCount, "${prefs.barCount}", prefs.barCount.toFloat(), 16f..160f, steps = 0) { save(prefs.copy(barCount = it.toInt())) }
-                    SettingsRowDivider()
-                    SettingsSliderRow(strSmoothing, "${(prefs.smoothing * 100).toInt()}%", prefs.smoothing, 0f..0.95f) { save(prefs.copy(smoothing = it)) }
-                    SettingsRowDivider()
-                    SettingsSliderRow(strSensitivity, String.format("%.2fx", prefs.sensitivity), prefs.sensitivity, 0.25f..4f) { save(prefs.copy(sensitivity = it)) }
-                    SettingsRowDivider()
-                    SettingsSwitchRow(null, strPeakHold, strPeakHoldSub, prefs.peakHold) { save(prefs.copy(peakHold = it)) }
-                    SettingsRowDivider()
-                    SettingsSwitchRow(null, strMirror, strMirrorSub, prefs.mirror) { save(prefs.copy(mirror = it)) }
-                }
-            }
-
-            item { SettingsSectionTitle(strFreqRange) }
-            item {
-                SettingsGroup {
-                    SettingsSliderRow(strLowCut, "${prefs.minHz} Hz", prefs.minHz.toFloat(), 10f..500f) { save(prefs.copy(minHz = it.toInt())) }
-                    SettingsRowDivider()
-                    SettingsSliderRow(strHighCut, "${prefs.maxHz / 1000} kHz", prefs.maxHz.toFloat(), 2000f..22000f) { save(prefs.copy(maxHz = it.toInt())) }
-                }
-            }
-
-            item { SettingsSectionTitle(strMotion) }
-            item {
-                SettingsGroup {
-                    val fftIdx = when (prefs.fftSize) { 1024 -> 0; 4096 -> 2; else -> 1 }
-                    SegmentedRow(strFft, listOf("1024", "2048", "4096"), fftIdx) {
-                        save(prefs.copy(fftSize = when (it) { 0 -> 1024; 2 -> 4096; else -> 2048 }))
-                    }
-                    SettingsRowDivider()
-                    val fpsIdx = when (prefs.fpsCap) { 30 -> 0; 90 -> 2; 120 -> 3; else -> 1 }
-                    SegmentedRow(strFps, listOf("30", "60", "90", "120"), fpsIdx) {
-                        save(prefs.copy(fpsCap = when (it) { 0 -> 30; 2 -> 90; 3 -> 120; else -> 60 }))
-                    }
-                    SettingsRowDivider()
-                    SettingsSwitchRow(null, strRotate, strRotateSub, prefs.rotate) { save(prefs.copy(rotate = it)) }
-                    SettingsRowDivider()
-                    SettingsSliderRow(strParticles, "${prefs.particleCount}", prefs.particleCount.toFloat(), 20f..400f) { save(prefs.copy(particleCount = it.toInt())) }
-                }
-            }
-
-            item { SettingsSectionTitle(strOverlay) }
-            item {
-                SettingsGroup {
-                    SettingsSwitchRow(null, strArtCentre, strArtCentreSub, prefs.showAlbumArt) { save(prefs.copy(showAlbumArt = it)) }
-                    SettingsRowDivider()
-                    SettingsSwitchRow(null, strTrackInfo, strTrackInfoSub, prefs.showTrackInfo) { save(prefs.copy(showTrackInfo = it)) }
+        ios5Section(strStyle) {
+            Column(Modifier.fillMaxWidth()) {
+                (0 until VisualizerStyle.count).forEachIndexed { index, s ->
+                    if (index > 0) Ios5CellDivider()
+                    Ios5CheckRow(
+                        title = vizStyleName(s),
+                        checked = s == prefs.style,
+                        onClick = { save(prefs.copy(style = s)) },
+                    )
                 }
             }
         }
+
+        ios5Section(strColour) {
+            Ios5SegmentRow(strColourSource, vizSrcOptions(), prefs.colorSource) { save(prefs.copy(colorSource = it)) }
+        }
+        if (prefs.colorSource == VizColor.CUSTOM || prefs.colorSource == VizColor.GRADIENT) {
+            item { Swatches(strPrimary, prefs.primaryColor) { save(prefs.copy(primaryColor = it)) } }
+        }
+        if (prefs.colorSource == VizColor.GRADIENT) {
+            item { Swatches(strSecondary, prefs.secondaryColor) { save(prefs.copy(secondaryColor = it)) } }
+        }
+
+        ios5Section(strBackground) {
+            Ios5SegmentRow(strBackdrop, vizBgOptions(), prefs.background) { save(prefs.copy(background = it)) }
+        }
+
+        ios5Section(strSpectrum) {
+            Ios5SliderRow(strBarCount, "${prefs.barCount}", prefs.barCount.toFloat(), 16f..160f) { save(prefs.copy(barCount = it.toInt())) }
+            Ios5CellDivider()
+            Ios5SliderRow(strSmoothing, "${(prefs.smoothing * 100).toInt()}%", prefs.smoothing, 0f..0.95f) { save(prefs.copy(smoothing = it)) }
+            Ios5CellDivider()
+            Ios5SliderRow(strSensitivity, String.format("%.2fx", prefs.sensitivity), prefs.sensitivity, 0.25f..4f) { save(prefs.copy(sensitivity = it)) }
+            Ios5CellDivider()
+            Ios5SwitchRow(strPeakHold, strPeakHoldSub, prefs.peakHold) { save(prefs.copy(peakHold = it)) }
+            Ios5CellDivider()
+            Ios5SwitchRow(strMirror, strMirrorSub, prefs.mirror) { save(prefs.copy(mirror = it)) }
+        }
+
+        ios5Section(strFreqRange) {
+            Ios5SliderRow(strLowCut, "${prefs.minHz} Hz", prefs.minHz.toFloat(), 10f..500f) { save(prefs.copy(minHz = it.toInt())) }
+            Ios5CellDivider()
+            Ios5SliderRow(strHighCut, "${prefs.maxHz / 1000} kHz", prefs.maxHz.toFloat(), 2000f..22000f) { save(prefs.copy(maxHz = it.toInt())) }
+        }
+
+        ios5Section(strMotion) {
+            val fftIdx = when (prefs.fftSize) { 1024 -> 0; 4096 -> 2; else -> 1 }
+            Ios5SegmentRow(strFft, listOf("1024", "2048", "4096"), fftIdx) {
+                save(prefs.copy(fftSize = when (it) { 0 -> 1024; 2 -> 4096; else -> 2048 }))
+            }
+            Ios5CellDivider()
+            val fpsIdx = when (prefs.fpsCap) { 30 -> 0; 90 -> 2; 120 -> 3; else -> 1 }
+            Ios5SegmentRow(strFps, listOf("30", "60", "90", "120"), fpsIdx) {
+                save(prefs.copy(fpsCap = when (it) { 0 -> 30; 2 -> 90; 3 -> 120; else -> 60 }))
+            }
+            Ios5CellDivider()
+            Ios5SwitchRow(strRotate, strRotateSub, prefs.rotate) { save(prefs.copy(rotate = it)) }
+            Ios5CellDivider()
+            Ios5SliderRow(strParticles, "${prefs.particleCount}", prefs.particleCount.toFloat(), 20f..400f) { save(prefs.copy(particleCount = it.toInt())) }
+        }
+
+        ios5Section(strOverlay) {
+            Ios5SwitchRow(strArtCentre, strArtCentreSub, prefs.showAlbumArt) { save(prefs.copy(showAlbumArt = it)) }
+            Ios5CellDivider()
+            Ios5SwitchRow(strTrackInfo, strTrackInfoSub, prefs.showTrackInfo) { save(prefs.copy(showTrackInfo = it)) }
+        }
+
+        item { Spacer(Modifier.height(contentPadding.calculateBottomPadding())) }
     }
 }
 
@@ -216,14 +191,14 @@ private fun VisualizerPreview(prefs: VisualizerPrefs) {
     }
     Box(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).height(160.dp)
-            .clip(RoundedCornerShape(18.dp)).background(Color.Black),
+            .clip(RoundedCornerShape(10.dp)).background(Color.Black),
     ) {
         VisualizerCanvas(controller, prefs, colors, Modifier.fillMaxWidth().height(160.dp).padding(8.dp))
         if (controller.frame.level <= 0.001f) {
             Text(
                 stringResource(R.string.viz_play_something),
                 color = Color.White.copy(alpha = 0.5f),
-                style = MaterialTheme.typography.bodySmall,
+                fontSize = 13.sp,
                 modifier = Modifier.align(Alignment.Center),
             )
         }
@@ -232,17 +207,24 @@ private fun VisualizerPreview(prefs: VisualizerPrefs) {
 
 @Composable
 private fun Swatches(label: String, selected: Int, onPick: (Int) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp)) {
-        Text(label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
+    Ios5Group(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+        Text(
+            label,
+            color = Ios5Colors.TextPrimary,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 10.dp),
+        )
         LazyRow(
-            Modifier.fillMaxWidth().padding(top = 8.dp),
+            Modifier.fillMaxWidth().padding(vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp),
         ) {
             items(SWATCHES) { c ->
                 val isSel = c == selected
                 Box(
                     Modifier.size(34.dp).clip(CircleShape).background(Color(c))
-                        .then(if (isSel) Modifier.border(3.dp, MaterialTheme.colorScheme.onSurface, CircleShape) else Modifier)
+                        .then(if (isSel) Modifier.border(3.dp, Ios5Colors.IosBlue, CircleShape) else Modifier)
                         .clickable { onPick(c) },
                 )
             }

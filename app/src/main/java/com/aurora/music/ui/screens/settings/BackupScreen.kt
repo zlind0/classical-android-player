@@ -2,38 +2,22 @@ package com.aurora.music.ui.screens.settings
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Backup
-import androidx.compose.material.icons.filled.Restore
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import com.aurora.music.AuroraApplication
 import com.aurora.music.R
+import com.aurora.music.ui.ios5.Ios5CellDivider
+import com.aurora.music.ui.ios5.Ios5NavRow
+import com.aurora.music.ui.ios5.Ios5SettingsPage
+import com.aurora.music.ui.ios5.ios5FootNote
+import com.aurora.music.ui.ios5.ios5Section
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -50,6 +34,8 @@ fun BackupScreen(contentPadding: PaddingValues, onBack: () -> Unit, confirm: (St
     val strExported = ctx.getString(R.string.backup_exported)
     val strRestored = ctx.getString(R.string.backup_restored)
     val strReadFailed = ctx.getString(R.string.backup_read_failed)
+    val strTitle = stringResource(R.string.settings_backup)
+    val strSection = stringResource(R.string.settings_backup)
     val strExport = stringResource(R.string.backup_export)
     val strExportSub = stringResource(R.string.backup_export_sub)
     val strRestore = stringResource(R.string.backup_restore)
@@ -73,41 +59,19 @@ fun BackupScreen(contentPadding: PaddingValues, onBack: () -> Unit, confirm: (St
         }
     }
 
-    Column(Modifier.fillMaxWidth()) {
-        SettingsTopBar(stringResource(R.string.settings_backup), onBack)
-        Column(Modifier.fillMaxWidth().padding(bottom = contentPadding.calculateBottomPadding() + 24.dp)) {
-            SettingsGroup {
-                ActionRow(Icons.Filled.Backup, strExport, strExportSub) {
-                    scope.launch {
-                        pending = container.backupManager.export(System.currentTimeMillis())
-                        exportLauncher.launch("aurora-backup.json")
-                    }
-                }
-                SettingsRowDivider()
-                ActionRow(Icons.Filled.Restore, strRestore, strRestoreSub) {
-                    importLauncher.launch(arrayOf("application/json", "*/*"))
+    Ios5SettingsPage(strTitle, onBack) {
+        ios5Section(strSection) {
+            Ios5NavRow(strExport, subtitle = strExportSub, value = "") {
+                scope.launch {
+                    pending = container.backupManager.export(System.currentTimeMillis())
+                    exportLauncher.launch("aurora-backup.json")
                 }
             }
-            Text(
-                strNoAudioNote,
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
-            )
+            Ios5CellDivider()
+            Ios5NavRow(strRestore, subtitle = strRestoreSub, value = "") {
+                importLauncher.launch(arrayOf("application/json", "*/*"))
+            }
         }
-    }
-}
-
-@Composable
-private fun ActionRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        ios5FootNote(strNoAudioNote)
     }
 }
