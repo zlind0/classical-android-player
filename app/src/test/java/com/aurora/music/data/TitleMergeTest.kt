@@ -70,6 +70,22 @@ class TitleMergeTest {
     }
 
     @Test
+    fun naturalOrder_numericChunks() {
+        val titles = listOf(
+            "Symphony No.11", "Symphony No.2", "Symphony No.1",
+            "Album 10", "Album 2", "album 1", "Op.2", "Op.10", "Op.1",
+        )
+        assertEquals(
+            listOf(
+                "album 1", "Album 2", "Album 10",
+                "Op.1", "Op.2", "Op.10",
+                "Symphony No.1", "Symphony No.2", "Symphony No.11",
+            ),
+            titles.sortedWith(naturalStringOrder),
+        )
+    }
+
+    @Test
     fun libEngine_smoke() {
         // 库本身行为由 :lib-titlemerge 单测覆盖；这里只确认接得上
         val lib = com.aurora.titlemerge.mergeTracks(

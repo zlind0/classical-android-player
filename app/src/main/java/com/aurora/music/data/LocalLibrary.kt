@@ -22,6 +22,33 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
+/**
+ * 自然排序比较器：切成数字/非数字段，数字段按数值比（先比长度再逐字，
+ * 防溢出），其余忽略大小写。纯 Kotlin，可单测。
+ * public 仅为单测；业务统一走 [LocalLibrary.albumsByArtistId]。
+ */
+val naturalStringOrder: Comparator<String> = Comparator { a, b ->
+    val ac = NaturalChunks.findAll(a).map { it.value }.toList()
+    val bc = NaturalChunks.findAll(b).map { it.value }.toList()
+    val diff = ac.zip(bc).firstOrNull { (x, y) -> chunkDiff(x, y) != 0 }
+    diff?.let { chunkDiff(it.first, it.second) } ?: ac.size.compareTo(bc.size)
+}
+
+private val NaturalChunks = Regex("\\d+|\\D+")
+
+private fun chunkDiff(x: String, y: String): Int {
+    val xn = x.all { it.isDigit() }
+    val yn = y.all { it.isDigit() }
+    if (xn && yn) {
+        val xs = x.trimStart('0')
+        val ys = y.trimStart('0')
+        val c = xs.length.compareTo(ys.length)
+        if (c != 0) return c
+        return xs.compareTo(ys)
+    }
+    return x.lowercase().compareTo(y.lowercase())
+}
+
 class LocalLibrary(
     private val context: Context,
     // scanned replaygain overlaid by path since mediastore tags rarely carry it
@@ -103,9 +130,12 @@ class LocalLibrary(
     fun albumTracksSorted(albumId: String): List<Song> =
         songsByAlbumId(albumId).sortedWith(ALBUM_TRACK_ORDER)
     fun songsByArtistId(artistId: String): List<Song> = songs.filter { it.artistId == artistId }
+
+    /** 艺人名下专辑：按名称自然排序（1, 2, … 11，而不是字典序 1, 11, 2）。 */
     fun albumsByArtistId(artistId: String): List<Album> =
         songs.filter { it.artistId == artistId }.map { it.albumId }.distinct()
             .mapNotNull { aid -> albums.firstOrNull { it.id == aid } }
+            .sortedWith(compareBy(naturalStringOrder) { it.title })
 
     private fun albumArtUri(albumId: Long): String =
         if (albumId <= 0) "" else ContentUris.withAppendedId(ALBUM_ART_BASE, albumId).toString()

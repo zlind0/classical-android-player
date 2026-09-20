@@ -33,6 +33,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -140,15 +141,20 @@ fun Ios5App() {
             animationSpec = tween(600, easing = FastOutSlowInEasing),
             label = "playerFlip",
         )
-        Box(Modifier.fillMaxSize()) {
-            // ---- 内容面 ----
+        // 翻转过程中衬黑（转到侧面露黑场）；静止时透明，亚麻底才能透出来
+        Box(
+            Modifier.fillMaxSize()
+                .background(if (flip > 0.02f && flip < 0.98f) Color.Black else Color.Transparent),
+        ) {
+            // ---- 内容面：自带亚麻底，转起来是一张实卡，真空才露黑 ----
             Box(
                 Modifier.fillMaxSize()
                     .graphicsLayer {
                         rotationY = flip * 180f
                         cameraDistance = 8 * flipDensity.density
                         alpha = if (flip < 0.5f) 1f else 0f
-                    },
+                    }
+                    .background(Ios5Colors.linenBrush),
             ) {
             Column(Modifier.fillMaxSize()) {
                 // ---- 上栏：当前页面 ----
