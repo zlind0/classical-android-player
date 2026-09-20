@@ -101,6 +101,12 @@ class LocalLibrary(
         return candidates.singleOrNull()
     }
 
+    /** 专辑封面验链：URI 能打开才算有图（不解码，关流即走）。IO 线程调用。 */
+    private fun probeArt(url: String): Boolean = runCatching {
+        context.contentResolver.openInputStream(Uri.parse(url))?.close()
+        true
+    }.getOrDefault(false)
+
     fun browse(path: String): Pair<List<String>, List<Song>> {
         val base = path.ifBlank { folderRoot }
         if (base.isBlank()) return emptyList<String>() to emptyList()
@@ -272,10 +278,12 @@ class LocalLibrary(
         albums = scoped.groupBy { it.albumId }
             .map { (aid, tracks) ->
                 val f = tracks.first()
-                // 封面：有图的曲子里随机一张，种子固定保证每次扫描结果一致
+                // 封面：有图的曲子里随机一张，种子固定保证每次扫描结果一致；
+                // URI 非空不等于能解出来，逐个验链（IO 线程），第一张通的留下，
+                // 全不通就空着走默认图，不留注定失败的请求
                 val candidates = tracks.filter { it.artworkUrl.isNotBlank() }
-                val cover = if (candidates.isEmpty()) ""
-                else candidates[kotlin.random.Random(aid.hashCode()).nextInt(candidates.size)].artworkUrl
+                    .shuffled(kotlin.random.Random(aid.hashCode()))
+                val cover = candidates.firstOrNull { probeArt(it.artworkUrl) }?.artworkUrl.orEmpty()
                 Album(
                     id = aid,
                     title = f.album,
