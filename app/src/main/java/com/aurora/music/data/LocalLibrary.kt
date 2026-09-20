@@ -242,11 +242,15 @@ class LocalLibrary(
         albums = scoped.groupBy { it.albumId }
             .map { (aid, tracks) ->
                 val f = tracks.first()
+                // 封面：有图的曲子里随机一张，种子固定保证每次扫描结果一致
+                val candidates = tracks.filter { it.artworkUrl.isNotBlank() }
+                val cover = if (candidates.isEmpty()) ""
+                else candidates[kotlin.random.Random(aid.hashCode()).nextInt(candidates.size)].artworkUrl
                 Album(
                     id = aid,
                     title = f.album,
                     artist = tracks.map { it.artist }.distinct().let { if (it.size == 1) it.first() else "Various artists" },
-                    artworkUrl = tracks.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl ?: "",
+                    artworkUrl = cover,
                     year = albumYear[aid] ?: 0,
                     songCount = tracks.size,
                     durationSec = tracks.sumOf { it.durationSec },

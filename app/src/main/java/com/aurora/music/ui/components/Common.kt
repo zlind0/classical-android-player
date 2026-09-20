@@ -1,5 +1,6 @@
 package com.aurora.music.ui.components
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -26,12 +27,14 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
+import com.aurora.music.R
 import com.aurora.music.data.ThemeStyle
 import com.aurora.music.ui.theme.LocalUiPrefs
 import com.aurora.music.ui.theme.auroraBackdrop
@@ -52,11 +55,19 @@ fun Artwork(
         ThemeStyle.GLASS -> 18.dp
         else -> corner
     }
-    val placeholder = Brush.linearGradient(
-        listOf(accent.copy(alpha = 0.55f), accent.copy(alpha = 0.12f))
-    )
+    // 无封面：统一默认图（打包的 webp），色块不再出现。
+    // 曾经加载失败的 URI 会被记住，后面直接给默认图，不再发第二次请求。
+    if (url.isBlank() || failedArtwork.contains(url)) {
+        Image(
+            painter = painterResource(R.drawable.default_cover),
+            contentDescription = null,
+            contentScale = contentScale,
+            modifier = modifier.clip(RoundedCornerShape(artCorner)),
+        )
+        return
+    }
     Box(
-        modifier = modifier.clip(RoundedCornerShape(artCorner)).background(placeholder),
+        modifier = modifier.clip(RoundedCornerShape(artCorner)),
         contentAlignment = Alignment.Center,
     ) {
         SubcomposeAsyncImage(
@@ -70,11 +81,30 @@ fun Artwork(
             contentDescription = null,
             contentScale = contentScale,
             modifier = Modifier.fillMaxSize(),
-            loading = { Box(Modifier.fillMaxSize().background(placeholder)) },
-            error = { Box(Modifier.fillMaxSize().background(placeholder)) },
+            loading = {
+                Image(
+                    painter = painterResource(R.drawable.default_cover),
+                    contentDescription = null,
+                    contentScale = contentScale,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            },
+            error = {
+                // 纯内存标记，不触发重组；下次直接走上面的默认图分支
+                failedArtwork.add(url)
+                Image(
+                    painter = painterResource(R.drawable.default_cover),
+                    contentDescription = null,
+                    contentScale = contentScale,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            },
         )
     }
 }
+
+/** 解不出来的封面 URI 黑名单（进程内有效）：SD 卡短暂不可用时可能误伤，重启 App 恢复。 */
+private val failedArtwork: MutableSet<String> = java.util.Collections.synchronizedSet(mutableSetOf())
 
 @Composable
 fun SectionHeader(
