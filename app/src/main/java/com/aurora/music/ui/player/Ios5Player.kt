@@ -189,7 +189,7 @@ fun Ios5PlayerPage(
         // 等式恒成立：top + gray + cover + bottom = H，永远不溢出不留缝
         val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
         val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-        val topBase = statusTop + 83.dp
+        val topBase = statusTop + if (merged != null) 94.dp else 83.dp
         val grayBase = 100.dp
         val bottomBase = 144.dp + navBottom
         val coverSide = minOf(maxWidth, maxHeight - topBase - grayBase - bottomBase).coerceAtLeast(0.dp)
@@ -198,13 +198,13 @@ fun Ios5PlayerPage(
         val bottomExtra = leftover - topExtra
         val third = topExtra / 3f
         Column(Modifier.fillMaxSize()) {
-        // 黑顶栏：返回 | 艺人 | 队列 + 曲名单行
+        // 黑顶栏：返回 | 艺人 | 队列 + 标题区（合并时大/小标题两行占标题位）
         Column(
             Modifier.fillMaxWidth()
                 .background(iPodBlack)
                 .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + third),
         ) {
-            // 第一行：返回 | 艺人/大标题 | 队列（同高对齐）
+            // 第一行：返回 | 艺人 | 队列（同高对齐，永远显示歌手）
             Row(
                 Modifier.fillMaxWidth().height(44.dp + third).padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -212,12 +212,10 @@ fun Ios5PlayerPage(
                 IpodBarButton(onClick = onCollapse) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBackIos, "返回", tint = Color.White, modifier = Modifier.size(20.dp))
                 }
-                val firstLine = merged?.first ?: song.artist.ifBlank { " " }
                 Text(
-                    firstLine,
-                    color = if (merged != null) Color.White else Color(0xFF9AA0AB),
-                    fontSize = if (merged != null) 17.sp else 13.sp,
-                    fontWeight = if (merged != null) FontWeight.Bold else FontWeight.Normal,
+                    song.artist.ifBlank { " " },
+                    color = Color(0xFF9AA0AB),
+                    fontSize = 13.sp,
                     fontFamily = Ios5Sans,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
@@ -226,17 +224,39 @@ fun Ios5PlayerPage(
                     Icon(Icons.AutoMirrored.Filled.QueueMusic, "队列", tint = Color.White, modifier = Modifier.size(20.dp))
                 }
             }
-            // 第二行：曲名/小标题独占一行
-            val secondLine = merged?.second?.ifBlank { song.title } ?: song.title.ifBlank { "未在播放" }
-            Text(
-                secondLine,
-                color = if (merged != null) Color(0xFFB9BEC7) else Color.White,
-                fontSize = if (merged != null) 14.sp else 19.sp,
-                fontWeight = if (merged != null) FontWeight.Normal else FontWeight.Bold,
-                fontFamily = Ios5Sans,
-                maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp + third),
-            )
+            // 标题区：有合并时大标题+小标题两行占原来标题位，无合并时曲名单行
+            if (merged != null) {
+                Column(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp + third),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        merged.first,
+                        color = Color.White,
+                        fontSize = 17.sp, lineHeight = 21.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = Ios5Sans,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        merged.second.ifBlank { song.title },
+                        color = Color(0xFFB9BEC7),
+                        fontSize = 14.sp, lineHeight = 17.sp,
+                        fontFamily = Ios5Sans,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            } else {
+                Text(
+                    song.title.ifBlank { "未在播放" },
+                    color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp + third),
+                )
+            }
             Box(Modifier.fillMaxWidth().height(1.dp).background(Color.Black))
         }
 
