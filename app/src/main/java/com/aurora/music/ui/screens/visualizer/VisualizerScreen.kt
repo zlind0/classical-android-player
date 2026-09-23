@@ -61,7 +61,8 @@ import com.aurora.music.data.VisualizerPrefs
 import com.aurora.music.data.VisualizerStyle
 import com.aurora.music.data.VizBackground
 import com.aurora.music.data.VizColor
-import com.aurora.music.ui.components.Artwork
+import com.aurora.music.ui.components.TrackArtwork
+import com.aurora.music.ui.components.rememberTrackArtworkUrl
 import com.aurora.music.util.rememberDominantColor
 import com.aurora.music.viewmodel.PlayerUiState
 import kotlinx.coroutines.delay
@@ -75,7 +76,8 @@ fun VisualizerScreen(state: PlayerUiState, onClose: () -> Unit) {
     val prefs by container.settingsStore.visualizerPrefs.collectAsStateWithLifecycle(initialValue = VisualizerPrefs())
     val scope = rememberCoroutineScope()
     val song = state.current
-    val accent by rememberDominantColor(song.artworkUrl, song.accent)
+    val trackArtUrl = rememberTrackArtworkUrl(song)
+    val accent by rememberDominantColor(trackArtUrl.ifBlank { song.artworkUrl }, song.accent)
 
     // run analyser only while screen visible
     DisposableEffect(Unit) {
@@ -146,8 +148,8 @@ fun VisualizerScreen(state: PlayerUiState, onClose: () -> Unit) {
             ) { controlsVisible = !controlsVisible },
     ) {
         when (prefs.background) {
-            VizBackground.ALBUM_BLUR -> if (song.artworkUrl.isNotBlank()) {
-                Artwork(song.artworkUrl, accent, Modifier.fillMaxSize().blur(60.dp), corner = 0.dp)
+            VizBackground.ALBUM_BLUR -> if (trackArtUrl.isNotBlank() || song.artworkUrl.isNotBlank()) {
+                TrackArtwork(song, Modifier.fillMaxSize().blur(60.dp), corner = 0.dp)
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)))
             } else {
                 Box(Modifier.fillMaxSize().background(bgGradient(accent)))
@@ -159,9 +161,9 @@ fun VisualizerScreen(state: PlayerUiState, onClose: () -> Unit) {
         // Artwork and the renderer must use the same inset viewport: system bars can
         // have different heights, so centering the artwork in the full window drifts.
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars).padding(16.dp)) {
-            if (isRadial && prefs.showAlbumArt && song.artworkUrl.isNotBlank()) {
-                Artwork(
-                    song.artworkUrl, accent,
+            if (isRadial && prefs.showAlbumArt && (trackArtUrl.isNotBlank() || song.artworkUrl.isNotBlank())) {
+                TrackArtwork(
+                    song,
                     Modifier.align(Alignment.Center).size(120.dp).clip(CircleShape),
                     corner = 60.dp,
                 )

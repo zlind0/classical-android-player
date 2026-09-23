@@ -16,6 +16,7 @@ import androidx.media3.session.SessionToken
 import com.aurora.music.AuroraApplication
 import com.aurora.music.R
 import com.aurora.music.data.SavedQueue
+import com.aurora.music.data.TrackArtworkCache
 import com.aurora.music.data.toSavedTrack
 import com.aurora.music.model.Song
 import com.aurora.music.playback.PlaybackService
@@ -347,7 +348,22 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             )
         }
         maybeEnrichLocal(_state.value.current)
+        maybeFixTrackArt(_state.value.current)
         persistQueue()
+    }
+
+    // 播放态封面纠偏：MediaStore 的 albumart 是专辑级（同专辑共用一张，多为别的文件的图），
+    // 这里后台解析本文件内嵌图，命中后把 current 换成本文件 URI，播放大封面/通知下次即用对的图。
+    private val fixedArtwork = java.util.Collections.synchronizedSet(HashSet<String>())
+    private fun maybeFixTrackArt(song: Song) {
+        if (song.id.isBlank() || !fixedArtwork.add(song.id)) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val url = runCatching { TrackArtworkCache.resolve(app, song) }.getOrNull().orEmpty()
+            if (url.isBlank() || url == song.artworkUrl) return@launch
+            val fixed = song.copy(artworkUrl = url)
+            songById = songById + (song.id to fixed)
+            _state.update { st -> if (st.current.id == song.id) st.copy(current = fixed) else st }
+        }
     }
 
     // mediastore lacks sample-rate/bit-depth pull them for the playing track via retriever once each
@@ -387,7 +403,13 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
                 .setTitle(song.title)
                 .setArtist(song.artist)
                 .setAlbumTitle(song.album)
-                .apply { if (song.artworkUrl.isNotBlank()) setArtworkUri(Uri.parse(song.artworkUrl)) }
+                // 通知栏也优先用已缓存的本文件内嵌图（同步快查，无 IO 阻塞），
+                // 未命中时回落专辑级图；前台纠偏后缓存即热，下次播放通知即对。
+                .apply {
+                    val art = runCatching { TrackArtworkCache.cachedSync(app, song) }.getOrNull()
+                        .orEmpty().ifBlank { song.artworkUrl }
+                    if (art.isNotBlank()) setArtworkUri(Uri.parse(art))
+                }
                 .setExtras(android.os.Bundle().apply {
                     putFloat("rgTrack", song.replayGainTrack)
                     putFloat("rgAlbum", song.replayGainAlbum)

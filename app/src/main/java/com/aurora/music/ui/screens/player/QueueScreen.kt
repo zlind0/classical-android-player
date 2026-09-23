@@ -47,6 +47,7 @@ import androidx.compose.ui.zIndex
 import com.aurora.music.R
 import com.aurora.music.model.Song
 import com.aurora.music.ui.components.Artwork
+import com.aurora.music.ui.components.TrackArtwork
 import com.aurora.music.ui.components.formatTime
 import com.aurora.music.ui.ios5.Ios5ActionRow
 import com.aurora.music.ui.ios5.Ios5CellDivider
@@ -116,7 +117,7 @@ fun QueueScreen(
                             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Artwork(current.artworkUrl, current.accent, Modifier.size(52.dp), corner = 8.dp)
+                            TrackArtwork(current, Modifier.size(52.dp), corner = 8.dp)
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(current.title, color = Ios5Colors.IosBlue, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)

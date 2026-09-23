@@ -63,7 +63,7 @@ import androidx.core.view.WindowCompat
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.lookupMergedTitle
 import com.aurora.music.data.mergeEnabledFor
-import com.aurora.music.ui.components.Artwork
+import com.aurora.music.ui.components.TrackArtwork
 import com.aurora.music.ui.components.formatTime
 import com.aurora.music.ui.ios5.Ios5Sans
 import com.aurora.music.ui.ios5.Ios5Slider
@@ -101,7 +101,7 @@ fun Ios5MiniStrip(
             .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Artwork(song.artworkUrl, song.accent, Modifier.size(38.dp), corner = 8.dp)
+        TrackArtwork(song, Modifier.size(38.dp), corner = 8.dp)
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -316,8 +316,8 @@ fun Ios5PlayerPage(
             Modifier.fillMaxWidth().height(coverSide),
             contentAlignment = Alignment.Center,
         ) {
-            Artwork(
-                song.artworkUrl, song.accent,
+            TrackArtwork(
+                song,
                 Modifier.size(coverSide),
                 corner = 0.dp,
                 fullQuality = true,

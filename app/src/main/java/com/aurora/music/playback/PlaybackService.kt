@@ -782,10 +782,13 @@ class PlaybackService : MediaLibraryService() {
 
     private fun songItem(song: com.aurora.music.model.Song): MediaItem {
         val id = "song_${song.id}"
+        // 与前台一致：优先已缓存的本文件内嵌图，避免通知栏长期挂着专辑里别的图
+        val art = runCatching { com.aurora.music.data.TrackArtworkCache.cachedSync(this, song) }
+            .getOrNull().orEmpty().ifBlank { song.artworkUrl }
         val item = MediaItem.Builder().setMediaId(id).setUri(song.streamUrl).setMediaMetadata(
             MediaMetadata.Builder().setTitle(song.title).setArtist(song.artist).setAlbumTitle(song.album)
                 .setIsBrowsable(false).setIsPlayable(true).setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
-                .apply { if (song.artworkUrl.isNotBlank()) setArtworkUri(android.net.Uri.parse(song.artworkUrl)) }.build()
+                .apply { if (art.isNotBlank()) setArtworkUri(android.net.Uri.parse(art)) }.build()
         ).build()
         browseCache[id] = item
         return item
