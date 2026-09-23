@@ -138,7 +138,8 @@
     <string name="sources_scan_roots">Scan roots</string>
     <string name="sources_empty_hint">No folders yet. Add the directories holding your music — internal storage, SD card or USB — and only those will be scanned.</string>
     <string name="sources_tracks">%1$d tracks</string>
-    <string name="sources_scanning">Scanning… %1$d files · %2$s</string>
+    <string name="sources_scanning">Scanning… %1$d / %2$d · %3$s</string>
+    <string name="sources_scanning_walk">Listing files… %1$s</string>
     <string name="sources_play">Play</string>
     <string name="sources_scan">Scan</string>
     <string name="sources_clean">Clean</string>

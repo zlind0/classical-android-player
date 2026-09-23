@@ -260,7 +260,10 @@ private fun RootCard(
     onClean: () -> Unit,
 ) {
     val strTracks = stringResource(R.string.sources_tracks, count)
-    val strScanning = if (progress != null) stringResource(R.string.sources_scanning, progress.found, progress.current) else ""
+    val strScanning = if (progress != null) {
+        if (progress.total > 0) stringResource(R.string.sources_scanning, progress.found, progress.total, progress.current)
+        else stringResource(R.string.sources_scanning_walk, progress.current)
+    } else ""
     val strPlay = stringResource(R.string.sources_play)
     val strScan = stringResource(R.string.sources_scan)
     val strClean = stringResource(R.string.sources_clean)
@@ -285,7 +288,15 @@ private fun RootCard(
             onCheckedChange = onMerge,
         )
         if (progress != null) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp))
+            // 总数已知后走确定性进度（found/total），遍历文件清单阶段总数未知则不定
+            if (progress.total > 0) {
+                LinearProgressIndicator(
+                    progress = { (progress.found.toFloat() / progress.total).coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                )
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp))
+            }
             Ios5StaticText(strScanning)
         }
         Ios5CellDivider()

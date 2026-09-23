@@ -135,7 +135,8 @@
     <string name="sources_scan_roots">扫描目录</string>
     <string name="sources_empty_hint">还没有添加目录。添加存放音乐的文件夹——内部存储、SD 卡或 USB，只会扫描这些地方。</string>
     <string name="sources_tracks">%1$d 首曲目</string>
-    <string name="sources_scanning">扫描中…%1$d 个文件·%2$s</string>
+    <string name="sources_scanning">扫描中…%1$d / %2$d·%3$s</string>
+    <string name="sources_scanning_walk">正在列文件…%1$s</string>
     <string name="sources_play">播放</string>
     <string name="sources_scan">扫描</string>
     <string name="sources_clean">清理</string>
