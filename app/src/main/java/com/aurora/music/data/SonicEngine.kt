@@ -20,7 +20,7 @@ import kotlin.math.sqrt
 
 // v1 only local/downloaded tracks are decodable server-only streams fall back to backend radio
 class SonicEngine(
-    private val localLibrary: LocalLibrary,
+    private val pool: SongPool,
     private val downloads: DownloadManager,
     private val store: SonicStore,
 ) {
@@ -35,8 +35,8 @@ class SonicEngine(
     val analyzedCount: StateFlow<Int> get() = store.count
 
     private suspend fun decodable(): List<Song> {
-        localLibrary.ensureLoaded()
-        val local = localLibrary.songs.filter { it.path.isNotBlank() }
+        pool.ensureLoaded()
+        val local = pool.songs.filter { it.path.isNotBlank() }
         val dl = downloads.downloads.value.values.map { it.toSong() }
         return (local + dl).distinctBy { it.id }
     }

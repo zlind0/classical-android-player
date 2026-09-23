@@ -83,7 +83,8 @@ class RootScanner(
             }
         }
         out.sortBy { it.path.lowercase() }
-        store.writeIndex(root.id, out)
+        // 深扫落盘进 library_files.db（三表原子替换）；启动时只读 + 存在性检查，不走这里
+        store.writeScanResult(root.id, out)
         store.stampScan(root.id)
         onProgress(ScanProgress(rootId = root.id, running = false, found = found,
             total = out.size, added = added, updated = updated, missing = missing))

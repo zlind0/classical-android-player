@@ -94,4 +94,23 @@ class TitleMergeTest {
         assertEquals(1, lib.size)
         assertTrue(lib.single() is MergedRow.Group)
     }
+
+    @Test
+    fun mergeJson_roundTrip() {
+        val songs = listOf(song("Symphony No.1 I", 0), song("Symphony No.1 II", 1), song("Other", 2))
+        val json = buildMergeJson(songs)
+        assertTrue(json.isNotBlank())
+        val rows = parseMergeJson(json)
+        // lookup 走反序列化后的行，结果与直接算一致
+        assertEquals(lookupMergedTitle(com.aurora.titlemerge.mergeTracks(songs.map { MergeInput(it.id, it.title) }), songs, "t1"), lookupMergedTitle(rows, songs, "t1"))
+        assertEquals("Symphony No.1" to "I", lookupMergedTitle(rows, songs, "t0"))
+        assertNull(lookupMergedTitle(rows, songs, "t2"))
+    }
+
+    @Test
+    fun mergeJson_badInputFallsBackToEmpty() {
+        assertTrue(parseMergeJson("").isEmpty())
+        assertTrue(parseMergeJson("not json").isEmpty())
+        assertTrue(parseMergeJson("[{\"type\":\"x\"}]").isEmpty())
+    }
 }

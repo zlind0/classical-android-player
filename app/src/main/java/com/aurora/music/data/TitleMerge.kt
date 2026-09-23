@@ -1,8 +1,12 @@
 package com.aurora.music.data
 
 import com.aurora.music.model.Song
+import com.aurora.titlemerge.MergeInput
 import com.aurora.titlemerge.MergedRow
+import com.aurora.titlemerge.mergeTracks
 import com.aurora.titlemerge.mergedTitleOf as libLookup
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 
 /**
  * 标题合并的 app 侧薄适配。真正的分组计算在 :lib-titlemerge，
@@ -52,3 +56,45 @@ fun mergeEnabledFor(roots: List<MusicRoot>, tracks: List<Song>): Boolean {
         t.path.isNotBlank() && enabled.any { r -> t.path == r || t.path.startsWith("$r/") }
     }
 }
+
+// ---- 合并表落盘：MergedRow 是 sealed interface，Gson 直存多态反序列化不可靠，
+// 用自有 DTO 中转，深扫时算好存 JSON，启动只读表不再分词。 ----
+
+private data class StoredMergeItem(val index: Int, val minor: String)
+private data class StoredMergeRow(
+    val type: String, // "s" | "g"
+    val index: Int = -1,
+    val major: String = "",
+    val items: List<StoredMergeItem> = emptyList(),
+)
+
+private val mergeGson = Gson()
+private val storedRowsType = object : TypeToken<List<StoredMergeRow>>() {}.type
+
+/** 深扫时：同一专辑标准序 → JSON（与 albumTracksSorted 同一份顺序，序号对齐）。 */
+fun buildMergeJson(songsInAlbumOrder: List<Song>): String {
+    val rows = mergeTracks(songsInAlbumOrder.map { MergeInput(it.id, it.title) })
+    return mergeGson.toJson(rows.map { r ->
+        when (r) {
+            is MergedRow.Single -> StoredMergeRow("s", index = r.index)
+            is MergedRow.Group -> StoredMergeRow(
+                "g", major = r.major,
+                items = r.items.map { StoredMergeItem(it.index, it.minor) },
+            )
+        }
+    })
+}
+
+/** 启动时：JSON → MergedRow，坏行直接丢弃（回落为不合并）。 */
+fun parseMergeJson(json: String): List<MergedRow> = runCatching {
+    if (json.isBlank()) return emptyList()
+    val stored: List<StoredMergeRow> = mergeGson.fromJson(json, storedRowsType) ?: return emptyList()
+    stored.mapNotNull { r ->
+        when (r.type) {
+            "s" -> if (r.index >= 0) MergedRow.Single(r.index) else null
+            "g" -> MergedRow.Group(r.major, r.items.filter { it.index >= 0 }
+                .map { com.aurora.titlemerge.MergedItem(it.index, it.minor) })
+            else -> null
+        }
+    }
+}.getOrDefault(emptyList())

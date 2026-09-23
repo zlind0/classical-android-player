@@ -242,7 +242,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             c.sendCustomCommand(
                 SessionCommand(PlaybackService.CMD_SHUFFLE, android.os.Bundle().apply {
                     putInt("target", 1)
-                    putStringArrayList("order", ArrayList(songs.map { it.id }))
+                putStringArrayList("order", ArrayList(songs.map { it.id }))
                 }),
                 android.os.Bundle.EMPTY,
             )
@@ -366,16 +366,23 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // mediastore lacks sample-rate/bit-depth pull them for the playing track via retriever once each
+    // mediastore 缺采样率/位深，播放时对当前曲补一次；文件模式同样（直路径 MMR）
     private val enrichedLocal = java.util.Collections.synchronizedSet(HashSet<String>())
     private fun maybeEnrichLocal(song: Song) {
-        if (song.id.isEmpty() || !song.streamUrl.startsWith("content://")) return
+        if (song.id.isEmpty()) return
+        val isLocal = song.streamUrl.startsWith("content://") ||
+            song.streamUrl.startsWith("file://") ||
+            (song.path.isNotBlank() && java.io.File(song.path).isFile)
+        if (!isLocal) return
         if (song.sampleRateHz > 0) return
         if (!enrichedLocal.add(song.id)) return
         viewModelScope.launch(Dispatchers.IO) {
             val mmr = android.media.MediaMetadataRetriever()
             val result = runCatching {
-                mmr.setDataSource(getApplication(), Uri.parse(song.streamUrl))
+                // 文件直路径优先（最准且不经 ContentResolver），否则走播放 URI
+                val byPath = song.path.isNotBlank() && java.io.File(song.path).isFile &&
+                    runCatching { mmr.setDataSource(song.path); true }.getOrDefault(false)
+                if (!byPath) mmr.setDataSource(getApplication(), Uri.parse(song.streamUrl))
                 fun key(k: Int) = mmr.extractMetadata(k)?.toIntOrNull() ?: 0
                 val sr = if (android.os.Build.VERSION.SDK_INT >= 31) key(android.media.MediaMetadataRetriever.METADATA_KEY_SAMPLERATE) else 0
                 val bd = if (android.os.Build.VERSION.SDK_INT >= 31) key(android.media.MediaMetadataRetriever.METADATA_KEY_BITS_PER_SAMPLE) else 0
@@ -422,18 +429,20 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun playAll(songs: List<Song>, startIndex: Int = 0) {
         val c = controller ?: return
-        if (songs.isEmpty()) return
+        // 不可用（文件已消失）曲目永不进队列；startIndex 映射到过滤后的位置
+        val avail = songs.filter { it.available }
+        if (avail.isEmpty()) return
         container.haptic()
         playingAccountKey = container.currentAccountKey()
-        songById = songs.associateBy { it.id }
-        val idx = startIndex.coerceIn(0, songs.lastIndex)
-        val delivery = deliverQueue(songs, idx, 0L)
+        songById = avail.associateBy { it.id }
+        val idx = songs.getOrNull(startIndex)?.let { s -> avail.indexOfFirst { it.id == s.id }.takeIf { it >= 0 } } ?: 0
+        val delivery = deliverQueue(avail, idx, 0L)
         c.playbackParameters = currentParams()
         c.prepare()
         c.play()
         // fresh context plays in order make sure shuffle is off
         sendShuffle(0)
-        _state.update { it.copy(queue = delivery.songs, currentIndex = delivery.currentIndex, current = songs[idx], positionSec = 0f, isPlaying = true) }
+        _state.update { it.copy(queue = delivery.songs, currentIndex = delivery.currentIndex, current = avail[idx], positionSec = 0f, isPlaying = true) }
     }
 
     fun play(song: Song) = playAll(listOf(song), 0)
@@ -548,10 +557,11 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun shufflePlay(songs: List<Song>) {
         val c = controller ?: return
-        if (songs.isEmpty()) return
+        val avail = songs.filter { it.available }
+        if (avail.isEmpty()) return
         playingAccountKey = container.currentAccountKey()
-        songById = songs.associateBy { it.id }
-        val shuffled = songs.shuffled()
+        songById = avail.associateBy { it.id }
+        val shuffled = avail.shuffled()
         val delivery = deliverQueue(shuffled, 0, 0L)
         c.playbackParameters = currentParams()
         c.prepare()
@@ -561,13 +571,14 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         c.sendCustomCommand(
             SessionCommand(PlaybackService.CMD_SHUFFLE, android.os.Bundle().apply {
                 putInt("target", 1)
-                putStringArrayList("order", ArrayList(songs.map { it.id }))
+                putStringArrayList("order", ArrayList(avail.map { it.id }))
             }),
             android.os.Bundle.EMPTY,
         )
     }
 
     fun addToQueue(song: Song) {
+        if (!song.available) return
         val c = controller ?: run { play(song); return }
         if (c.mediaItemCount == 0) { play(song); return }
         songById = songById + (song.id to song)
@@ -577,6 +588,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun playNext(song: Song) {
+        if (!song.available) return
         val c = controller ?: run { play(song); return }
         if (c.mediaItemCount == 0) { play(song); return }
         songById = songById + (song.id to song)

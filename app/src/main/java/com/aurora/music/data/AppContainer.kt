@@ -8,6 +8,10 @@ import android.os.VibratorManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import androidx.room.Room
+import com.aurora.music.data.db.FilesDb
+import com.aurora.music.data.db.MediastoreDb
+import com.aurora.music.model.Song
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.io.File
 
 // v0.6 gain-reduction meters (plan §36), polled from the DSP each tick
 data class DspMeters(val compGrDb: Float = 0f, val limGrDb: Float = 0f)
@@ -46,30 +51,72 @@ class AppContainer(context: Context) {
 
     val replayGainStore = ReplayGainStore(appContext)
 
-    val localLibrary = LocalLibrary(appContext, gainProvider = { path -> replayGainStore.gainsFor(path) })
-    private val localStore = LocalStore(appContext)
+    // 两套独立 SQLite 库，一源一库，物理隔离、永不串台
+    private val filesDb: FilesDb = Room.databaseBuilder(appContext, FilesDb::class.java, "library_files.db").build()
+    private val mediastoreDb: MediastoreDb = Room.databaseBuilder(appContext, MediastoreDb::class.java, "library_mediastore.db").build()
 
-    val replayGainScanner = ReplayGainScanner(localLibrary, replayGainStore)
+    // MEDIASTORE 栈：DB 快照 → 内存；MediaStore 查询只在首次同步/手动重同步时发生
+    val localLibrary = LocalLibrary(appContext, mediastoreDb.mediastoreDao(), gainProvider = { path -> replayGainStore.gainsFor(path) })
+    val localStore = LocalStore(appContext)
 
     val tagEditor = TagEditor(appContext)
 
-    // v0.3 local storage roots (plan §3-13): user-picked directories + scanner
+    // v0.3 local storage roots (plan §3-13): user-picked directories + scanner.
+    // FILE 栈专属：roots 定义 + library_files.db 的内存映射，全程不碰 MediaStore。
     val volumeManager = StorageVolumeManager(appContext)
-    val musicRoots = MusicRootsStore(appContext)
+    val musicRoots = MusicRootsStore(appContext, filesDb.filesDao())
     val rootScanner = RootScanner(musicRoots)
 
-    // plan §6: the browsable library only contains the user's scan roots
-    fun refreshLibraryScope() {
-        val enabled = musicRoots.roots.value.filter { it.enabled }
-            .map { it.rootPath.trimEnd('/') }
-            .filter { it.isNotBlank() }
-        localLibrary.scopeFilter = if (enabled.isEmpty()) null else { song ->
-            val p = song.path
-            p.isNotBlank() && enabled.any { root -> p == root || p.startsWith("$root/") }
-        }
+    // 曲库来源开关（默认 MEDIastore）。两个栈各自独立，切换 = 换 backend + 按源加载。
+    private val _librarySource = MutableStateFlow(LibrarySource.MEDIastore)
+    val librarySource: StateFlow<LibrarySource> = _librarySource.asStateFlow()
+
+    fun setLibrarySource(v: LibrarySource) {
         scope.launch {
-            runCatching { localLibrary.refresh() }
+            settingsStore.setLibrarySource(v)
+            // DataStore collect 回来后统一走 switchToSource，避免双写竞态
+        }
+    }
+
+    private suspend fun switchToSource(v: LibrarySource) {
+        if (_librarySource.value != v) _librarySource.value = v
+        backend = if (v == LibrarySource.FILE) fileBackend else mediaBackend
+        loadActiveSource()
+        _libraryReload.value++
+    }
+
+    /**
+     * 按源加载：只读各自 DB 进内存（秒开），再后台做存在性检查。
+     * 深扫永不在这里发生（FILE 深扫只在加库/手动重扫；MEDIastore 全量只在 DB 为空时）。
+     */
+    private suspend fun loadActiveSource() {
+        if (_librarySource.value == LibrarySource.FILE) {
+            runCatching { musicRoots.loadFromDb() }
+            scope.launch(Dispatchers.IO) {
+                val gone = runCatching {
+                    musicRoots.allRows()
+                        .filter { it.available && !File(it.path).exists() }
+                        .map { it.path }
+                }.getOrDefault(emptyList())
+                // 整 root 基目录消失（外接拔掉）→ 整 root 标 unavailable，不删行
+                val deadRoots = musicRoots.roots.value
+                    .filter { root -> runCatching { !File(root.rootPath).exists() }.getOrDefault(false) }
+                    .flatMap { root -> musicRoots.readIndex(root.id).filter { it.available }.map { it.path } }
+                val all = (gone + deadRoots).distinct()
+                var changed = 0
+                all.chunked(500).forEach { chunk ->
+                    runCatching { musicRoots.markUnavailable(chunk) }
+                    changed += chunk.size
+                }
+                if (changed > 0) _libraryReload.value++
+            }
+        } else {
+            runCatching { localLibrary.loadFromDb() }
             _libraryReload.value++
+            scope.launch(Dispatchers.IO) {
+                val changed = runCatching { localLibrary.pruneMissing() }.getOrDefault(0)
+                if (changed > 0) _libraryReload.value++
+            }
         }
     }
 
@@ -93,15 +140,33 @@ class AppContainer(context: Context) {
 
     private val localSession = Session(server = "On this device", username = "Local Library", salt = "", token = "local", type = ServerType.LOCAL)
 
+    @Volatile private var activeSession: Session = localSession
+    private val mediaBackend get(): MediaBackend = LocalBackend(localLibrary, localStore, activeSession)
+    private val fileBackend get(): MediaBackend = FileBackend(musicRoots, localStore, activeSession)
+
     @Volatile
-    var backend: MediaBackend = LocalBackend(localLibrary, localStore, localSession)
+    var backend: MediaBackend = mediaBackend
         private set
+
+    // 分析引擎看到的永远是当前 source 的歌单（双栈跟随，不直连 LocalLibrary）
+    private val activePool = object : SongPool {
+        override val songs: List<Song>
+            get() = if (_librarySource.value == LibrarySource.FILE) musicRoots.allSongs() else localLibrary.songs
+        override suspend fun ensureLoaded() {
+            if (_librarySource.value == LibrarySource.FILE) musicRoots.ensureLoaded() else localLibrary.ensureLoaded()
+        }
+        override suspend fun refresh() {
+            if (_librarySource.value == LibrarySource.FILE) musicRoots.refresh() else localLibrary.refresh()
+        }
+    }
+
+    val replayGainScanner = ReplayGainScanner(activePool, replayGainStore)
 
     // server downloads are gone; DownloadManager keeps serving the on-device download index
     val downloadManager = DownloadManager(appContext)
 
     val sonicStore = SonicStore(appContext)
-    val sonicEngine = SonicEngine(localLibrary, downloadManager, sonicStore)
+    val sonicEngine = SonicEngine(activePool, downloadManager, sonicStore)
 
     val artistInfoClient = com.aurora.music.data.remote.ArtistInfoClient()
     val artistInfoStore = ArtistInfoStore(appContext)
@@ -184,9 +249,15 @@ class AppContainer(context: Context) {
     }
 
     init {
-        refreshLibraryScope()
         scope.launch {
-            musicRoots.roots.collect { refreshLibraryScope() }
+            // 开关是唯一真相源：collect 首个值即当前开关，按源加载对应栈；切换同样走这里
+            settingsStore.librarySource.collect { switchToSource(it) }
+        }
+        scope.launch {
+            // FILE 模式下 roots 启用开关变化只刷新列表，不碰 MediaStore 栈
+            musicRoots.roots.collect {
+                if (_librarySource.value == LibrarySource.FILE) _libraryReload.value++
+            }
         }
         // scan() is idempotent only processes tracks not already in the vector store
         scope.launch {
@@ -196,7 +267,8 @@ class AppContainer(context: Context) {
             // local-only bootstrap: stamp the on-device session once so sessionReady gates open
             val existing = runCatching { settingsStore.session.first() }.getOrNull()
             if (existing == null) settingsStore.saveSession(localSession)
-            backend = LocalBackend(localLibrary, localStore, runCatching { settingsStore.session.first() }.getOrNull() ?: localSession)
+            activeSession = runCatching { settingsStore.session.first() }.getOrNull() ?: localSession
+            backend = if (_librarySource.value == LibrarySource.FILE) fileBackend else mediaBackend
             _sessionReady.value = true
         }
         scope.launch {

@@ -5,14 +5,16 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import com.aurora.music.data.db.MediastoreDao
+import com.aurora.music.data.db.MsAlbum
+import com.aurora.music.data.db.MsMerge
+import com.aurora.music.data.db.MsTrack
 import com.aurora.music.model.Album
 import com.aurora.music.model.Artist
 import com.aurora.music.model.Song
 import com.aurora.music.util.TrackMatch
 import com.aurora.music.util.accentFor
-import com.aurora.titlemerge.MergeInput
 import com.aurora.titlemerge.MergedRow
-import com.aurora.titlemerge.mergeTracks
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * 自然排序比较器：切成数字/非数字段，数字段按数值比（先比长度再逐字，
@@ -49,23 +52,31 @@ private fun chunkDiff(x: String, y: String): Int {
     return x.lowercase().compareTo(y.lowercase())
 }
 
+/**
+ * MEDIASTORE 栈的内存库，数据来自 library_mediastore.db。
+ * 启动只读 DB（[loadFromDb]）；MediaStore 全量查询只在
+ * DB 为空的首次同步或手动重同步（[syncFromMediastore]）时发生；
+ * 启动后台只做 DATA 路径存在性检查（[pruneMissing]），缺失标
+ * unavailable（沉底灰色），不删行、不读标签。
+ */
 class LocalLibrary(
     private val context: Context,
+    private val dao: MediastoreDao,
     // scanned replaygain overlaid by path since mediastore tags rarely carry it
     private val gainProvider: (String) -> Pair<Float, Float>? = { null },
-) {
+) : SongPool {
 
     @Volatile private var loaded = false
     private val mutex = Mutex()
 
-    @Volatile var songs: List<Song> = emptyList(); private set
+    override var songs: List<Song> = emptyList(); private set
     @Volatile var albums: List<Album> = emptyList(); private set
     @Volatile var artists: List<Artist> = emptyList(); private set
     private var byId: Map<String, Song> = emptyMap()
 
     @Volatile private var matchIndex: Map<String, List<Song>> = emptyMap()
 
-    // 扫描时预计算的每专辑标题合并表（后台线程一次算好，UI 只查表）。
+    // 深扫时预计算的每专辑标题合并表（后台线程一次算好，UI 只查表）。
     // 顺序与 albumTracksSorted 完全一致，index 可直接对上。
     private val _albumMerges = MutableStateFlow<Map<String, List<MergedRow>>>(emptyMap())
     val albumMerges: StateFlow<Map<String, List<MergedRow>>> = _albumMerges.asStateFlow()
@@ -74,20 +85,49 @@ class LocalLibrary(
 
     @Volatile var folderRoot: String = ""; private set
 
-    // Classical fork v0.3 (plan §6): when the user configured scan roots, only
-    // tracks inside those subtrees enter the library. Null = unscoped (legacy).
-    // Takes effect on the next scan()/refresh().
-    @Volatile var scopeFilter: ((Song) -> Boolean)? = null
-
-    suspend fun ensureLoaded() {
-        if (loaded) return
+    /** 启动路径：只读 DB，不碰 MediaStore；DB 为空则是首次进此模式，一次全量同步落盘。 */
+    suspend fun loadFromDb() {
         mutex.withLock {
-            if (!loaded) { scan(); loaded = true }
+            val rows = dao.allTracks()
+            if (rows.isEmpty()) syncLocked() else rebuildFromRows(rows)
+            loaded = true
         }
     }
 
-    suspend fun refresh() {
-        mutex.withLock { scan(); loaded = true }
+    override suspend fun ensureLoaded() {
+        if (loaded) return
+        mutex.withLock {
+            if (!loaded) {
+                val rows = dao.allTracks()
+                if (rows.isEmpty()) {
+                    // 首次进入此模式：一次全量同步落盘（之后不再自动全扫）
+                    syncLocked()
+                } else {
+                    rebuildFromRows(rows)
+                }
+                loaded = true
+            }
+        }
+    }
+
+    /** 手动“重同步系统曲库”：全量 MediaStore 查询 + 落盘。 */
+    override suspend fun refresh() {
+        mutex.withLock { syncLocked(); loaded = true }
+    }
+
+    /**
+     * 后台存在性检查：DATA 路径还在的保持可用，消失的标 unavailable。
+     * 无 DATA 的行（新系统受限）无法判断，保持原样。返回变更数。
+     */
+    suspend fun pruneMissing(): Int = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val gone = songs.filter { it.path.isNotBlank() && !File(it.path).exists() }
+            if (gone.isEmpty()) return@withLock 0
+            val ids = gone.map { it.id }
+            ids.chunked(500).forEach { dao.markUnavailable(it) }
+            rebuildFromRows(dao.allTracks())
+            gone.size
+        }
     }
 
     fun song(id: String): Song? = byId[id]
@@ -110,7 +150,7 @@ class LocalLibrary(
     fun browse(path: String): Pair<List<String>, List<Song>> {
         val base = path.ifBlank { folderRoot }
         if (base.isBlank()) return emptyList<String>() to emptyList()
-        val here = songs.filter { dirOf[it.id] == base }.sortedBy { it.title.lowercase() }
+        val here = songs.filter { it.available && dirOf[it.id] == base }.sortedBy { it.title.lowercase() }
         val subdirs = dirOf.values.asSequence()
             .filter { it != base && it.startsWith("$base/") }
             .map { it.removePrefix("$base/").substringBefore('/') }
@@ -161,7 +201,77 @@ class LocalLibrary(
         }
     }
 
-    private suspend fun scan() = withContext(Dispatchers.IO) {
+    /** DB 行 → 内存（available 在前原序，unavailable 沉底；专辑/艺人只看可用行）。 */
+    private suspend fun rebuildFromRows(rows: List<MsTrack>) {
+        val avail = rows.filter { it.available }
+        val un = rows.filterNot { it.available }
+        val availSongs = avail.map { it.toSong(overlayGain = true) }
+        val unSongs = un.map { it.toSong(overlayGain = true) }
+        songs = availSongs + unSongs
+        byId = songs.associateBy { it.id }
+        matchIndex = availSongs.groupBy { TrackMatch.key(it.artist, it.title) }
+        dirOf = availSongs.mapNotNull { s ->
+            val p = s.path
+            if (p.contains('/')) s.id to p.substringBeforeLast('/') else null
+        }.toMap()
+        folderRoot = commonDir(dirOf.values)
+        val albumDateAdded = avail.groupBy { it.albumKey }.mapValues { (_, ts) -> ts.maxOf { it.dateAddedSec } }
+        albums = avail.groupBy { it.albumKey }
+            .map { (aid, ts) ->
+                Album(
+                    id = aid,
+                    title = ts.first().album,
+                    artist = ts.map { it.artist }.distinct().let { if (it.size == 1) it.first() else "Various artists" },
+                    artworkUrl = ts.first().artworkUrl,
+                    year = ts.firstOrNull { it.year > 0 }?.year ?: 0,
+                    songCount = ts.size,
+                    durationSec = ts.sumOf { it.durationSec },
+                )
+            }
+            .sortedByDescending { albumDateAdded[it.id] ?: 0L }
+        artists = availSongs.groupBy { it.artistId }
+            .map { (aid, tracks) ->
+                Artist(
+                    id = aid,
+                    name = tracks.first().artist,
+                    imageUrl = tracks.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl ?: "",
+                    monthlyListeners = 0,
+                )
+            }
+            .sortedBy { it.name.lowercase() }
+        _albumMerges.value = dao.allMerges().associate { it.albumKey to parseMergeJson(it.rowsJson) }
+    }
+
+    private fun MsTrack.toSong(overlayGain: Boolean): Song {
+        val rg = if (overlayGain && dataPath.isNotBlank()) gainProvider(dataPath) else null
+        return Song(
+            id = mediaId,
+            title = title,
+            artist = artist,
+            album = album,
+            artworkUrl = artworkUrl,
+            durationSec = durationSec,
+            accent = accentFor(mediaId),
+            streamUrl = streamUrl,
+            albumId = albumKey,
+            artistId = artistId,
+            suffix = suffix,
+            bitrateKbps = bitrateKbps,
+            path = dataPath,
+            replayGainTrack = rg?.first ?: 0f,
+            replayGainAlbum = rg?.second ?: 0f,
+            genre = genre,
+            composer = composer,
+            discNumber = discNumber,
+            trackNumber = trackNumber,
+            dateAddedSec = dateAddedSec,
+            available = available,
+        )
+    }
+
+    /** 全量同步：查 MediaStore → 验封面 → 算合并 → 原子落盘 → 重建内存。 */
+    private suspend fun syncLocked() = withContext(Dispatchers.IO) {
+        val prevAvail = dao.allTracks().associate { it.mediaId to it.available }
         val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
         val cols = arrayListOf(
             MediaStore.Audio.Media._ID,
@@ -187,10 +297,10 @@ class LocalLibrary(
         val projection = cols.toTypedArray()
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
         val sort = "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC"
-        val out = ArrayList<Song>()
+        val rows = ArrayList<MsTrack>()
         val albumDateAdded = HashMap<String, Long>()
         val albumYear = HashMap<String, Int>()
-        val dirs = HashMap<String, String>()
+        val albumArts = HashMap<String, String>()
         runCatching {
             context.contentResolver.query(collection, projection, selection, null, sort)?.use { c ->
                 val idCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
@@ -228,8 +338,6 @@ class LocalLibrary(
                     val art = albumArtUri(albumId)
                     val uri = ContentUris.withAppendedId(collection, id).toString()
                     val data = if (dataCol >= 0) c.getString(dataCol).orEmpty() else ""
-                    if (data.contains('/')) dirs[id.toString()] = data.substringBeforeLast('/')
-                    val rg = if (data.isNotBlank()) gainProvider(data) else null
                     // 专辑键只看归一化标题：MediaStore 的 album_id 按艺人维度拆分，
                     // 同名专辑跨文件夹/跨艺人会被拆成多个 id，这里直接无视它
                     val sidAlbum = albumKey(albumName)
@@ -243,73 +351,62 @@ class LocalLibrary(
                     }
                     if (added > (albumDateAdded[sidAlbum] ?: 0L)) albumDateAdded[sidAlbum] = added
                     if (year > 0 && albumYear[sidAlbum] == null) albumYear[sidAlbum] = year
-                    out += Song(
-                        id = id.toString(),
+                    rows += MsTrack(
+                        mediaId = id.toString(),
                         title = title,
                         artist = artistName,
-                        album = albumName,
-                        artworkUrl = art,
-                        durationSec = durSec,
-                        accent = accentFor(id.toString()),
-                        streamUrl = uri,
-                        albumId = sidAlbum,
                         artistId = artistId.toString(),
+                        album = albumName,
+                        albumKey = sidAlbum,
+                        durationSec = durSec,
+                        year = year,
+                        dateAddedSec = added,
+                        displayName = display.orEmpty(),
+                        mime = mime.orEmpty(),
                         suffix = suffix,
                         bitrateKbps = bitrateKbps,
-                        path = data,
-                        replayGainTrack = rg?.first ?: 0f,
-                        replayGainAlbum = rg?.second ?: 0f,
                         genre = if (genreCol >= 0) c.getString(genreCol).orEmpty() else "",
                         composer = if (composerCol >= 0) c.getString(composerCol).orEmpty() else "",
                         discNumber = discNo,
                         trackNumber = trackNo,
-                        dateAddedSec = added,
+                        dataPath = data,
+                        streamUrl = uri,
+                        artworkUrl = art,
+                        // 跨同步保留已标 unavailable（后台检查的结果不被重同步洗掉）
+                        available = prevAvail[id.toString()] ?: true,
                     )
                 }
             }
         }
-        val scoped = scopeFilter?.let { f -> out.filter(f) } ?: out
-        val scopedIds = scoped.map { it.id }.toSet()
-        songs = scoped
-        byId = scoped.associateBy { it.id }
-        matchIndex = scoped.groupBy { TrackMatch.key(it.artist, it.title) }
-        dirOf = dirs.filterKeys { it in scopedIds }
-        folderRoot = commonDir(dirOf.values)
-        albums = scoped.groupBy { it.albumId }
-            .map { (aid, tracks) ->
-                val f = tracks.first()
-                // 封面：有图的曲子里随机一张，种子固定保证每次扫描结果一致；
-                // URI 非空不等于能解出来，逐个验链（IO 线程），第一张通的留下，
-                // 全不通就空着走默认图，不留注定失败的请求
-                val candidates = tracks.filter { it.artworkUrl.isNotBlank() }
-                    .shuffled(kotlin.random.Random(aid.hashCode()))
-                val cover = candidates.firstOrNull { probeArt(it.artworkUrl) }?.artworkUrl.orEmpty()
-                Album(
-                    id = aid,
-                    title = f.album,
-                    artist = tracks.map { it.artist }.distinct().let { if (it.size == 1) it.first() else "Various artists" },
-                    artworkUrl = cover,
-                    year = albumYear[aid] ?: 0,
-                    songCount = tracks.size,
-                    durationSec = tracks.sumOf { it.durationSec },
-                )
-            }
-            .sortedByDescending { albumDateAdded[it.id] ?: 0L }
-        artists = scoped.groupBy { it.artistId }
-            .map { (aid, tracks) ->
-                Artist(
-                    id = aid,
-                    name = tracks.first().artist,
-                    imageUrl = tracks.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl ?: "",
-                    monthlyListeners = 0,
-                )
-            }
-            .sortedBy { it.name.lowercase() }
-        // 标题合并表：同一份标准序上一次算好，UI 查表即可不再分词
-        _albumMerges.value = albums.associate { a ->
-            val ordered = songsByAlbumId(a.id).sortedWith(ALBUM_TRACK_ORDER)
-            a.id to mergeTracks(ordered.map { MergeInput(it.id, it.title) })
+        // 封面：有图的曲子里随机一张，种子固定保证每次结果一致；
+        // URI 非空不等于能解出来，逐个验链（IO 线程），第一张通的留下
+        val covers = rows.groupBy { it.albumKey }.mapValues { (aid, ts) ->
+            ts.filter { it.artworkUrl.isNotBlank() }
+                .shuffled(kotlin.random.Random(aid.hashCode()))
+                .firstOrNull { probeArt(it.artworkUrl) }?.artworkUrl.orEmpty()
         }
+        rows.replaceAll { it.copy(artworkUrl = covers[it.albumKey].orEmpty()) }
+        val albums = rows.groupBy { it.albumKey }.map { (aid, ts) ->
+            MsAlbum(
+                albumKey = aid,
+                title = ts.first().album,
+                artist = ts.map { it.artist }.distinct().let { if (it.size == 1) it.first() else "Various artists" },
+                artworkUrl = covers[aid].orEmpty(),
+                year = albumYear[aid] ?: 0,
+                songCount = ts.size,
+                durationSec = ts.sumOf { it.durationSec },
+                dateAddedSec = albumDateAdded[aid] ?: 0L,
+            )
+        }
+        // 标题合并表：同一份标准序上一次算好，UI 查表即可不再分词
+        val memSongs = rows.map { it.toSong(overlayGain = true) }
+        val merges = albums.map { a ->
+            val ordered = memSongs.filter { it.albumId == a.albumKey }.sortedWith(ALBUM_TRACK_ORDER)
+            MsMerge(a.albumKey, buildMergeJson(ordered))
+        }
+        dao.replaceAll(rows, albums, merges)
+        rebuildFromRows(rows)
+        _albumMerges.value = merges.associate { it.albumKey to parseMergeJson(it.rowsJson) }
     }
 
     private companion object {

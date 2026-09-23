@@ -44,6 +44,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.AlbumRow
+import com.aurora.music.data.LibrarySource
 import com.aurora.music.data.mapMergeRows
 import com.aurora.music.data.mergeEnabledFor
 import com.aurora.music.model.Album
@@ -288,12 +289,20 @@ fun Ios5Detail(
                 // 注意：LazyColumn 的 content 不是 @Composable 上下文，remember/状态读取
                 // 只能放在这里（普通 @Composable 函数体），下面只做纯发射。
                 val mergeContainer = (LocalContext.current.applicationContext as AuroraApplication).container
+                val source by mergeContainer.librarySource.collectAsStateWithLifecycle(initialValue = LibrarySource.MEDIastore)
                 val mergeRoots by mergeContainer.musicRoots.roots.collectAsStateWithLifecycle(initialValue = emptyList())
-                // 扫描预计算好的合并表，直接查，UI 不再分词
+                // 扫描预计算好的合并表，直接查，UI 不再分词；两栈各查各的表，永不串台
                 val libMerges by mergeContainer.localLibrary.albumMerges.collectAsStateWithLifecycle()
-                val mergeRows: List<AlbumRow> = remember(kind, id, d.tracks, libMerges, mergeRoots) {
-                    if (kind == "album" && mergeEnabledFor(mergeRoots, d.tracks)) mapMergeRows(libMerges[id], d.tracks)
-                    else d.tracks.mapIndexed { i, s -> AlbumRow.Single(s, i) }
+                val fileMerges by mergeContainer.musicRoots.fileMerges.collectAsStateWithLifecycle()
+                val mergeRows: List<AlbumRow> = remember(kind, id, d.tracks, libMerges, fileMerges, mergeRoots, source) {
+                    if (kind != "album") d.tracks.mapIndexed { i, s -> AlbumRow.Single(s, i) }
+                    else if (source == LibrarySource.FILE) {
+                        if (mergeEnabledFor(mergeRoots, d.tracks)) mapMergeRows(fileMerges[id], d.tracks)
+                        else d.tracks.mapIndexed { i, s -> AlbumRow.Single(s, i) }
+                    } else {
+                        // MEDIastore 栈：roots 属于文件栈，此处无范围概念，合并表恒生效
+                        mapMergeRows(libMerges[id], d.tracks)
+                    }
                 }
                 var mergeExpanded by remember(kind, id, d.tracks) { mutableStateOf(setOf<String>()) }
                 val mergeKey: (AlbumRow) -> String = { row ->

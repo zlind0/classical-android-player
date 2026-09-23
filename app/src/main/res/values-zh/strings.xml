@@ -151,6 +151,15 @@
     <string name="sources_need_full_sub">Android 11+ 浏览文件夹还需要所有文件访问权。</string>
     <string name="sources_grant_read">授予读取权限</string>
     <string name="sources_open_full">打开所有文件设置</string>
+    <string name="sources_source_title">曲库来源</string>
+    <string name="sources_source_file">本地文件扫描</string>
+    <string name="sources_source_file_sub">扫描你添加的文件夹，需要所有文件访问权；无 MediaStore 的设备用这个。</string>
+    <string name="sources_source_current_mediastore">当前：系统媒体库</string>
+    <string name="sources_source_current_file">当前：本地文件扫描</string>
+    <string name="sources_resync">重新同步系统曲库</string>
+    <string name="sources_resync_sub">把系统媒体库一次性读入本地数据库，之后启动只检查文件是否还在。</string>
+    <string name="sources_footnote_mediastore">曲库内容来自系统媒体库；需要手选文件夹请切换到本地文件扫描。</string>
+    <string name="msg_resync_finished">曲库已同步</string>
     <string name="msg_source_exists">这个文件夹已经是音乐来源了</string>
     <string name="msg_source_added">已添加——扫描中…</string>
     <string name="msg_found_n_tracks">找到 %1$d 首曲目</string>

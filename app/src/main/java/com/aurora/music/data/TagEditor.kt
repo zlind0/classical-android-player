@@ -61,6 +61,34 @@ class TagEditor(private val context: Context) {
             MediaStore.createWriteRequest(resolver, listOf(uri)).intentSender
         else null
 
+    // FILE 栈直写：jaudiotagger 直接改文件，不经 ContentResolver/MediaStore。
+    // 无 MediaStore 的老设备走这条；写完调用方刷新文件索引单行即可。
+    suspend fun writeFile(path: String, tags: AudioTags, artwork: ByteArray? = null): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val f = File(path)
+                if (!f.isFile || !f.canWrite()) return@withContext false
+                val af = AudioFileIO.read(f)
+                val tag = af.tagOrCreateAndSetDefault
+                tag.applyTags(tags)
+                if (artwork != null && artwork.isNotEmpty()) {
+                    runCatching {
+                        tag.deleteArtworkField()
+                        tag.setField(AndroidArtwork().apply {
+                            binaryData = artwork
+                            mimeType = "image/jpeg"
+                            pictureType = PictureTypes.DEFAULT_ID
+                        })
+                    }
+                }
+                af.commit()
+                true
+            } catch (t: Throwable) {
+                android.util.Log.e("TagEditor", "writeFile($path) failed", t)
+                false
+            }
+        }
+
     // jaudiotagger needs a real file so edit a cache copy then stream back through the resolver
     suspend fun write(uri: Uri, path: String, tags: AudioTags, artwork: ByteArray? = null): Boolean =
         withContext(Dispatchers.IO) {
@@ -102,6 +130,16 @@ class TagEditor(private val context: Context) {
         }
 
     private fun Tag.firstOrEmpty(key: FieldKey): String = runCatching { getFirst(key) ?: "" }.getOrDefault("")
+
+    private fun Tag.applyTags(tags: AudioTags) {
+        put(FieldKey.TITLE, tags.title)
+        put(FieldKey.ARTIST, tags.artist)
+        put(FieldKey.ALBUM, tags.album)
+        put(FieldKey.ALBUM_ARTIST, tags.albumArtist)
+        put(FieldKey.GENRE, tags.genre)
+        put(FieldKey.YEAR, tags.year)
+        put(FieldKey.TRACK, tags.trackNumber)
+    }
 
     // blank value deletes the field so clearing actually clears the tag
     private fun Tag.put(key: FieldKey, value: String) {

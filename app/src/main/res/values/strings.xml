@@ -154,6 +154,15 @@
     <string name="sources_need_full_sub">Android 11+ also requires All-files access for folder browsing.</string>
     <string name="sources_grant_read">Grant read access</string>
     <string name="sources_open_full">Open all-files settings</string>
+    <string name="sources_source_title">Library source</string>
+    <string name="sources_source_file">Local file scan</string>
+    <string name="sources_source_file_sub">Scan folders you add. Needs All-files access — use this on devices without MediaStore.</string>
+    <string name="sources_source_current_mediastore">Current: system media library</string>
+    <string name="sources_source_current_file">Current: local file scan</string>
+    <string name="sources_resync">Resync system library</string>
+    <string name="sources_resync_sub">Read the system media library into the local database once. Startup only checks files still exist.</string>
+    <string name="sources_footnote_mediastore">Library content comes from the system media library. Switch to local file scan for hand-picked folders.</string>
+    <string name="msg_resync_finished">Library resynced</string>
     <string name="msg_source_exists">That folder is already a music source</string>
     <string name="msg_source_added">Added — scanning…</string>
     <string name="msg_found_n_tracks">Found %1$d tracks</string>

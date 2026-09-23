@@ -41,7 +41,8 @@ class TagEditViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val song = container.repository.songFor(songId)
             val path = song?.path.orEmpty()
-            val localFile = song?.streamUrl?.startsWith("content://") == true
+            // 双栈通用：文件真实存在即本地文件（不再看 streamUrl scheme，两栈 scheme 不同）
+            val localFile = path.isNotBlank() && java.io.File(path).isFile
             // server item reads full current metadata so unsurfaced fields aren't wiped on save
             val sourceTags = if (localFile) {
                 if (path.isNotBlank()) container.tagEditor.read(path) else null

@@ -16,7 +16,7 @@ import kotlin.math.tan
 
 // gains can't be written to files so cache by path and overlay onto songs at library build
 class ReplayGainScanner(
-    private val library: LocalLibrary,
+    private val pool: SongPool,
     private val store: ReplayGainStore,
 ) {
     data class Progress(val running: Boolean = false, val done: Int = 0, val total: Int = 0, val current: String = "")
@@ -39,8 +39,8 @@ class ReplayGainScanner(
     fun scan(onComplete: () -> Unit = {}) {
         if (job?.isActive == true) return
         job = scope.launch {
-            library.ensureLoaded()
-            val tracks = library.songs.filter { it.path.isNotBlank() }
+            pool.ensureLoaded()
+            val tracks = pool.songs.filter { it.path.isNotBlank() }
             _progress.value = Progress(running = true, done = 0, total = tracks.size)
 
             val albumBlocks = HashMap<String, MutableList<Double>>()
@@ -86,7 +86,7 @@ class ReplayGainScanner(
                 store.putAll(entries)
                 _progress.value = Progress(running = false, done = entries.size, total = tracks.size)
             }
-            runCatching { library.refresh() }
+            runCatching { pool.refresh() }
             onComplete()
         }
     }

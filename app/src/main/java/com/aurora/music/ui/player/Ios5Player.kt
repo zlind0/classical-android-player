@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import com.aurora.music.AuroraApplication
+import com.aurora.music.data.LibrarySource
 import com.aurora.music.data.lookupMergedTitle
 import com.aurora.music.data.mergeEnabledFor
 import com.aurora.music.ui.components.TrackArtwork
@@ -171,14 +172,23 @@ fun Ios5PlayerPage(
     val remaining = (state.durationSec - state.positionSec.toInt()).coerceAtLeast(0)
     val posLabel = "${state.currentIndex + 1} of ${state.queue.size.coerceAtLeast(1)}"
 
-    // 合并标题：扫描预计算表 + 内存曲目表同步查出，无 IO、无协程、无分词
+    // 合并标题：扫描预计算表 + 内存曲目表同步查出，无 IO、无协程、无分词；
+    // 两栈各查各的表（MEDIastore 查 localLibrary，FILE 查 musicRoots），永不串台
     val container = (context.applicationContext as AuroraApplication).container
+    val source by container.librarySource.collectAsStateWithLifecycle(initialValue = LibrarySource.MEDIastore)
     val roots by container.musicRoots.roots.collectAsStateWithLifecycle(initialValue = emptyList())
     val libMerges by container.localLibrary.albumMerges.collectAsStateWithLifecycle()
-    val merged = remember(song.id, song.albumId, libMerges, roots) {
-        val tracks = container.localLibrary.albumTracksSorted(song.albumId)
-        if (tracks.isEmpty() || !mergeEnabledFor(roots, tracks)) null
-        else lookupMergedTitle(libMerges[song.albumId], tracks, song.id)
+    val fileMerges by container.musicRoots.fileMerges.collectAsStateWithLifecycle()
+    val merged = remember(song.id, song.albumId, libMerges, fileMerges, roots, source) {
+        if (source == LibrarySource.FILE) {
+            val tracks = container.musicRoots.albumTracksSorted(song.albumId)
+            if (tracks.isEmpty() || !mergeEnabledFor(roots, tracks)) null
+            else lookupMergedTitle(fileMerges[song.albumId], tracks, song.id)
+        } else {
+            val tracks = container.localLibrary.albumTracksSorted(song.albumId)
+            if (tracks.isEmpty()) null
+            else lookupMergedTitle(libMerges[song.albumId], tracks, song.id)
+        }
     }
 
     BoxWithConstraints(

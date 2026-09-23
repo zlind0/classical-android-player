@@ -31,6 +31,8 @@ data class Song(
     // real audio codec mime sniffed at scan time (e.g. audio/alac vs audio/mp4a-latm);
     // disambiguates containers like m4a that can hold lossy or lossless audio
     val codecMime: String = "",
+    // false = 文件已不在磁盘上：各列表沉底灰色不可点，播放队列自动过滤
+    val available: Boolean = true,
 )
 
 data class Album(

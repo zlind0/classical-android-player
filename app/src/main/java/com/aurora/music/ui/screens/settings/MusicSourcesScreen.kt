@@ -40,6 +40,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.R
+import com.aurora.music.data.LibrarySource
 import com.aurora.music.data.MusicRoot
 import com.aurora.music.data.ScanProgress
 import com.aurora.music.ui.ios5.Ios5CellDivider
@@ -68,6 +69,8 @@ fun MusicSourcesScreen(
     confirm: (String) -> Unit,
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
+    val source by container.librarySource.collectAsStateWithLifecycle(initialValue = LibrarySource.MEDIastore)
+    val isFile = source == LibrarySource.FILE
     val roots by container.musicRoots.roots.collectAsStateWithLifecycle()
     val counts by container.musicRoots.trackCounts.collectAsStateWithLifecycle()
     val progress by container.musicRoots.progress.collectAsStateWithLifecycle()
@@ -117,6 +120,16 @@ fun MusicSourcesScreen(
     }
 
     val strTitle = stringResource(R.string.sources_title)
+    val strSourceTitle = stringResource(R.string.sources_source_title)
+    val strSourceFile = stringResource(R.string.sources_source_file)
+    val strSourceFileSub = stringResource(R.string.sources_source_file_sub)
+    val strSourceCurrent = stringResource(
+        if (isFile) R.string.sources_source_current_file else R.string.sources_source_current_mediastore
+    )
+    val strResync = stringResource(R.string.sources_resync)
+    val strResyncSub = stringResource(R.string.sources_resync_sub)
+    val strFootnoteMs = stringResource(R.string.sources_footnote_mediastore)
+    val strResyncDone = stringResource(R.string.msg_resync_finished)
     val strNeedReadTitle = stringResource(R.string.sources_need_read_title)
     val strNeedReadSub = stringResource(R.string.sources_need_read_sub)
     val strNeedFullTitle = stringResource(R.string.sources_need_full_title)
@@ -135,8 +148,25 @@ fun MusicSourcesScreen(
     val bottomPad = contentPadding.calculateBottomPadding()
 
     Ios5SettingsPage(title = strTitle, onBack = onBack) {
+        // 曲库来源总开关：两栈二选一，默认系统媒体库
+        ios5Section(strSourceTitle) {
+            Ios5SwitchRow(
+                title = strSourceFile,
+                subtitle = strSourceFileSub,
+                checked = isFile,
+                onCheckedChange = { v ->
+                    scope.launch {
+                        container.setLibrarySource(if (v) LibrarySource.FILE else LibrarySource.MEDIastore)
+                    }
+                },
+            )
+            Ios5CellDivider()
+            Ios5StaticText(strSourceCurrent)
+        }
         // plan §64: permission first — without it the picker lists nothing and scans find nothing
-        if (!fullOk) {
+        // FILE 栈要所有文件访问；MEDIastore 栈只要音频读取权限
+        val needPerm = if (isFile) !fullOk else !readOk
+        if (needPerm) {
             ios5Section(permTitle) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
                     Ios5StaticText(permSub)
@@ -157,7 +187,7 @@ fun MusicSourcesScreen(
             ios5Section(strScanRoots) {
                 Ios5StaticText(strEmptyHint)
             }
-        } else {
+        } else if (isFile) {
             roots.forEach { root ->
                 val count = counts[root.id] ?: 0
                 val active = progress.running && progress.rootId == root.id
@@ -193,10 +223,26 @@ fun MusicSourcesScreen(
                 }
             }
         }
-        ios5Section(strAdd) {
-            Ios5NavRow(title = strAdd, subtitle = strAddSub, onClick = { picking = true })
+        if (isFile) {
+            ios5Section(strAdd) {
+                Ios5NavRow(title = strAdd, subtitle = strAddSub, onClick = { picking = true })
+            }
+            ios5FootNote(strFootnote)
+        } else {
+            // MEDIastore 栈：文件目录/扫描/清理与它无关，只保留一次全量同步入口
+            ios5Section(strResync) {
+                Ios5StaticText(strResyncSub)
+                Ios5CellDivider()
+                Ios5NavRow(title = strResync, subtitle = "", onClick = {
+                    scanJob?.cancel()
+                    scanJob = scope.launch {
+                        container.localLibrary.refresh()
+                        confirm(strResyncDone)
+                    }
+                })
+            }
+            ios5FootNote(strFootnoteMs)
         }
-        ios5FootNote(strFootnote)
         item { Spacer(Modifier.height(bottomPad)) }
     }
 }

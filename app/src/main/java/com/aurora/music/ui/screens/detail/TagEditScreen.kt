@@ -33,9 +33,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.R
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.AudioTags
+import com.aurora.music.data.LibrarySource
 import com.aurora.music.data.remote.MetadataMatch
 import com.aurora.music.ui.components.Artwork
 import com.aurora.music.ui.ios5.Ios5CellDivider
@@ -66,6 +68,7 @@ fun TagEditScreen(
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val scope = rememberCoroutineScope()
     var saving by remember { mutableStateOf(false) }
+    val source by container.librarySource.collectAsStateWithLifecycle(initialValue = LibrarySource.MEDIastore)
     // hoisted: stringResource() is @Composable and can't be called inside the plain lambdas below
     val msgNoWrite = stringResource(R.string.tags_no_write)
     val msgSaved = stringResource(R.string.tags_saved)
@@ -76,16 +79,37 @@ fun TagEditScreen(
 
     val doWrite: () -> Unit = {
         scope.launch {
-            val uri = container.tagEditor.contentUriFor(state.songId)
-            if (uri == null) { confirm(msgNoWrite); saving = false } else {
+            if (source == LibrarySource.FILE) {
+                // FILE 栈：jaudiotagger 直写文件，无 MediaStore 授权；写完单行刷新索引
                 val art = if (state.pickedCoverUrl.isNotBlank()) container.musicBrainz.fetchImage(state.pickedCoverUrl) else null
-                val ok = container.tagEditor.write(uri, state.path, state.tags, art)
+                val ok = container.tagEditor.writeFile(state.path, state.tags, art)
                 saving = false
                 if (ok) {
+                    val f = java.io.File(state.path)
+                    val cur = container.musicRoots.allRows().firstOrNull { it.path == state.path }
+                    if (cur != null) {
+                        container.musicRoots.updateTrackMeta(
+                            cur.copy(
+                                size = f.length(), lastModified = f.lastModified(),
+                                title = state.tags.title, artist = state.tags.artist, album = state.tags.album,
+                            )
+                        )
+                    }
                     confirm(msgSaved)
-                    runCatching { container.localLibrary.refresh() }
                     onBack()
                 } else confirm(msgSaveFailed)
+            } else {
+                val uri = container.tagEditor.contentUriFor(state.songId)
+                if (uri == null) { confirm(msgNoWrite); saving = false } else {
+                    val art = if (state.pickedCoverUrl.isNotBlank()) container.musicBrainz.fetchImage(state.pickedCoverUrl) else null
+                    val ok = container.tagEditor.write(uri, state.path, state.tags, art)
+                    saving = false
+                    if (ok) {
+                        confirm(msgSaved)
+                        runCatching { container.localLibrary.refresh() }
+                        onBack()
+                    } else confirm(msgSaveFailed)
+                }
             }
         }
     }
@@ -101,7 +125,11 @@ fun TagEditScreen(
                 saving = false
                 if (ok) { confirm(msgUpdated); onBack() } else confirm(msgUpdateFailed)
             }
+        } else if (source == LibrarySource.FILE) {
+            // FILE 栈直写无需系统授权
+            doWrite()
         } else {
+            // MEDIastore 栈走 Android 11+ 写授权
             val uri = container.tagEditor.contentUriFor(state.songId)
             if (uri == null) { confirm(msgNoWrite); saving = false } else {
                 val consent = container.tagEditor.writeConsentIntent(uri)

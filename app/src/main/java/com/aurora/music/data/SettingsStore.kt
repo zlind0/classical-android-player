@@ -24,6 +24,13 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 // ServerType stays as a single-value type so persisted Session JSON keeps parsing.
 enum class ServerType { LOCAL }
 
+// 曲库来源：MEDIastore（系统媒体库）或 FILE（用户手选目录 + 文件直扫）。
+// 默认 MEDIastore，老用户升级行为不变；无 MediaStore 的老设备切 FILE。
+enum class LibrarySource { MEDIastore, FILE }
+
+fun librarySourceOf(raw: String?): LibrarySource =
+    if (raw == LibrarySource.FILE.name) LibrarySource.FILE else LibrarySource.MEDIastore
+
 // Local session stamped on the on-device library; server auth fields are unused.
 data class Session(
     val server: String,
@@ -311,6 +318,7 @@ class SettingsStore(private val context: Context) {
         val SONIC_AUTO_ANALYZE = booleanPreferencesKey("sonic_auto_analyze")
         val AUTOPLAY_RADIO = booleanPreferencesKey("autoplay_radio")
         val LRCLIB = booleanPreferencesKey("lrclib_enabled")
+        val LIBRARY_SOURCE = stringPreferencesKey("library_source")
         val GESTURE_SWIPE_ART = booleanPreferencesKey("gesture_swipe_art")
         val GESTURE_SWIPE_DISMISS = booleanPreferencesKey("gesture_swipe_dismiss")
         val GESTURE_DOUBLE_TAP = booleanPreferencesKey("gesture_double_tap")
@@ -465,6 +473,11 @@ class SettingsStore(private val context: Context) {
     }
 
     val lrclibEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.LRCLIB] ?: true }
+
+    val librarySource: Flow<LibrarySource> =
+        context.dataStore.data.map { librarySourceOf(it[Keys.LIBRARY_SOURCE]) }.distinctUntilChanged()
+
+    suspend fun setLibrarySource(v: LibrarySource) = context.dataStore.edit { it[Keys.LIBRARY_SOURCE] = v.name }
 
     val gesturePrefs: Flow<GesturePrefs> = context.dataStore.data.map { p ->
         GesturePrefs(
