@@ -28,6 +28,9 @@ data class ScannedTrack(
     val available: Boolean = true,
     // audio codec mime sniffed via MediaExtractor (audio/alac vs audio/mp4a-latm)
     val codec: String = "",
+    // 文件自带内嵌图（扫描时已提取进 track_art 缓存）；专辑封面优先从有内嵌图的歌里抽。
+    // null = 未知（老数据），下次深扫强制重读一次，之后保持 true/false 不再重读
+    val hasEmbedded: Boolean? = null,
 )
 
 data class ScanProgress(

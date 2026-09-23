@@ -61,16 +61,22 @@ object TrackArtworkCache {
         return File(dir, safeName(songId) + ".jpg")
     }
 
-    private fun safeName(id: String): String = runCatching {
-        val md = MessageDigest.getInstance("MD5")
-        val d = md.digest(id.toByteArray())
-        d.joinToString("") { "%02x".format(it) }
-    }.getOrDefault(id.hashCode().toUInt().toString(16))
+    /** 内嵌图缓存 URI（不预检存在，供专辑封面等展示层直接用；缺失由 Artwork 默认图兜底）。 */
+    fun embeddedCacheUri(context: Context, songId: String): String =
+        runCatching { android.net.Uri.fromFile(cacheFile(context, songId)).toString() }.getOrDefault("")
 
-    private fun extractEmbedded(context: Context, song: Song, out: File): Boolean {
-        val bytes = readEmbeddedBytes(context, song) ?: return false
-        if (bytes.isEmpty()) return false
-        return runCatching {
+    /**
+     * 存内嵌图字节进缓存（扫描时调用，已知 bytes 非空）。
+     * 返回 true = 有效图片已落盘。IO 线程调用。
+     */
+    fun saveEmbedded(context: Context, songId: String, bytes: ByteArray): Boolean {
+        if (songId.isBlank() || bytes.isEmpty()) return false
+        val out = cacheFile(context, songId)
+        if (out.isFile && out.length() > 0) {
+            mem[songId] = Uri.fromFile(out).toString()
+            return true
+        }
+        val ok = runCatching {
             out.parentFile?.mkdirs()
             val tmp = File(out.parent, out.name + ".tmp")
             tmp.writeBytes(bytes)
@@ -87,6 +93,20 @@ object TrackArtworkCache {
                 out.isFile && out.length() > 0
             }
         }.getOrDefault(false)
+        if (ok) mem[songId] = Uri.fromFile(out).toString()
+        return ok
+    }
+
+    private fun safeName(id: String): String = runCatching {
+        val md = MessageDigest.getInstance("MD5")
+        val d = md.digest(id.toByteArray())
+        d.joinToString("") { "%02x".format(it) }
+    }.getOrDefault(id.hashCode().toUInt().toString(16))
+
+    private fun extractEmbedded(context: Context, song: Song, out: File): Boolean {
+        val bytes = readEmbeddedBytes(context, song) ?: return false
+        if (bytes.isEmpty()) return false
+        return saveEmbedded(context, song.id, bytes)
     }
 
     private fun readEmbeddedBytes(context: Context, song: Song): ByteArray? {

@@ -66,6 +66,7 @@ fun TagEditScreen(
     confirm: (String) -> Unit,
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
+    val appContext = LocalContext.current
     val scope = rememberCoroutineScope()
     var saving by remember { mutableStateOf(false) }
     val source by container.librarySource.collectAsStateWithLifecycle(initialValue = LibrarySource.MEDIastore)
@@ -88,10 +89,19 @@ fun TagEditScreen(
                     val f = java.io.File(state.path)
                     val cur = container.musicRoots.allRows().firstOrNull { it.path == state.path }
                     if (cur != null) {
+                        // 新贴的封面已写进文件标签，同步进内嵌图缓存并标 hasEmbedded，专辑封面候选即时生效
+                        val embeddedNow = if (art != null && art.isNotEmpty()) {
+                            runCatching {
+                                com.aurora.music.data.TrackArtworkCache.saveEmbedded(
+                                    appContext, state.songId, art,
+                                )
+                            }.getOrDefault(false)
+                        } else cur.hasEmbedded
                         container.musicRoots.updateTrackMeta(
                             cur.copy(
                                 size = f.length(), lastModified = f.lastModified(),
                                 title = state.tags.title, artist = state.tags.artist, album = state.tags.album,
+                                hasEmbedded = embeddedNow,
                             )
                         )
                     }

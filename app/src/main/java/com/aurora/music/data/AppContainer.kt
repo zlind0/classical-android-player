@@ -11,6 +11,7 @@ import android.net.NetworkCapabilities
 import androidx.room.Room
 import com.aurora.music.data.db.FilesDb
 import com.aurora.music.data.db.FilesMigration1_2
+import com.aurora.music.data.db.FilesMigration2_3
 import com.aurora.music.data.db.MediastoreDb
 import com.aurora.music.data.db.MsMigration1_2
 import com.aurora.music.model.Song
@@ -55,7 +56,7 @@ class AppContainer(context: Context) {
 
     // 两套独立 SQLite 库，一源一库，物理隔离、永不串台
     private val filesDb: FilesDb = Room.databaseBuilder(appContext, FilesDb::class.java, "library_files.db")
-        .addMigrations(FilesMigration1_2).build()
+        .addMigrations(FilesMigration1_2, FilesMigration2_3).build()
     private val mediastoreDb: MediastoreDb = Room.databaseBuilder(appContext, MediastoreDb::class.java, "library_mediastore.db")
         .addMigrations(MsMigration1_2).build()
 
@@ -69,7 +70,7 @@ class AppContainer(context: Context) {
     // FILE 栈专属：roots 定义 + library_files.db 的内存映射，全程不碰 MediaStore。
     val volumeManager = StorageVolumeManager(appContext)
     val musicRoots = MusicRootsStore(appContext, filesDb.filesDao())
-    val rootScanner = RootScanner(musicRoots)
+    val rootScanner = RootScanner(musicRoots, appContext)
 
     // 曲库来源开关（默认 MEDIastore）。两个栈各自独立，切换 = 换 backend + 按源加载。
     private val _librarySource = MutableStateFlow(LibrarySource.MEDIastore)

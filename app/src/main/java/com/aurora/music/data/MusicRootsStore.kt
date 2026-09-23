@@ -142,7 +142,7 @@ class MusicRootsStore(
             filesDao.replaceRootScan(
                 root.id,
                 rows.map { it.toRow(root.id) },
-                albumsOf(root.id, rows),
+                albumsOf(root.id, rows, albumCovers(rows)),
             )
         }
         _roots.value.forEach { runCatching { indexFile(it.id).delete() } }
@@ -158,7 +158,7 @@ class MusicRootsStore(
     suspend fun writeScanResult(
         rootId: Long,
         tracks: List<ScannedTrack>,
-        albums: List<FileAlbum> = albumsOf(rootId, tracks),
+        albums: List<FileAlbum> = albumsOf(rootId, tracks, albumCovers(tracks)),
     ) {
         filesDao.replaceRootScan(rootId, tracks.map { it.toRow(rootId) }, albums)
         _trackRows.value = _trackRows.value + (rootId to tracks)
@@ -217,8 +217,11 @@ class MusicRootsStore(
     fun allRows(): List<ScannedTrack> = _trackRows.value.values.flatten()
 
     fun songsOf(rootId: Long): List<Song> {
-        val (av, un) = readIndex(rootId).partition { it.available }
-        return (av + un).map { it.toSong() }
+        val rows = readIndex(rootId)
+        if (rows.isEmpty()) return emptyList()
+        val covers = albumCovers(rows)
+        val (av, un) = rows.partition { it.available }
+        return (av + un).map { r -> r.toSong().copy(artworkUrl = resolveArtwork(r, covers)) }
     }
 
     /** 专辑曲目标准序（路径序），与 merge 预计算同一份顺序，序号对齐。O(1) 缓存过滤。 */
@@ -229,8 +232,9 @@ class MusicRootsStore(
     private fun rebuildCache() {
         val enabled = _roots.value.filter { it.enabled }.map { it.id }.toSet()
         val rows = _trackRows.value.filterKeys { it in enabled }.values.flatten()
+        val covers = albumCovers(rows)
         val (av, un) = rows.partition { it.available }
-        cachedSongs = (av + un).map { it.toSong() }
+        cachedSongs = (av + un).map { r -> r.toSong().copy(artworkUrl = resolveArtwork(r, covers)) }
         val availSongs = cachedSongs.filter { it.available }
         cachedAlbums = availSongs.groupBy { it.albumId }
             .map { (aid, ts) ->
@@ -240,7 +244,7 @@ class MusicRootsStore(
                     id = aid,
                     title = title.ifBlank { "Unknown album" },
                     artist = ts.map { it.artist }.distinct().let { if (it.size == 1) it.first() else "Various artists" },
-                    artworkUrl = ts.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl.orEmpty(),
+                    artworkUrl = covers[aid].orEmpty(),
                     year = 0,
                     songCount = ts.size,
                     durationSec = ts.sumOf { it.durationSec },
@@ -257,6 +261,54 @@ class MusicRootsStore(
                 )
             }
             .sortedBy { it.name.lowercase() }
+    }
+
+    /**
+     * 专辑封面：从该专辑有内嵌图的歌里随机抽一首（种子固定，结果稳定）；
+     * 都没有内嵌图则用专辑目录下随机一张 jpg；再没有就是空（UI 默认图兜底）。
+     * 目录只用于找图，不参与分类。
+     */
+    private fun albumCovers(rows: List<ScannedTrack>): Map<String, String> =
+        rows.groupBy { fileAlbumKey(it.album, "file:${it.path}") }.mapValues { (aid, rs) ->
+            val ordered = rs.sortedBy { it.path.lowercase() }
+            val withArt = ordered.filter { it.hasEmbedded == true }
+            if (withArt.isNotEmpty()) {
+                val pick = withArt[kotlin.math.abs(aid.hashCode()) % withArt.size]
+                TrackArtworkCache.embeddedCacheUri(context, "file:${pick.path}")
+            } else {
+                // 专辑可能跨文件夹：取曲目最多的那个目录为“专辑目录”
+                val dir = ordered.groupingBy { it.path.substringBeforeLast('/') }
+                    .eachCount().maxByOrNull { it.value }?.key.orEmpty()
+                randomDirJpg(dir, aid)
+            }
+        }
+
+    /**
+     * 单曲 artwork 解析：自带内嵌图（扫描时已进缓存）就用自己的；
+     * 没有则 fallback 到专辑封面；专辑也没有则保留行内目录封面/空（UI 默认图兜底）。
+     * 展示层直读缓存 URI，不预检存在。
+     */
+    private fun resolveArtwork(row: ScannedTrack, covers: Map<String, String>): String {
+    val id = "file:${row.path}"
+    if (row.hasEmbedded == true) return TrackArtworkCache.embeddedCacheUri(context, id)
+        val albumArt = covers[fileAlbumKey(row.album, id)]
+        if (!albumArt.isNullOrBlank()) return albumArt
+        return row.artworkUrl
+    }
+
+    /** 目录下随机一张 jpg（种子固定，结果稳定）。 */
+    private fun randomDirJpg(dirPath: String, seedKey: String): String {
+        if (dirPath.isBlank()) return ""
+        val jpgs = runCatching {
+            File(dirPath).listFiles { f ->
+                val name = f.name.lowercase()
+                runCatching { f.isFile && f.canRead() }.getOrDefault(false) &&
+                    (name.endsWith(".jpg") || name.endsWith(".jpeg"))
+            }?.toList().orEmpty()
+        }.getOrDefault(emptyList())
+        if (jpgs.isEmpty()) return ""
+        val pick = jpgs.sortedBy { it.name.lowercase() }[kotlin.math.abs(seedKey.hashCode()) % jpgs.size]
+        return runCatching { android.net.Uri.fromFile(pick).toString() }.getOrDefault("")
     }
 
     /**
@@ -345,7 +397,11 @@ fun fileArtistKey(artist: String, songId: String): String {
     return if (t.isEmpty()) "unknown-artist::$songId" else t
 }
 
-private fun albumsOf(rootId: Long, tracks: List<ScannedTrack>): List<FileAlbum> =
+private fun albumsOf(
+    rootId: Long,
+    tracks: List<ScannedTrack>,
+    covers: Map<String, String>,
+): List<FileAlbum> =
     fileTracksSorted(tracks).groupBy { fileAlbumKey(it.album, "file:${it.path}") }.map { (aid, rows) ->
         val first = rows.first()
         FileAlbum(
@@ -353,7 +409,7 @@ private fun albumsOf(rootId: Long, tracks: List<ScannedTrack>): List<FileAlbum> 
             albumId = aid,
             title = first.album.ifBlank { "Unknown album" },
             artist = rows.map { it.artist }.distinct().let { if (it.size == 1) it.first() else "Various artists" },
-            artworkUrl = rows.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl.orEmpty(),
+            artworkUrl = covers[aid].orEmpty(),
             songCount = rows.size,
             durationSec = rows.sumOf { it.durationSec },
         )
@@ -363,12 +419,14 @@ private fun ScannedTrack.toRow(rootId: Long) = FileTrack(
     path = path, rootId = rootId, size = size, lastModified = lastModified,
     title = title, artist = artist, album = album, durationSec = durationSec,
     artworkUrl = artworkUrl, codec = codec, available = available,
+    hasEmbedded = hasEmbedded,
 )
 
 private fun FileTrack.toScanned() = ScannedTrack(
     path = path, size = size, lastModified = lastModified,
     title = title, artist = artist, album = album, durationSec = durationSec,
     artworkUrl = artworkUrl, available = available, codec = codec,
+    hasEmbedded = hasEmbedded,
 )
 
 fun ScannedTrack.toSong(): Song {

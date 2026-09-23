@@ -1,5 +1,6 @@
 package com.aurora.music.data
 
+import android.content.Context
 import android.media.MediaMetadataRetriever
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +21,7 @@ import java.util.concurrent.atomic.AtomicInteger
 // plan §84): it falls back to the filename and the scan moves on.
 class RootScanner(
     private val store: MusicRootsStore,
+    private val context: Context,
 ) {
     // Cancellation is cooperative via the caller's coroutine scope.
     suspend fun scan(root: MusicRoot, onProgress: (ScanProgress) -> Unit = {}) =
@@ -85,18 +87,24 @@ class RootScanner(
                             val size = runCatching { f.length() }.getOrDefault(-1L)
                             val mtime = runCatching { f.lastModified() }.getOrDefault(0L)
                             val old = previous[path]
-                            if (old != null && old.size == size && old.lastModified == mtime && old.available) {
+                            // hasEmbedded 未知（老数据迁移而来）也强制重读一次，补上内嵌图标记
+                            if (old != null && old.hasEmbedded != null && old.size == size && old.lastModified == mtime && old.available) {
                                 out.add(old)
                             } else {
-                                // 单文件超时即放弃（走文件名兜底），坏文件不阻塞整库
+                                // 单文件超时即放弃（走文件名兜底），坏文件不阻塞整库。
+                                // 同一次 MMR 会话里顺手把内嵌图存进 track_art 缓存，供单曲/专辑封面用。
                                 val meta = withTimeoutOrNull(META_TIMEOUT_MS) { readMetadata(f) } ?: fallback(f)
                                 val codec = withTimeoutOrNull(CODEC_TIMEOUT_MS) { sniffCodec(f) }.orEmpty()
+                                val songId = "file:$path"
+                                val hasArt = meta.art?.takeIf { it.isNotEmpty() }?.let { bytes ->
+                                    runCatching { TrackArtworkCache.saveEmbedded(context, songId, bytes) }.getOrDefault(false)
+                                } == true
                                 out.add(
                                     ScannedTrack(
                                         path = path, size = size, lastModified = mtime,
                                         title = meta.title, artist = meta.artist, album = meta.album,
                                         durationSec = meta.durationSec, artworkUrl = folderCover(f),
-                                        codec = codec,
+                                        codec = codec, hasEmbedded = hasArt,
                                     )
                                 )
                                 if (old == null) added.incrementAndGet() else updated.incrementAndGet()
@@ -137,7 +145,10 @@ class RootScanner(
         const val CODEC_TIMEOUT_MS = 10_000L
     }
 
-    private data class Meta(val title: String, val artist: String, val album: String, val durationSec: Int)
+    private data class Meta(
+        val title: String, val artist: String, val album: String, val durationSec: Int,
+        val art: ByteArray? = null,
+    )
 
     private fun readMetadata(f: File): Meta {
         val mmr = MediaMetadataRetriever()
@@ -147,12 +158,15 @@ class RootScanner(
             val durMs = runCatching {
                 mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
             }.getOrDefault(0L)
+            // 内嵌图同一会话里一起取（大图几 MB，超时保护在外层）；存缓存由调用方做
+            val art = runCatching { mmr.embeddedPicture }.getOrNull()?.takeIf { it.isNotEmpty() }
             Meta(
                 title = s(MediaMetadataRetriever.METADATA_KEY_TITLE),
                 artist = s(MediaMetadataRetriever.METADATA_KEY_ARTIST)
                     .ifBlank { s(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST) },
                 album = s(MediaMetadataRetriever.METADATA_KEY_ALBUM),
                 durationSec = (durMs / 1000).toInt().coerceAtLeast(0),
+                art = art,
             )
         } catch (e: Exception) {
             fallback(f)

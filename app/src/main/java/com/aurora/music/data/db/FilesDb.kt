@@ -33,6 +33,9 @@ data class FileTrack(
     val artworkUrl: String = "",
     val codec: String = "",
     val available: Boolean = true,
+    // 自带内嵌图（扫描时已提取进 track_art 缓存）；专辑封面优先从这类歌里抽。
+    // NULL = 未知（老数据），深扫时强制重读一次
+    val hasEmbedded: Boolean? = null,
 )
 
 @Entity(
@@ -151,7 +154,14 @@ val FilesMigration1_2 = object : Migration(1, 2) {
     }
 }
 
-@Database(entities = [FileTrack::class, FileAlbum::class, FileMerge::class], version = 2, exportSchema = false)
+val FilesMigration2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // 可空列：老数据为 NULL=未知，深扫时强制重读一次补上
+        db.execSQL("ALTER TABLE `tracks` ADD COLUMN `hasEmbedded` INTEGER")
+    }
+}
+
+@Database(entities = [FileTrack::class, FileAlbum::class, FileMerge::class], version = 3, exportSchema = false)
 abstract class FilesDb : RoomDatabase() {
     abstract fun filesDao(): FilesDao
 }
