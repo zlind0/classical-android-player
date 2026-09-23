@@ -15,33 +15,12 @@ class FileBackend(
     override val session: Session,
 ) : MediaBackend {
 
+    // 全部来自 MusicRootsStore 内存缓存（DB 变化时重建），每次调用不再全量 groupBy
     private fun songs(): List<Song> = roots.allSongs()
 
-    private fun albums(): List<Album> = songs().groupBy { it.albumId }
-        .map { (aid, ts) ->
-            val dirName = ts.first().path.substringBeforeLast('/').substringAfterLast('/')
-            Album(
-                id = aid,
-                title = ts.first().album.ifBlank { dirName },
-                artist = ts.map { it.artist }.distinct().let { if (it.size == 1) it.first() else "Various artists" },
-                artworkUrl = ts.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl.orEmpty(),
-                year = 0,
-                songCount = ts.size,
-                durationSec = ts.sumOf { it.durationSec },
-            )
-        }
-        .sortedBy { it.title.lowercase() }
+    private fun albums(): List<Album> = roots.fileAlbums()
 
-    private fun artists(): List<Artist> = songs().groupBy { it.artistId }
-        .map { (aid, ts) ->
-            Artist(
-                id = aid,
-                name = ts.first().artist.ifBlank { "Unknown artist" },
-                imageUrl = ts.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl.orEmpty(),
-                monthlyListeners = 0,
-            )
-        }
-        .sortedBy { it.name.lowercase() }
+    private fun artists(): List<Artist> = roots.fileArtists()
 
     private fun LocalPlaylist.toPlaylist(): Playlist {
         val byId = songs().associateBy { it.id }
@@ -125,7 +104,8 @@ class FileBackend(
             "artist" -> {
                 val artist = artists().firstOrNull { it.id == id } ?: return null
                 val tracks = songs().filter { it.artistId == id }
-                val albs = albums().filter { a -> tracks.any { it.albumId == a.id } }
+                val aids = tracks.map { it.albumId }.toSet()
+                val albs = albums().filter { it.id in aids }
                 DetailData(
                     info = DetailInfo(artist.name, "${tracks.size} song${if (tracks.size == 1) "" else "s"}", artist.imageUrl, accentFor(id), true, tracks.size, "Artist"),
                     tracks = tracks,

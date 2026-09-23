@@ -447,12 +447,11 @@ fun Ios5SongRow(
     showSubtitle: Boolean = true,
     onClick: () -> Unit,
 ) {
-    // 文件已消失的曲目：沉底灰色，不可点（播放队列同样过滤，见 playAll）
-    val enabled = song.available
+    // 文件已消失的曲目：灰色显示，但依然可点——存储可能已重连，点下去能播就自动复活
     Row(
         Modifier.fillMaxWidth()
-            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
-            .alpha(if (enabled) 1f else 0.45f)
+            .clickable(onClick = onClick)
+            .alpha(if (song.available) 1f else 0.45f)
             .padding(horizontal = 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

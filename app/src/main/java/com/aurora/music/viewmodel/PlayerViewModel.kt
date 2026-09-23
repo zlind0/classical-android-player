@@ -8,6 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.pow
 
 enum class RepeatMode { OFF, ALL, ONE }
@@ -115,6 +117,61 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
                 controller?.pause()
                 _state.update { it.copy(sleepEndOfTrack = false) }
             }
+            item?.mediaId?.let { maybeRevive(it) }
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            // 本地文件打不开（多半是文件已消失）：标 unavailable 并自动跳下一首。
+            // 查询时不做 exists 预检，这里是唯一的“文件消失”纠正点。
+            handleItemError()
+        }
+    }
+
+    private fun handleItemError() {
+        val c = controller ?: return
+        val song = c.currentMediaItem?.mediaId?.let { songById[it] } ?: return
+        if (song.path.isBlank()) return
+        viewModelScope.launch {
+            // content:// 走系统媒体库，错误多为 transient，不写库只跳过；
+            // file 直链/id 才标 unavailable
+            val markable = !song.streamUrl.startsWith("content://")
+            if (markable) {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        if (song.id.startsWith("file:")) container.musicRoots.markUnavailable(listOf(song.path))
+                        else container.localLibrary.markUnavailableByIds(listOf(song.id))
+                    }
+                }
+                songById = songById + (song.id to song.copy(available = false))
+                container.notifyLibraryChanged()
+            }
+            if (c.hasNextMediaItem()) {
+                c.seekToNextMediaItem()
+                c.play()
+            } else {
+                c.pause()
+            }
+            syncFromController()
+        }
+    }
+
+    /**
+     * 播成功复活：灰色（unavailable）曲目实际播起来了，说明存储已重连，
+     * 标回 available 并刷新列表。如果文件真没了，随后的报错会再标回去。
+     */
+    private fun maybeRevive(mediaId: String) {
+        val song = songById[mediaId] ?: return
+        if (song.available || song.path.isBlank()) return
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    if (song.id.startsWith("file:")) container.musicRoots.markAvailable(listOf(song.path))
+                    else container.localLibrary.markAvailableByIds(listOf(song.id))
+                }
+            }
+            songById = songById + (song.id to song.copy(available = true))
+            container.notifyLibraryChanged()
+            syncFromController()
         }
     }
 
@@ -371,16 +428,15 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun maybeEnrichLocal(song: Song) {
         if (song.id.isEmpty()) return
         val isLocal = song.streamUrl.startsWith("content://") ||
-            song.streamUrl.startsWith("file://") ||
-            (song.path.isNotBlank() && java.io.File(song.path).isFile)
+            song.streamUrl.startsWith("file://") || song.path.isNotBlank()
         if (!isLocal) return
         if (song.sampleRateHz > 0) return
         if (!enrichedLocal.add(song.id)) return
         viewModelScope.launch(Dispatchers.IO) {
             val mmr = android.media.MediaMetadataRetriever()
             val result = runCatching {
-                // 文件直路径优先（最准且不经 ContentResolver），否则走播放 URI
-                val byPath = song.path.isNotBlank() && java.io.File(song.path).isFile &&
+                // 文件直路径优先（最准且不经 ContentResolver），缺失会抛异常走兜底，不预检 exists
+                val byPath = song.path.isNotBlank() &&
                     runCatching { mmr.setDataSource(song.path); true }.getOrDefault(false)
                 if (!byPath) mmr.setDataSource(getApplication(), Uri.parse(song.streamUrl))
                 fun key(k: Int) = mmr.extractMetadata(k)?.toIntOrNull() ?: 0
@@ -429,20 +485,18 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun playAll(songs: List<Song>, startIndex: Int = 0) {
         val c = controller ?: return
-        // 不可用（文件已消失）曲目永不进队列；startIndex 映射到过滤后的位置
-        val avail = songs.filter { it.available }
-        if (avail.isEmpty()) return
+        if (songs.isEmpty()) return
         container.haptic()
         playingAccountKey = container.currentAccountKey()
-        songById = avail.associateBy { it.id }
-        val idx = songs.getOrNull(startIndex)?.let { s -> avail.indexOfFirst { it.id == s.id }.takeIf { it >= 0 } } ?: 0
-        val delivery = deliverQueue(avail, idx, 0L)
+        songById = songs.associateBy { it.id }
+        val idx = startIndex.coerceIn(0, songs.lastIndex)
+        val delivery = deliverQueue(songs, idx, 0L)
         c.playbackParameters = currentParams()
         c.prepare()
         c.play()
         // fresh context plays in order make sure shuffle is off
         sendShuffle(0)
-        _state.update { it.copy(queue = delivery.songs, currentIndex = delivery.currentIndex, current = avail[idx], positionSec = 0f, isPlaying = true) }
+        _state.update { it.copy(queue = delivery.songs, currentIndex = delivery.currentIndex, current = songs[idx], positionSec = 0f, isPlaying = true) }
     }
 
     fun play(song: Song) = playAll(listOf(song), 0)
@@ -557,11 +611,10 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun shufflePlay(songs: List<Song>) {
         val c = controller ?: return
-        val avail = songs.filter { it.available }
-        if (avail.isEmpty()) return
+        if (songs.isEmpty()) return
         playingAccountKey = container.currentAccountKey()
-        songById = avail.associateBy { it.id }
-        val shuffled = avail.shuffled()
+        songById = songs.associateBy { it.id }
+        val shuffled = songs.shuffled()
         val delivery = deliverQueue(shuffled, 0, 0L)
         c.playbackParameters = currentParams()
         c.prepare()
@@ -571,14 +624,13 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         c.sendCustomCommand(
             SessionCommand(PlaybackService.CMD_SHUFFLE, android.os.Bundle().apply {
                 putInt("target", 1)
-                putStringArrayList("order", ArrayList(avail.map { it.id }))
+                putStringArrayList("order", ArrayList(songs.map { it.id }))
             }),
             android.os.Bundle.EMPTY,
         )
     }
 
     fun addToQueue(song: Song) {
-        if (!song.available) return
         val c = controller ?: run { play(song); return }
         if (c.mediaItemCount == 0) { play(song); return }
         songById = songById + (song.id to song)
@@ -588,7 +640,6 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun playNext(song: Song) {
-        if (!song.available) return
         val c = controller ?: run { play(song); return }
         if (c.mediaItemCount == 0) { play(song); return }
         songById = songById + (song.id to song)

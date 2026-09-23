@@ -130,6 +130,24 @@ class LocalLibrary(
         }
     }
 
+    /** 播放报错纠正：单曲/批量标 unavailable（重建内存，不删行）。 */
+    suspend fun markUnavailableByIds(ids: List<String>) {
+        if (ids.isEmpty()) return
+        mutex.withLock {
+            ids.chunked(500).forEach { dao.markUnavailable(it) }
+            rebuildFromRows(dao.allTracks())
+        }
+    }
+
+    /** 播成功复活：灰色曲目实际可播时标回 available（重建内存）。 */
+    suspend fun markAvailableByIds(ids: List<String>) {
+        if (ids.isEmpty()) return
+        mutex.withLock {
+            ids.chunked(500).forEach { dao.markAvailable(it) }
+            rebuildFromRows(dao.allTracks())
+        }
+    }
+
     fun song(id: String): Song? = byId[id]
 
     // only substitute on a single unambiguous match so a different version is never swapped in
@@ -327,7 +345,8 @@ class LocalLibrary(
                     val artistId = c.getLong(artistIdCol)
                     val title = c.getString(titleCol) ?: continue
                     val artistName = c.getString(artistCol)?.takeIf { it.isNotBlank() && it != "<unknown>" } ?: "Unknown artist"
-                    val albumName = c.getString(albumCol)?.takeIf { it.isNotBlank() } ?: "Unknown album"
+                    val rawAlbum = c.getString(albumCol)?.takeIf { it.isNotBlank() }
+                    val albumName = rawAlbum ?: "Unknown album"
                     val durSec = (c.getLong(durCol) / 1000L).toInt()
                     val year = runCatching { c.getInt(yearCol) }.getOrDefault(0)
                     val added = runCatching { c.getLong(addedCol) }.getOrDefault(0L)
@@ -339,8 +358,9 @@ class LocalLibrary(
                     val uri = ContentUris.withAppendedId(collection, id).toString()
                     val data = if (dataCol >= 0) c.getString(dataCol).orEmpty() else ""
                     // 专辑键只看归一化标题：MediaStore 的 album_id 按艺人维度拆分，
-                    // 同名专辑跨文件夹/跨艺人会被拆成多个 id，这里直接无视它
-                    val sidAlbum = albumKey(albumName)
+                    // 同名专辑跨文件夹/跨艺人会被拆成多个 id，这里直接无视它；
+                    // 无专辑标签的每首独立成专（unique key），绝不合并
+                    val sidAlbum = if (rawAlbum == null) "unknown-album::$id" else albumKey(albumName)
                     val rawTrack = if (trackCol >= 0) runCatching { c.getInt(trackCol) }.getOrDefault(0) else 0
                     var discNo = if (discCol >= 0) runCatching { c.getInt(discCol) }.getOrDefault(0) else 0
                     var trackNo = rawTrack

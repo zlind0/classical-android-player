@@ -10,7 +10,9 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import androidx.room.Room
 import com.aurora.music.data.db.FilesDb
+import com.aurora.music.data.db.FilesMigration1_2
 import com.aurora.music.data.db.MediastoreDb
+import com.aurora.music.data.db.MsMigration1_2
 import com.aurora.music.model.Song
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CoroutineScope
@@ -52,8 +54,10 @@ class AppContainer(context: Context) {
     val replayGainStore = ReplayGainStore(appContext)
 
     // 两套独立 SQLite 库，一源一库，物理隔离、永不串台
-    private val filesDb: FilesDb = Room.databaseBuilder(appContext, FilesDb::class.java, "library_files.db").build()
-    private val mediastoreDb: MediastoreDb = Room.databaseBuilder(appContext, MediastoreDb::class.java, "library_mediastore.db").build()
+    private val filesDb: FilesDb = Room.databaseBuilder(appContext, FilesDb::class.java, "library_files.db")
+        .addMigrations(FilesMigration1_2).build()
+    private val mediastoreDb: MediastoreDb = Room.databaseBuilder(appContext, MediastoreDb::class.java, "library_mediastore.db")
+        .addMigrations(MsMigration1_2).build()
 
     // MEDIASTORE 栈：DB 快照 → 内存；MediaStore 查询只在首次同步/手动重同步时发生
     val localLibrary = LocalLibrary(appContext, mediastoreDb.mediastoreDao(), gainProvider = { path -> replayGainStore.gainsFor(path) })
@@ -148,10 +152,10 @@ class AppContainer(context: Context) {
     var backend: MediaBackend = mediaBackend
         private set
 
-    // 分析引擎看到的永远是当前 source 的歌单（双栈跟随，不直连 LocalLibrary）
+    // 分析引擎看到的永远是当前 source 的可用歌单（消失文件不参与分析）
     private val activePool = object : SongPool {
         override val songs: List<Song>
-            get() = if (_librarySource.value == LibrarySource.FILE) musicRoots.allSongs() else localLibrary.songs
+            get() = if (_librarySource.value == LibrarySource.FILE) musicRoots.allSongs().filter { it.available } else localLibrary.songs.filter { it.available }
         override suspend fun ensureLoaded() {
             if (_librarySource.value == LibrarySource.FILE) musicRoots.ensureLoaded() else localLibrary.ensureLoaded()
         }
@@ -220,6 +224,11 @@ class AppContainer(context: Context) {
     // reloads home/library without playback-stopping semantics
     private val _libraryReload = MutableStateFlow(0)
     val libraryReload: StateFlow<Int> = _libraryReload.asStateFlow()
+
+    /** 库内容变化通知（播放报错标 unavailable 等）：各列表重查，播放不受影响。 */
+    fun notifyLibraryChanged() {
+        _libraryReload.value++
+    }
 
     fun currentAccountKey(): String = "local"
 

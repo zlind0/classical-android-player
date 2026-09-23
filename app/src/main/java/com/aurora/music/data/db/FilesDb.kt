@@ -3,17 +3,24 @@ package com.aurora.music.data.db
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 // FILE 栈的独立库：library_files.db。主键 path，与 MediaStore 栈物理隔离。
 // 深扫（加库/手动重扫）时写入；启动只读 + File.exists() 存在性检查。
+// v2：补常用查询索引；merges 改全局主键（同名专辑跨文件夹合并展示）。
 
-@Entity(tableName = "tracks")
+@Entity(
+    tableName = "tracks",
+    indices = [Index(value = ["rootId", "available"]), Index(value = ["available"])],
+)
 data class FileTrack(
     @PrimaryKey val path: String,
     val rootId: Long,
@@ -28,7 +35,11 @@ data class FileTrack(
     val available: Boolean = true,
 )
 
-@Entity(tableName = "albums", primaryKeys = ["rootId", "albumId"])
+@Entity(
+    tableName = "albums",
+    primaryKeys = ["rootId", "albumId"],
+    indices = [Index(value = ["rootId"])],
+)
 data class FileAlbum(
     val rootId: Long,
     val albumId: String,
@@ -39,11 +50,11 @@ data class FileAlbum(
     val durationSec: Int = 0,
 )
 
-// 标题合并预计算：mergeTracks() 在深扫时一次算好，UI 只查表。
-@Entity(tableName = "merges", primaryKeys = ["rootId", "albumId"])
+// 标题合并预计算：全局主键 albumKey（归一专辑名，跨文件夹同名即同专辑），
+// 深扫/库变更时全量重算一次，UI 只查表。
+@Entity(tableName = "merges")
 data class FileMerge(
-    val rootId: Long,
-    val albumId: String,
+    @PrimaryKey val albumId: String,
     val rowsJson: String,
 )
 
@@ -73,8 +84,17 @@ interface FilesDao {
     @Query("SELECT * FROM albums WHERE rootId IN (:rootIds)")
     suspend fun albumsOfRoots(rootIds: List<Long>): List<FileAlbum>
 
-    @Query("SELECT * FROM merges WHERE rootId IN (:rootIds)")
-    suspend fun mergesOfRoots(rootIds: List<Long>): List<FileMerge>
+    @Query("SELECT * FROM merges")
+    suspend fun allMerges(): List<FileMerge>
+
+    @Query("DELETE FROM merges")
+    suspend fun clearMerges()
+
+    @Transaction
+    suspend fun replaceMerges(merges: List<FileMerge>) {
+        clearMerges()
+        upsertMerges(merges)
+    }
 
     @Query("SELECT COUNT(*) FROM tracks WHERE rootId = :rootId AND available = 1")
     suspend fun availableCount(rootId: Long): Int
@@ -91,37 +111,47 @@ interface FilesDao {
     @Query("DELETE FROM albums WHERE rootId = :rootId")
     suspend fun deleteAlbumsOfRoot(rootId: Long)
 
-    @Query("DELETE FROM merges WHERE rootId = :rootId")
-    suspend fun deleteMergesOfRoot(rootId: Long)
+    @Query("DELETE FROM albums WHERE albumId LIKE 'dir:%'")
+    suspend fun deleteLegacyDirAlbums(): Int
 
     @Query("DELETE FROM tracks WHERE rootId = :rootId AND available = 0")
     suspend fun deleteUnavailableOfRoot(rootId: Long): Int
 
-    // 深扫落盘：一个 root 的三张表原子替换，陈旧行不可能残留
+    // 深扫落盘：一个 root 的 tracks/albums 原子替换，陈旧行不可能残留。
+    // merges 是全局表，深扫后由调用方全量重算（replaceMerges），这里不动。
     @Transaction
     suspend fun replaceRootScan(
         rootId: Long,
         tracks: List<FileTrack>,
         albums: List<FileAlbum>,
-        merges: List<FileMerge>,
     ) {
         deleteTracksOfRoot(rootId)
         deleteAlbumsOfRoot(rootId)
-        deleteMergesOfRoot(rootId)
         upsertTracks(tracks)
         upsertAlbums(albums)
-        upsertMerges(merges)
     }
 
     @Transaction
     suspend fun deleteRoot(rootId: Long) {
         deleteTracksOfRoot(rootId)
         deleteAlbumsOfRoot(rootId)
-        deleteMergesOfRoot(rootId)
     }
 }
 
-@Database(entities = [FileTrack::class, FileAlbum::class, FileMerge::class], version = 1, exportSchema = false)
+val FilesMigration1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_rootId_available` ON `tracks` (`rootId`, `available`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_available` ON `tracks` (`available`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_albums_rootId` ON `albums` (`rootId`)")
+        // merges 改全局主键：旧表（rootId, albumId）直接重建，内容由启动时从 tracks 全量重算
+        db.execSQL("DROP TABLE IF EXISTS `merges`")
+        db.execSQL("CREATE TABLE IF NOT EXISTS `merges` (`albumId` TEXT NOT NULL, `rowsJson` TEXT NOT NULL, PRIMARY KEY(`albumId`))")
+        // 旧专辑 key 是 dir:xxx，新 key 是归一专辑名，历史行删掉等下次深扫重写（展示不读此表）
+        db.execSQL("DELETE FROM `albums` WHERE `albumId` LIKE 'dir:%'")
+    }
+}
+
+@Database(entities = [FileTrack::class, FileAlbum::class, FileMerge::class], version = 2, exportSchema = false)
 abstract class FilesDb : RoomDatabase() {
     abstract fun filesDao(): FilesDao
 }

@@ -3,17 +3,24 @@ package com.aurora.music.data.db
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 // MEDIASTORE 栈的独立库：library_mediastore.db。主键 mediaId，与文件栈物理隔离。
 // 首次进此模式（或手动重同步）时把 MediaStore 全量结果写入；启动只读 + DATA 路径存在性检查。
+// v2：补常用查询索引。
 
-@Entity(tableName = "tracks")
+@Entity(
+    tableName = "tracks",
+    indices = [Index(value = ["albumKey"]), Index(value = ["available"])],
+)
 data class MsTrack(
     @PrimaryKey val mediaId: String,
     val title: String,
@@ -110,7 +117,14 @@ interface MediastoreDao {
     }
 }
 
-@Database(entities = [MsTrack::class, MsAlbum::class, MsMerge::class], version = 1, exportSchema = false)
+val MsMigration1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_albumKey` ON `tracks` (`albumKey`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_available` ON `tracks` (`available`)")
+    }
+}
+
+@Database(entities = [MsTrack::class, MsAlbum::class, MsMerge::class], version = 2, exportSchema = false)
 abstract class MediastoreDb : RoomDatabase() {
     abstract fun mediastoreDao(): MediastoreDao
 }

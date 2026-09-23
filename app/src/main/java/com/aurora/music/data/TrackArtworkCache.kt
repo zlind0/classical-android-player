@@ -93,9 +93,9 @@ object TrackArtworkCache {
         val mmr = MediaMetadataRetriever()
         return try {
             var set = false
-            // 优先直读文件路径：最准且不需要 ContentResolver 权限
+            // 优先直读文件路径：最准且不需要 ContentResolver 权限（缺失抛异常走兜底，不预检 exists）
             val p = song.path
-            if (p.isNotBlank() && runCatching { File(p).isFile }.getOrDefault(false)) {
+            if (p.isNotBlank()) {
                 set = runCatching { mmr.setDataSource(p); true }.getOrDefault(false)
             }
             if (!set && song.streamUrl.isNotBlank()) {
