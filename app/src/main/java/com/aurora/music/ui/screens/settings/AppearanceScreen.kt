@@ -169,6 +169,10 @@ fun AppearanceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
         }
 
         ios5Section(strDisplaySection) {
+            Ios5SwitchRow(title = stringResource(R.string.appearance_hide_status_landscape), subtitle = stringResource(R.string.appearance_hide_status_landscape_sub), checked = prefs.hideStatusBarLandscape) { v ->
+                scope.launch { store.setHideStatusBarLandscape(v) }
+            }
+            Ios5CellDivider()
             Ios5SliderRow(stringResource(R.string.appearance_font_size), "${(prefs.fontScale * 100).roundToInt()}%", prefs.fontScale, 0.85f..1.3f) { v ->
                 scope.launch { store.setFontScale(v) }
             }

@@ -767,6 +767,8 @@
     <string name="appearance_material_you">Material You</string>
     <string name="appearance_section_display">显示</string>
     <string name="appearance_font_size">字号</string>
+    <string name="appearance_hide_status_landscape">横屏隐藏状态栏</string>
+    <string name="appearance_hide_status_landscape_sub">旋转后全屏播放布局</string>
     <string name="appearance_corners">圆角</string>
     <string name="appearance_section_player">播放器</string>
     <string name="appearance_seek_bar">进度条</string>

@@ -770,6 +770,8 @@
     <string name="appearance_material_you">Material You</string>
     <string name="appearance_section_display">Display</string>
     <string name="appearance_font_size">Font size</string>
+    <string name="appearance_hide_status_landscape">Hide status bar in landscape</string>
+    <string name="appearance_hide_status_landscape_sub">Full-screen playback layout when rotated</string>
     <string name="appearance_corners">Corners</string>
     <string name="appearance_section_player">Player</string>
     <string name="appearance_seek_bar">Seek bar</string>

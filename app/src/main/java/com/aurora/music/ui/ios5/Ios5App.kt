@@ -1,5 +1,6 @@
 package com.aurora.music.ui.ios5
 
+import android.app.Activity
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -11,20 +12,39 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,10 +53,20 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -82,6 +112,7 @@ fun Ios5App() {
     val playerState by playerVM.state.collectAsStateWithLifecycle()
     val browseState by browseVM.state.collectAsStateWithLifecycle()
     val sessionReady by container.sessionReady.collectAsStateWithLifecycle()
+    val uiPrefs by container.settingsStore.uiPrefs.collectAsStateWithLifecycle(initialValue = com.aurora.music.data.UiPrefs())
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -101,6 +132,9 @@ fun Ios5App() {
     val tabHighlight = if (currentRoute in ios5TabRoutes) currentRoute else lastTab
 
     var showQueue by remember { mutableStateOf(false) }
+
+    // 横向合并顶栏的上报宿主：NavHost 内页面的 Ios5NavBar 把标题/返回/搜索交到这里统一渲染
+    val topBarHost = remember { TopBarHost() }
 
     fun navigateTopLevel(route: String) {
         if (currentRoute == route) return
@@ -134,10 +168,27 @@ fun Ios5App() {
     }
 
     Ios5Backdrop {
-        // iOS5 翻转：内容面 / 播放面，前半程内容转走，后半程播放页转入
+      BoxWithConstraints(Modifier.fillMaxSize()) {
+        // 横向：左 5-tab 主界面（宽度自适应）+ 右固定播放侧栏；竖屏保持翻转整页
+        // Activity 不重建（configChanges），NavController/ViewModel/remember 状态旋转前后一致
+        val landscape = maxWidth > maxHeight
+        // 横屏隐藏系统状态栏（外观开关，默认开）：全屏播放布局，手势可临时划出
+        DisposableEffect(landscape, uiPrefs.hideStatusBarLandscape) {
+            val activity = context as? Activity
+            val controller = activity?.let { WindowCompat.getInsetsController(it.window, it.window.decorView) }
+            if (landscape && uiPrefs.hideStatusBarLandscape) {
+                controller?.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller?.hide(WindowInsetsCompat.Type.statusBars())
+            } else {
+                controller?.show(WindowInsetsCompat.Type.statusBars())
+            }
+            onDispose { controller?.show(WindowInsetsCompat.Type.statusBars()) }
+        }
+        // iOS5 翻转：内容面 / 播放面，前半程内容转走，后半程播放页转入（仅竖屏）
         val flipDensity = LocalDensity.current
         val flip by animateFloatAsState(
-            targetValue = if (playerState.expanded) 1f else 0f,
+            targetValue = if (!landscape && playerState.expanded) 1f else 0f,
             animationSpec = tween(600, easing = FastOutSlowInEasing),
             label = "playerFlip",
         )
@@ -147,12 +198,15 @@ fun Ios5App() {
                 .background(if (flip > 0.02f && flip < 0.98f) Color.Black else Color.Transparent),
         ) {
             // ---- 内容面：自带亚麻底，转起来是一张实卡，真空才露黑 ----
+            // 抽成局部函数，竖屏翻转与横向双栏共用同一棵树，状态天然一致
+            @Composable
+            fun ContentFace(faceFlip: Float, showMiniStrip: Boolean, showTabBar: Boolean) {
             Box(
                 Modifier.fillMaxSize()
                     .graphicsLayer {
-                        rotationY = flip * 180f
+                        rotationY = faceFlip * 180f
                         cameraDistance = 8 * flipDensity.density
-                        alpha = if (flip < 0.5f) 1f else 0f
+                        alpha = if (faceFlip < 0.5f) 1f else 0f
                     }
                     .background(Ios5Colors.linenBrush),
             ) {
@@ -493,6 +547,8 @@ fun Ios5App() {
                 }
 
                 // ---- 下栏：Mini 条 + Tab（不透明，背景直贴系统栏，内容避让手势区） ----
+                // 横向时下栏挪到底部整条栏里拼走带键，这里只留内容
+                if (showTabBar) {
                 Box(
                     Modifier.fillMaxWidth().background(Ios5Colors.tabBrush),
                 ) {
@@ -500,7 +556,7 @@ fun Ios5App() {
                         Modifier.fillMaxWidth()
                             .windowInsetsPadding(WindowInsets.navigationBars),
                     ) {
-                        if (playerState.hasTrack && flip < 0.5f) {
+                        if (playerState.hasTrack && faceFlip < 0.5f && showMiniStrip) {
                             Ios5MiniStrip(
                                 state = playerState,
                                 onExpand = { playerVM.setExpanded(true) },
@@ -511,8 +567,165 @@ fun Ios5App() {
                         Ios5TabBar(tabHighlight) { navigateTopLevel(it) }
                     }
                 }
+                }
             }
-            } // 内容面
+            } // 内容 Box 结束
+            } // ContentFace 内容面函数结束
+
+            if (landscape) {
+                // ---- 横向：顶整条栏 + 中部（左主界面 + 右播放侧栏）+ 底整条栏 ----
+                // 系统三按钮控制条背后一律黑色：顶/底栏黑底延伸进 insets 区，内容避让
+                val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+                val navEnd = WindowInsets.navigationBars.asPaddingValues().calculateEndPadding(LocalLayoutDirection.current)
+                val topSpec = topBarHost.spec
+                Column(Modifier.fillMaxSize()) {
+                    // 顶整条栏：左页面导航 + 右正在播放（黑底一通到底，字体行距压缩紧凑）
+                    Column(
+                        Modifier.fillMaxWidth().background(
+                            Brush.verticalGradient(
+                                0f to Color(0xFF3D434C),
+                                1f to Color(0xFF14161B),
+                            ),
+                        ).padding(top = statusTop, end = navEnd),
+                    ) {
+                        Row(Modifier.fillMaxWidth().height(46.dp)) {
+                            Row(
+                                Modifier.weight(1f).fillMaxHeight().padding(horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Box(Modifier.width(56.dp), contentAlignment = Alignment.CenterStart) {
+                                    topSpec?.onBack?.let { back ->
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.ArrowBackIos, "返回", tint = Color.White,
+                                            modifier = Modifier.size(30.dp).clip(CircleShape).clickable(onClick = back).padding(6.dp),
+                                        )
+                                    }
+                                }
+                                Text(
+                                    topSpec?.title
+                                        ?: ios5Tabs.firstOrNull { it.route == tabHighlight }?.label.orEmpty(),
+                                    color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold,
+                                    fontFamily = Ios5Sans,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Box(Modifier.width(56.dp), contentAlignment = Alignment.CenterEnd) {
+                                    topSpec?.onSearch?.let { search ->
+                                        Icon(
+                                            Icons.Filled.Search, "搜索", tint = Color.White,
+                                            modifier = Modifier.size(30.dp).clip(CircleShape).clickable(onClick = search).padding(5.dp),
+                                        )
+                                    }
+                                }
+                            }
+                            Box(Modifier.fillMaxHeight().width(1.dp).background(Color.White.copy(alpha = 0.2f)))
+                            Row(
+                                Modifier.width(340.dp).fillMaxHeight().padding(horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                val song = playerState.current
+                                val merged = com.aurora.music.ui.player.rememberMergedTitle(song)
+                                Column(
+                                    Modifier.weight(1f).fillMaxHeight(),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center,
+                                ) {
+                                    Text(
+                                        song.artist.ifBlank { " " },
+                                        color = Color(0xFF9AA0AB), fontSize = 10.sp, lineHeight = 12.sp,
+                                        fontFamily = Ios5Sans,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                    if (merged != null) {
+                                        Text(
+                                            merged.first, color = Color.White,
+                                            fontSize = 14.sp, lineHeight = 17.sp, fontWeight = FontWeight.Bold,
+                                            fontFamily = Ios5Sans,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                        Text(
+                                            merged.second.ifBlank { song.title },
+                                            color = Color(0xFFB9BEC7), fontSize = 11.sp, lineHeight = 13.sp,
+                                            fontFamily = Ios5Sans,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                    } else {
+                                        Text(
+                                            song.title.ifBlank { "未在播放" },
+                                            color = Color.White, fontSize = 14.sp, lineHeight = 17.sp,
+                                            fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                    }
+                                }
+                                Icon(
+                                    Icons.AutoMirrored.Filled.QueueMusic, "队列", tint = Color.White,
+                                    modifier = Modifier.size(30.dp).clip(CircleShape).clickable(onClick = { showQueue = true }).padding(5.dp),
+                                )
+                            }
+                        }
+                        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.Black))
+                    }
+                    Row(Modifier.weight(1f).fillMaxWidth()) {
+                        Box(Modifier.weight(1f).fillMaxHeight()) {
+                            CompositionLocalProvider(LocalTopBarHost provides topBarHost) {
+                                ContentFace(0f, false, false)
+                            }
+                        }
+                        Box(Modifier.fillMaxHeight().width(1.dp).background(Color(0xFF9AA0A8)))
+                        com.aurora.music.ui.player.Ios5LandscapeSidePlayer(
+                            state = playerState,
+                            onSeek = { playerVM.seekTo(it) },
+                        )
+                    }
+                    // 整条底栏：左 Tab（自适应）+ 右走带键（340dp 与侧栏对齐），背后黑色。
+                    // 高度固定（子项 fillMaxHeight 在自适应 Row 里会把整栏撑满全屏）
+                    Box(
+                        Modifier.fillMaxWidth().background(Color.Black)
+                            .windowInsetsPadding(WindowInsets.navigationBars),
+                    ) {
+                        // 左右同一黑底色彩；高度压缩（子项 fillMaxHeight 在自适应 Row 里会把整栏撑满全屏）
+                        Row(Modifier.fillMaxWidth().height(60.dp)) {
+                            Box(
+                                Modifier.weight(1f).fillMaxHeight().background(
+                                    Brush.verticalGradient(
+                                        0f to Color(0xFF3D434C),
+                                        1f to Color(0xFF14161B),
+                                    ),
+                                ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Ios5TabBar(tabHighlight) { navigateTopLevel(it) }
+                            }
+                            Box(
+                                Modifier.width(340.dp).fillMaxHeight().background(
+                                    Brush.verticalGradient(
+                                        0f to Color(0xFF3D434C),
+                                        1f to Color(0xFF14161B),
+                                    ),
+                                ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                com.aurora.music.ui.player.Ios5LandscapeTransport(
+                                    state = playerState,
+                                    onTogglePlay = { playerVM.togglePlay() },
+                                    onNext = { playerVM.next() },
+                                    onPrevious = { playerVM.previous() },
+                                    onToggleLike = { playerVM.toggleLikeCurrent() },
+                                    onToggleShuffle = { playerVM.toggleShuffle() },
+                                    onCycleRepeat = { playerVM.cycleRepeat() },
+                                    modifier = Modifier.padding(vertical = 2.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                ContentFace(flip, true, true)
 
             // ---- 播放面（整页 iPod 播放器，翻转进入） ----
             // 页面本身全屏不透明，触摸漏不下去，不需要额外拦截层。
@@ -541,7 +754,8 @@ fun Ios5App() {
                     )
                 }
             }
-            }
+            } // if expanded 播放面结束
+            } // else 竖屏分支结束
 
             AnimatedVisibility(
                 visible = showQueue,
@@ -566,6 +780,7 @@ fun Ios5App() {
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 140.dp),
             )
         }
+      } // BoxWithConstraints 横竖屏分支结束
     }
 
     BackHandler(enabled = playerState.expanded) { playerVM.setExpanded(false) }

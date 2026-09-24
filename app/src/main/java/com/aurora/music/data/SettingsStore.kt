@@ -243,6 +243,8 @@ data class UiPrefs(
     val miniProgress: Int = MiniProgress.LINE,
     val libraryColumns: Int = 2,
     val hiddenHomeSections: Set<String> = emptySet(),
+    // 横屏隐藏系统状态栏（默认开，可在外观里关掉）
+    val hideStatusBarLandscape: Boolean = true,
 )
 
 // scoped to serverId so a pin persists across logouts but only reappears on that connection
@@ -394,6 +396,7 @@ class SettingsStore(private val context: Context) {
         val UI_MINI_PROGRESS = intPreferencesKey("ui_mini_progress")
         val UI_LIBRARY_COLUMNS = intPreferencesKey("ui_library_columns")
         val UI_HIDDEN_HOME = stringSetPreferencesKey("ui_hidden_home")
+        val UI_HIDE_STATUS_LANDSCAPE = booleanPreferencesKey("ui_hide_status_landscape")
     }
 
     val uiPrefs: Flow<UiPrefs> = context.dataStore.data.map { p ->
@@ -414,6 +417,7 @@ class SettingsStore(private val context: Context) {
             miniProgress = p[Keys.UI_MINI_PROGRESS] ?: MiniProgress.LINE,
             libraryColumns = p[Keys.UI_LIBRARY_COLUMNS] ?: 2,
             hiddenHomeSections = p[Keys.UI_HIDDEN_HOME] ?: emptySet(),
+            hideStatusBarLandscape = p[Keys.UI_HIDE_STATUS_LANDSCAPE] ?: true,
         )
     }
 
@@ -831,6 +835,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setMiniStyle(v: Int) = context.dataStore.edit { it[Keys.UI_MINI_STYLE] = v }
     suspend fun setMiniProgress(v: Int) = context.dataStore.edit { it[Keys.UI_MINI_PROGRESS] = v }
     suspend fun setLibraryColumns(v: Int) = context.dataStore.edit { it[Keys.UI_LIBRARY_COLUMNS] = v }
+    suspend fun setHideStatusBarLandscape(v: Boolean) = context.dataStore.edit { it[Keys.UI_HIDE_STATUS_LANDSCAPE] = v }
     suspend fun setHomeSectionHidden(id: String, hidden: Boolean) = context.dataStore.edit { p ->
         val set = (p[Keys.UI_HIDDEN_HOME] ?: emptySet()).toMutableSet()
         if (hidden) set.add(id) else set.remove(id)

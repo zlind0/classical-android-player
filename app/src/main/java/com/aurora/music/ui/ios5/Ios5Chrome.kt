@@ -58,6 +58,8 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -83,6 +85,20 @@ fun Ios5Backdrop(content: @Composable () -> Unit) {
     Box(Modifier.fillMaxSize().background(Ios5Colors.linenBrush)) { content() }
 }
 
+// 横向合并顶栏的上报通道：NavHost 内的页面把自己的栏信息交出来，App 拼整条栏。
+// 队列浮层等 App 层覆盖物不在 provider 之下，不受影响。
+data class TopBarSpec(
+    val title: String,
+    val onBack: (() -> Unit)? = null,
+    val onSearch: (() -> Unit)? = null,
+)
+
+class TopBarHost {
+    var spec by mutableStateOf<TopBarSpec?>(null)
+}
+
+val LocalTopBarHost = compositionLocalOf<TopBarHost?> { null }
+
 /** Brushed-metal navigation bar with centered title, optional back + search keys. */
 @Composable
 fun Ios5NavBar(
@@ -90,6 +106,12 @@ fun Ios5NavBar(
     onBack: (() -> Unit)? = null,
     onSearch: (() -> Unit)? = null,
 ) {
+    // 横向合并模式：自己不上栏，把标题/返回/搜索上报给 App 顶整条栏统一渲染
+    val host = LocalTopBarHost.current
+    if (host != null) {
+        SideEffect { host.spec = TopBarSpec(title, onBack, onSearch) }
+        return
+    }
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     Column(
         Modifier.fillMaxWidth()
