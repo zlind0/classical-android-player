@@ -3,21 +3,16 @@ package com.aurora.music.data
 import android.content.Context
 import android.os.Build
 import android.os.Environment
+import android.os.storage.StorageManager
 import java.io.File
 
 // Classical fork v0.3 (plan §5): discovers the storage volumes the folder picker
 // and scanner may use. Business layers never touch raw vendor paths directly.
 //
-// - Primary shared storage via Environment.getExternalStorageDirectory() (plan §5.1).
-// - Extra volumes (SD card / USB mass storage) derived from
-//   Context.getExternalFilesDirs(null): each entry looks like
-//   /storage/XXXX-XXXX/Android/data/<package>/files, so walking up past the
-//   Android/data segment yields the volume's public root (plan §5.2).
-// Removable vs non-removable comes from Environment.isExternalStorageRemovable();
-// SD vs USB is indistinguishable from the path alone, so removable volumes that
-// are not the adopted primary are reported as USB when they look like USB
-// (checked via isExternalStorageRemovable + path heuristics) — the label is
-// advisory only; scanning treats both identically.
+// Primary discovery is StorageManager.getStorageVolumes() (API 24+ = minSdk):
+// it lists every mounted volume the system knows, including USB-OTG on pads
+// that never shows up in Context.getExternalFilesDirs(). The getExternalFilesDirs
+// mapping is kept as a fallback for odd vendor ROMs.
 data class StorageVolume(
     val id: String,          // stable key: "internal" or the volume root path
     val label: String,       // display label
@@ -30,22 +25,59 @@ class StorageVolumeManager(private val context: Context) {
 
     fun volumes(): List<StorageVolume> {
         val out = LinkedHashMap<String, StorageVolume>()
-        // Primary shared storage (plan §5.1). Deprecated upstream but still
+        fun add(v: StorageVolume) {
+            if (v.rootPath.isBlank()) return
+            if (out.values.any { it.rootPath == v.rootPath }) return
+            out[v.id] = v
+        }
+        // Primary shared storage. Deprecated upstream but still
         // functional on the API 24+ range this fork targets.
         @Suppress("DEPRECATION")
         val primary = Environment.getExternalStorageDirectory()?.absolutePath
         if (!primary.isNullOrBlank()) {
-            out["internal"] = StorageVolume(
-                id = "internal",
-                label = "Internal Storage",
-                rootPath = primary,
-                type = StorageType.INTERNAL,
-                available = File(primary).isDirectory,
+            add(
+                StorageVolume(
+                    id = "internal",
+                    label = "Internal Storage",
+                    rootPath = primary,
+                    type = StorageType.INTERNAL,
+                    available = File(primary).isDirectory,
+                )
             )
         }
-        // Extra volumes via app-specific dirs (plan §5.2). No storage permission
-        // needed to *list* these paths; reading them still requires the user to
-        // grant READ_EXTERNAL_STORAGE / READ_MEDIA_AUDIO first.
+        // All system-known volumes, including USB-OTG. Unmounted volumes are
+        // useless for scanning and only add clutter, so they are skipped.
+        runCatching {
+            val sm = context.getSystemService(StorageManager::class.java) ?: return@runCatching
+            for (vol in sm.storageVolumes) {
+                val state = runCatching { vol.state }.getOrNull() ?: continue
+                if (state != Environment.MEDIA_MOUNTED) continue
+                val isPrimary = runCatching { vol.isPrimary }.getOrDefault(false)
+                if (isPrimary) continue // already added above
+                val root = volumeRoot(vol) ?: continue
+                val removable = runCatching { vol.isRemovable }.getOrDefault(true)
+                // USB-OTG typically mounts under /mnt/media_rw or contains "usb";
+                // anything else removable is treated as an SD card. Advisory only.
+                val looksUsb = root.contains("usb", ignoreCase = true) || root.startsWith("/mnt/media_rw")
+                val type = if (!removable) StorageType.INTERNAL
+                else if (looksUsb) StorageType.USB else StorageType.SD_CARD
+                val label = runCatching { vol.getDescription(context) }.getOrNull()?.takeIf { it.isNotBlank() }
+                    ?: when (type) {
+                        StorageType.SD_CARD -> "SD Card"
+                        StorageType.USB -> "USB Storage"
+                        StorageType.INTERNAL -> "Internal Storage"
+                    }
+                add(
+                    StorageVolume(
+                        id = root, label = label, rootPath = root,
+                        type = type, available = File(root).isDirectory,
+                    )
+                )
+            }
+        }
+        // Fallback: app-specific dirs (no permission needed to *list* these paths).
+        // Each entry looks like /storage/XXXX-XXXX/Android/data/<package>/files,
+        // so walking up past the Android/data segment yields the volume root.
         val pkg = context.packageName
         val dirs = runCatching { context.getExternalFilesDirs(null) }.getOrNull()
         dirs?.forEach { dir ->
@@ -56,8 +88,6 @@ class StorageVolumeManager(private val context: Context) {
             val removable = runCatching {
                 if (Build.VERSION.SDK_INT >= 21) Environment.isExternalStorageRemovable(File(root)) else true
             }.getOrDefault(true)
-            // USB-OTG typically mounts under /mnt/media_rw or contains "usb";
-            // anything else removable is treated as an SD card. Advisory only.
             val looksUsb = root.contains("usb", ignoreCase = true) || root.startsWith("/mnt/media_rw")
             val type = if (!removable) StorageType.INTERNAL
             else if (looksUsb) StorageType.USB else StorageType.SD_CARD
@@ -66,13 +96,26 @@ class StorageVolumeManager(private val context: Context) {
                 StorageType.USB -> "USB Storage"
                 StorageType.INTERNAL -> "Internal Storage"
             }
-            out[root] = StorageVolume(
-                id = root, label = label, rootPath = root,
-                type = type, available = File(root).isDirectory,
+            add(
+                StorageVolume(
+                    id = root, label = label, rootPath = root,
+                    type = type, available = File(root).isDirectory,
+                )
             )
         }
         return out.values.toList()
     }
+
+    /** Public root of a StorageManager volume across API levels. */
+    private fun volumeRoot(vol: android.os.storage.StorageVolume): String? = runCatching {
+        if (Build.VERSION.SDK_INT >= 30) {
+            vol.directory?.absolutePath?.takeIf { it.isNotBlank() }
+        } else {
+            // Pre-30 has no public directory accessor; removable volumes
+            // mount at /storage/<uuid> on the phones/pads this fork targets.
+            vol.uuid?.takeIf { it.isNotBlank() }?.let { "/storage/$it" }
+        }
+    }.getOrNull()
 
     /** Lists immediate subdirectories of [dirPath] for the folder picker. Null on error. */
     fun listDirs(dirPath: String): List<File>? = runCatching {

@@ -58,7 +58,17 @@ fun FolderPickerScreen(
     onPicked: (path: String, displayName: String, type: StorageType) -> Unit,
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
-    val volumes = remember { container.volumeManager.volumes() }
+    val owner = LocalLifecycleOwner.current
+    var resumeTick by remember { mutableIntStateOf(0) }
+    DisposableEffect(owner) {
+        val obs = LifecycleEventObserver { _, e ->
+            if (e == Lifecycle.Event.ON_RESUME) resumeTick++
+        }
+        owner.lifecycle.addObserver(obs)
+        onDispose { owner.lifecycle.removeObserver(obs) }
+    }
+    // 卷列表随每次 resume 重算：选择器开着时插上 U 盘也能刷出来
+    val volumes = remember(resumeTick) { container.volumeManager.volumes() }
     var volume by remember { mutableStateOf(volumes.firstOrNull()) }
     var current by remember(volume) { mutableStateOf(volume?.rootPath ?: "") }
 
@@ -68,16 +78,6 @@ fun FolderPickerScreen(
     // Hoisted: used inside non-composable ifBlank {} / remember {} lambdas below.
     val strNoRoot = stringResource(R.string.picker_no_root)
     val strRootLabel = stringResource(R.string.picker_root_label)
-    var resumeTick by remember { mutableIntStateOf(0) }
-    val owner = LocalLifecycleOwner.current
-    DisposableEffect(owner) {
-        val obs = LifecycleEventObserver { _, e ->
-            if (e == Lifecycle.Event.ON_RESUME) resumeTick++
-        }
-        owner.lifecycle.addObserver(obs)
-        onDispose { owner.lifecycle.removeObserver(obs) }
-    }
-    resumeTick
     val hasRead = remember(resumeTick) { com.aurora.music.data.hasStorageRead(ctx) }
     val readLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { resumeTick++ }
 
