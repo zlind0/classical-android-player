@@ -42,6 +42,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 @UnstableApi
 class PlaybackService : MediaLibraryService() {
@@ -289,8 +290,9 @@ class PlaybackService : MediaLibraryService() {
             applyAudioEngine()
             return
         }
+        // player 只能在主线程碰：采样率先在主线程取好，算完切回主线程再应用
+        val rate = runCatching { player.audioFormat?.sampleRate ?: 48000 }.getOrDefault(48000).coerceAtLeast(8000)
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            val rate = runCatching { player.audioFormat?.sampleRate ?: 48000 }.getOrDefault(48000).coerceAtLeast(8000)
             val taps = runCatching { CorrectionCompiler.gainsToFir(gains.toFloatArray(), rate) }.getOrNull()
             if (taps != null) {
                 val ir = ImpulseResponse(taps, taps, rate)
@@ -299,7 +301,7 @@ class PlaybackService : MediaLibraryService() {
             } else {
                 correctionConv.enabled = false
             }
-            applyAudioEngine()
+            withContext(Dispatchers.Main) { applyAudioEngine() }
         }
     }
 
