@@ -529,9 +529,9 @@ fun Ios5LandscapeTransport(
     modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier,
+        modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
+        horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
         Icon(
             if (state.isCurrentLiked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
@@ -539,7 +539,6 @@ fun Ios5LandscapeTransport(
             tint = if (state.isCurrentLiked) Color(0xFFD63A3A) else Color(0xFF8E8E93),
             modifier = Modifier.size(28.dp).clip(CircleShape).clickable(onClick = onToggleLike).padding(4.dp),
         )
-        Spacer(Modifier.width(2.dp))
         Icon(
             Icons.Filled.SkipPrevious, "上一首", tint = Color.White,
             modifier = Modifier.size(36.dp).clip(CircleShape).clickable(onClick = onPrevious).padding(6.dp),
@@ -553,7 +552,6 @@ fun Ios5LandscapeTransport(
             Icons.Filled.SkipNext, "下一首", tint = Color.White,
             modifier = Modifier.size(36.dp).clip(CircleShape).clickable(onClick = onNext).padding(6.dp),
         )
-        Spacer(Modifier.width(2.dp))
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
