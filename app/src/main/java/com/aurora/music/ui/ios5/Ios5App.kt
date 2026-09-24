@@ -578,7 +578,15 @@ fun Ios5App() {
                 val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
                 val navEnd = WindowInsets.navigationBars.asPaddingValues().calculateEndPadding(LocalLayoutDirection.current)
                 val topSpec = topBarHost.spec
-                Column(Modifier.fillMaxSize()) {
+                BoxWithConstraints(Modifier.fillMaxSize()) {
+                    // 右栏宽严格等于中部可用高度：进度条是透明浮层不占高度，
+                    // 一分不扣全给封面，封面永远正方形铺满（极端窄屏时以宽度为上限兜底）
+                    val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+                    val topBarH = statusTop + 46.dp
+                    val bottomBarH = 60.dp + navBottom
+                    val middleH = (maxHeight - topBarH - bottomBarH).coerceAtLeast(0.dp)
+                    val panelWidth = minOf(middleH, maxWidth).coerceAtLeast(0.dp)
+                    Column(Modifier.fillMaxSize()) {
                     // 顶整条栏：左页面导航 + 右正在播放（黑底一通到底，字体行距压缩紧凑）
                     Column(
                         Modifier.fillMaxWidth().background(
@@ -619,7 +627,7 @@ fun Ios5App() {
                                 }
                             }
                             Row(
-                                Modifier.width(340.dp).fillMaxHeight().padding(horizontal = 8.dp),
+                                Modifier.width(panelWidth).fillMaxHeight().padding(horizontal = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 val song = playerState.current
@@ -677,6 +685,7 @@ fun Ios5App() {
                         com.aurora.music.ui.player.Ios5LandscapeSidePlayer(
                             state = playerState,
                             onSeek = { playerVM.seekTo(it) },
+                            panelWidth = panelWidth,
                         )
                     }
                     // 整条底栏：左 Tab（自适应）+ 右走带键（340dp 与侧栏对齐），背后黑色。
@@ -699,7 +708,7 @@ fun Ios5App() {
                                 Ios5TabBar(tabHighlight, showTopDivider = false, onNavigate = { navigateTopLevel(it) })
                             }
                             Box(
-                                Modifier.width(340.dp).fillMaxHeight().background(
+                                Modifier.width(panelWidth).fillMaxHeight().background(
                                     Brush.verticalGradient(
                                         0f to Color(0xFF3D434C),
                                         1f to Color(0xFF14161B),
@@ -720,6 +729,7 @@ fun Ios5App() {
                             }
                         }
                     }
+                    } // BoxWithConstraints（右栏宽自适应）结束
                 }
             } else {
                 ContentFace(flip, true, true)

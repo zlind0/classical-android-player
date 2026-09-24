@@ -60,6 +60,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
@@ -438,6 +439,8 @@ fun Ios5LandscapeSidePlayer(
     state: PlayerUiState,
     onSeek: (Float) -> Unit,
     modifier: Modifier = Modifier,
+    // 调用方按中部可用高度传入，保证封面永远正方形（宽 = 高）
+    panelWidth: Dp = LandscapeSideWidth,
 ) {
     val song = state.current
     val remaining = (state.durationSec - state.positionSec.toInt()).coerceAtLeast(0)
@@ -446,9 +449,8 @@ fun Ios5LandscapeSidePlayer(
     val navEnd = WindowInsets.navigationBars.asPaddingValues().calculateEndPadding(layoutDir)
 
     BoxWithConstraints(
-        // 根宽 = 内容340 + 右侧系统键区：内容区固定340，与顶/底栏的340对齐，三条分割线同 x。
-        // 未填充区黑色。
-        modifier.width(LandscapeSideWidth + navEnd).fillMaxHeight().background(Color.Black)
+        // 根宽 = 内容panelWidth + 右侧系统键区：内容区与顶/底栏对齐，三条分割线同 x
+        modifier.width(panelWidth + navEnd).fillMaxHeight().background(Color.Black)
             .padding(end = navEnd),
     ) {
         // 封面刚好正方形铺满面板宽度；进度条半透明浮在封面底部，不占高度
