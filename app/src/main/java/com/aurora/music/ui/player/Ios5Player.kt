@@ -461,7 +461,7 @@ fun Ios5LandscapeSidePlayer(
                 ) {
                     TrackArtwork(song, Modifier.size(coverSide), corner = 0.dp, fullQuality = true)
                     Row(
-                        Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                        Modifier.align(Alignment.TopCenter).fillMaxWidth()
                             .background(Color(0xFF14161B).copy(alpha = 0.62f))
                             .padding(horizontal = 10.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,

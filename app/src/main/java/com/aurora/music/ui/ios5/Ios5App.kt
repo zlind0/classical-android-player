@@ -564,7 +564,7 @@ fun Ios5App() {
                                 onNext = { playerVM.next() },
                             )
                         }
-                        Ios5TabBar(tabHighlight) { navigateTopLevel(it) }
+                        Ios5TabBar(tabHighlight, onNavigate = { navigateTopLevel(it) })
                     }
                 }
                 }
@@ -618,7 +618,6 @@ fun Ios5App() {
                                     }
                                 }
                             }
-                            Box(Modifier.fillMaxHeight().width(1.dp).background(Color.White.copy(alpha = 0.2f)))
                             Row(
                                 Modifier.width(340.dp).fillMaxHeight().padding(horizontal = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -668,7 +667,6 @@ fun Ios5App() {
                                 )
                             }
                         }
-                        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.Black))
                     }
                     Row(Modifier.weight(1f).fillMaxWidth()) {
                         Box(Modifier.weight(1f).fillMaxHeight()) {
@@ -676,7 +674,6 @@ fun Ios5App() {
                                 ContentFace(0f, false, false)
                             }
                         }
-                        Box(Modifier.fillMaxHeight().width(1.dp).background(Color(0xFF9AA0A8)))
                         com.aurora.music.ui.player.Ios5LandscapeSidePlayer(
                             state = playerState,
                             onSeek = { playerVM.seekTo(it) },
@@ -699,7 +696,7 @@ fun Ios5App() {
                                 ),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Ios5TabBar(tabHighlight) { navigateTopLevel(it) }
+                                Ios5TabBar(tabHighlight, showTopDivider = false, onNavigate = { navigateTopLevel(it) })
                             }
                             Box(
                                 Modifier.width(340.dp).fillMaxHeight().background(

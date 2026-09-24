@@ -151,9 +151,6 @@ fun Ios5NavBar(
                 }
             }
         }
-        // highlight + shadow lines for the machined edge
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.55f)))
-        Box(Modifier.fillMaxWidth().height(2.dp).background(Color.Black.copy(alpha = 0.35f)))
     }
 }
 
@@ -190,11 +187,13 @@ private val tabIcons: Map<String, ImageVector> = mapOf(
  * three-button / gesture strip is never hollow.
  */
 @Composable
-fun Ios5TabBar(currentRoute: String?, onNavigate: (String) -> Unit) {
+fun Ios5TabBar(currentRoute: String?, onNavigate: (String) -> Unit, showTopDivider: Boolean = true) {
     Column(
         Modifier.fillMaxWidth(),
     ) {
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.4f)))
+        if (showTopDivider) {
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.4f)))
+        }
         Row(
             Modifier.fillMaxWidth().height(Ios5Dimens.TabHeight).padding(horizontal = 2.dp, vertical = 4.dp),
         ) {
