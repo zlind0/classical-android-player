@@ -204,7 +204,13 @@ fun Ios5PlayerPage(
     val merged = rememberMergedTitle(song)
 
     BoxWithConstraints(
-        Modifier.fillMaxSize().background(Color(0xFFF4F4F6)),
+        // 根吃掉所有点按：背景不挡触摸，没有这层，点封面会漏到后面内容面的列表行上导致切歌
+        Modifier.fillMaxSize().background(Color(0xFFF4F4F6))
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() },
+                onClick = {},
+            ),
     ) {
         // 精确分配：三块最小高度先留出来，封面取能放下的最大正方形，
         // 剩下的 leftover 才是真富余，40% 给顶栏（三等分），60% 给底栏。

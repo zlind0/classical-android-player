@@ -741,7 +741,7 @@ fun Ios5App() {
                 ContentFace(flip, true, true)
 
             // ---- 播放面（整页 iPod 播放器，翻转进入） ----
-            // 页面本身全屏不透明，触摸漏不下去，不需要额外拦截层。
+            // 播放页根自带空点按拦截触摸，漏不下去，不需要额外拦截层。
             // 动画结束后卸载，避免两棵树常驻耗性能。
             if (playerState.expanded || flip > 0.02f) {
             Box(
