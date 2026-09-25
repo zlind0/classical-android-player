@@ -88,7 +88,7 @@ class LlmClient {
                 mapOf("role" to "system", "content" to system),
                 mapOf("role" to "user", "content" to user),
             ),
-            "max_tokens" to 2000,
+            "max_tokens" to 4000,
             "temperature" to 0.7,
             "stream" to true,
         )
