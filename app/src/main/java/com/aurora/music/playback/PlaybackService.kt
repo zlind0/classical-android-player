@@ -167,11 +167,14 @@ class PlaybackService : MediaLibraryService() {
             .setMediaSourceFactory(mediaSourceFactory)
             .setAudioAttributes(audioAttributes, /* handleAudioFocus = */ true)
             .setHandleAudioBecomingNoisy(true)
+            // 5 分钟提前缓存：扫描/慢介质抢 IO 时，播放不被拖住。
+            // 缓的是解码前压缩样点（CD 级 FLAC 5 分钟约 30MB），内存可接受。
+            .setLoadControl(audioLoadControl())
         if (bitPerfectUsb) {
             // stop exoplayer reading the file while the native flac engine handles decode + usb
             playerBuilder.setLoadControl(
                 com.decent.usbaudio.media3.UsbAudioSink.wrapLoadControl(
-                    androidx.media3.exoplayer.DefaultLoadControl.Builder().build()
+                    audioLoadControl()
                 ) { usbSink?.isNativeEngineActive == true }
             )
         }
@@ -304,6 +307,17 @@ class PlaybackService : MediaLibraryService() {
             withContext(Dispatchers.Main) { applyAudioEngine() }
         }
     }
+
+    // 5 分钟提前缓存：最小/最大都按 300s，起播 2.5s、重缓冲 5s 沿用默认
+    private fun audioLoadControl(): androidx.media3.exoplayer.DefaultLoadControl =
+        androidx.media3.exoplayer.DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                300_000,
+                300_000,
+                androidx.media3.exoplayer.DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
+                androidx.media3.exoplayer.DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+            )
+            .build()
 
     // runtime-switchable via volatile flags no rebuild the two eq engines are mutually exclusive so they never stack
     private fun applyAudioEngine() {
