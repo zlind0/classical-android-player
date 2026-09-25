@@ -1,4 +1,4 @@
-package com.aurora.music.ui.overlay
+package com.aurora.music.ui.components
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -33,8 +33,8 @@ private const val CHARS_PER_SEC = 4f
 private const val EDGE_DWELL_MS = 900L
 
 /**
- * 超长单行标题往返滚动：左对齐停留 → 线性滚到右对齐 → 右停留 → 线性滚回左，一直循环。
- * 速度约 4 字符/秒：用“总字符数/实测总宽度”换算成 px/s。不超长时就是普通左对齐单行。
+ * 超长单行标题往返滚动：一起始对齐边停留 → 线性滚到另一边 → 停留 → 线性滚回，一直循环。
+ * 速度约 4 字符/秒：用“总字符数/实测总宽度”换算成 px/s。不超长时就是普通单行文本。
  */
 @Composable
 fun MarqueeText(
@@ -45,6 +45,7 @@ fun MarqueeText(
     modifier: Modifier = Modifier,
     fontWeight: FontWeight = FontWeight.Bold,
     lineHeight: TextUnit = TextUnit.Unspecified,
+    textAlign: TextAlign = TextAlign.Center,
 ) {
     var boxPx by remember { mutableIntStateOf(0) }
     // 用无限宽约束实测文本宽（Box 内 onTextLayout 拿到的会被压到容器宽，超长永远测不出来）
@@ -106,7 +107,7 @@ fun MarqueeText(
             maxLines = 1,
             softWrap = false,
             overflow = TextOverflow.Visible,
-            textAlign = TextAlign.Center,
+            textAlign = textAlign,
             modifier = Modifier.fillMaxWidth().graphicsLayer { translationX = -offset.value },
         )
     }

@@ -69,6 +69,7 @@ import com.aurora.music.data.LibrarySource
 import com.aurora.music.data.lookupMergedTitle
 import com.aurora.music.data.mergeEnabledFor
 import com.aurora.music.model.Song
+import com.aurora.music.ui.components.MarqueeText
 import com.aurora.music.ui.components.TrackArtwork
 import com.aurora.music.ui.components.formatTime
 import com.aurora.music.ui.ios5.Ios5Sans
@@ -269,31 +270,29 @@ fun Ios5PlayerPage(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
-                        Text(
+                        MarqueeText(
                             merged.first,
                             color = Color.White,
                             fontSize = 15.sp, lineHeight = 19.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = Ios5Sans,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
                             modifier = Modifier.fillMaxWidth(),
                         )
                         Spacer(Modifier.height(2.dp))
-                        Text(
+                        MarqueeText(
                             merged.second.ifBlank { song.title },
                             color = Color(0xFFB9BEC7),
                             fontSize = 12.sp, lineHeight = 16.sp,
+                            fontWeight = FontWeight.Normal,
                             fontFamily = Ios5Sans,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
                 } else {
-                    Text(
+                    MarqueeText(
                         song.title.ifBlank { "未在播放" },
                         color = Color.White, fontSize = 19.sp, lineHeight = 22.sp,
                         fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }

@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aurora.music.ui.components.Artwork
+import com.aurora.music.ui.components.MarqueeText
 import com.aurora.music.ui.ios5.Ios5Sans
 import com.aurora.music.ui.player.Ios5TransportControls
 import com.aurora.music.viewmodel.RepeatMode
