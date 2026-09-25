@@ -11,7 +11,7 @@ android {
     ndkVersion = "27.0.12077973"
 
     defaultConfig {
-        applicationId = "com.aurora.music"
+        applicationId = "com.zlind0.ipodmusic"
         // Classical fork: floor is API 24 (Android 7.0) per plan §2.1. API 26+ calls must be
         // guarded with SDK_INT checks (plan §63); lint NewApi findings are tracked as follow-ups.
         minSdk = 24

@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name" translatable="false">Aurora</string>
+    <string name="app_name" translatable="false">iPod</string>
     <string name="widget_description" translatable="false">Now playing controls</string>
 
     <!-- Language -->
