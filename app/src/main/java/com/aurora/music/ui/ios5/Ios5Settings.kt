@@ -276,12 +276,20 @@ fun Ios5TextRow(
             onValueChange = onValueChange,
             placeholder = { Text(placeholder, fontSize = 14.sp) },
             singleLine = singleLine,
+            textStyle = androidx.compose.ui.text.TextStyle(color = Color.Black, fontSize = 15.sp),
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)),
             colors = TextFieldDefaults.colors(
+                focusedTextColor = Color.Black,
+                unfocusedTextColor = Color.Black,
+                disabledTextColor = Color.Black,
+                cursorColor = Color.Black,
                 focusedContainerColor = Ios5Colors.GroupBg,
                 unfocusedContainerColor = Ios5Colors.GroupBg,
+                disabledContainerColor = Ios5Colors.GroupBg,
                 focusedIndicatorColor = Color.Transparent,
                 unfocusedIndicatorColor = Color.Transparent,
+                focusedPlaceholderColor = Color(0xFF8E8E93),
+                unfocusedPlaceholderColor = Color(0xFF8E8E93),
             ),
         )
     }

@@ -362,6 +362,8 @@ fun SettingsTab(
                     Ios5Cell(title = "Sonic", onClick = { onOpen(Ios5Routes.SETTINGS_SONIC) })
                     Ios5CellDivider()
                     Ios5Cell(title = "可视化", onClick = { onOpen(Ios5Routes.SETTINGS_VISUALIZER) })
+                    Ios5CellDivider()
+                    Ios5Cell(title = "歌曲介绍", subtitle = "电台式解说", onClick = { onOpen(Ios5Routes.SETTINGS_INTRO) })
                 }
             }
             item {

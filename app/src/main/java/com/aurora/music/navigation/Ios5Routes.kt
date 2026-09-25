@@ -47,6 +47,10 @@ object Ios5Routes {
     const val SETTINGS_PERMISSIONS = "settings_permissions"
     const val SETTINGS_BACKUP = "settings_backup"
     const val SETTINGS_SOURCES = "settings_sources"
+    const val SETTINGS_INTRO = "settings_intro"
+    const val SETTINGS_INTRO_PROMPT = "settings_intro_prompt"
+    const val SETTINGS_INTRO_VOICE = "settings_intro_voice"
+    const val SETTINGS_INTRO_LOG = "settings_intro_log"
 
     // ---- library tools (folded into Settings, were drawer/top-level entries) ----
     const val HISTORY = "history"

@@ -706,6 +706,14 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         if (c.isPlaying) c.pause() else c.play()
     }
 
+    fun pause() {
+        controller?.pause()
+    }
+
+    fun play() {
+        controller?.play()
+    }
+
     fun seekTo(fraction: Float) {
         val c = controller ?: return
         val dur = _state.value.durationSec

@@ -420,6 +420,13 @@ class SettingsStore(private val context: Context) {
         val FLOAT_SIZE = floatPreferencesKey("float_size_dp")
         val FLOAT_X = intPreferencesKey("float_pos_x")
         val FLOAT_Y = intPreferencesKey("float_pos_y")
+        val INTRO_ENDPOINT = stringPreferencesKey("intro_llm_endpoint")
+        val INTRO_API_KEY = stringPreferencesKey("intro_llm_api_key")
+        val INTRO_MODEL = stringPreferencesKey("intro_llm_model")
+        val INTRO_PROMPT = stringPreferencesKey("intro_llm_prompt")
+        val INTRO_TTS_RATE = floatPreferencesKey("intro_tts_rate")
+        val INTRO_TTS_VOICE = stringPreferencesKey("intro_tts_voice")
+        val INTRO_TTS_ENGINE = stringPreferencesKey("intro_tts_engine")
     }
 
     val uiPrefs: Flow<UiPrefs> = context.dataStore.data.map { p ->
@@ -883,6 +890,27 @@ class SettingsStore(private val context: Context) {
     suspend fun setFloatingPosition(x: Int, y: Int) = context.dataStore.edit {
         it[Keys.FLOAT_X] = x; it[Keys.FLOAT_Y] = y
     }
+
+    val songIntroPrefs: Flow<SongIntroPrefs> = context.dataStore.data.map { p ->
+        SongIntroPrefs(
+            llmEndpoint = p[Keys.INTRO_ENDPOINT].orEmpty(),
+            llmApiKey = p[Keys.INTRO_API_KEY].orEmpty(),
+            llmModel = p[Keys.INTRO_MODEL].orEmpty(),
+            systemPrompt = p[Keys.INTRO_PROMPT].takeIf { !it.isNullOrBlank() } ?: DEFAULT_SONG_INTRO_PROMPT,
+            promptCustomized = !p[Keys.INTRO_PROMPT].isNullOrBlank(),
+            ttsRate = (p[Keys.INTRO_TTS_RATE] ?: 1.0f).coerceIn(0.5f, 2.0f),
+            ttsVoice = p[Keys.INTRO_TTS_VOICE].orEmpty(),
+            ttsEngine = p[Keys.INTRO_TTS_ENGINE].orEmpty(),
+        )
+    }.distinctUntilChanged()
+
+    suspend fun setIntroEndpoint(v: String) = context.dataStore.edit { it[Keys.INTRO_ENDPOINT] = v.trim().trimEnd('/') }
+    suspend fun setIntroApiKey(v: String) = context.dataStore.edit { it[Keys.INTRO_API_KEY] = v.trim() }
+    suspend fun setIntroModel(v: String) = context.dataStore.edit { it[Keys.INTRO_MODEL] = v.trim() }
+    suspend fun setIntroPrompt(v: String) = context.dataStore.edit { it[Keys.INTRO_PROMPT] = v }
+    suspend fun setIntroTtsRate(v: Float) = context.dataStore.edit { it[Keys.INTRO_TTS_RATE] = v.coerceIn(0.5f, 2.0f) }
+    suspend fun setIntroTtsVoice(v: String) = context.dataStore.edit { it[Keys.INTRO_TTS_VOICE] = v.trim() }
+    suspend fun setIntroTtsEngine(v: String) = context.dataStore.edit { it[Keys.INTRO_TTS_ENGINE] = v.trim() }
 
     // typed so json round-trips losslessly
     suspend fun exportPrefs(): PrefsBackup {

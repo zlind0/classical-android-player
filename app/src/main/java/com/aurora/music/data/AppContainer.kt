@@ -176,6 +176,9 @@ class AppContainer(context: Context) {
     val artistInfoClient = com.aurora.music.data.remote.ArtistInfoClient()
     val artistInfoStore = ArtistInfoStore(appContext)
 
+    val songIntroLog = SongIntroLogStore(appContext)
+    val songIntro = SongIntroController(appContext, settingsStore, songIntroLog)
+
     val isLocal: Boolean get() = true
 
     @Volatile private var hapticsEnabled = false

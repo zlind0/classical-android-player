@@ -122,6 +122,22 @@ fun Ios5App() {
             snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Short)
         }
     }
+    fun onIntroClick() {
+        val s = playerState.current
+        if (s.id.isNotEmpty()) container.songIntro.toggle(s)
+    }
+    val introState by container.songIntro.state.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) {
+        container.songIntro.music = object : com.aurora.music.data.IntroMusicControl {
+            override fun isPlaying(): Boolean = playerVM.state.value.isPlaying
+            override fun pause() = playerVM.pause()
+            override fun resume() = playerVM.play()
+        }
+        container.songIntro.events.collect { confirm(it) }
+    }
+    LaunchedEffect(playerState.current.id) {
+        container.songIntro.onSongChanged(playerState.current.id)
+    }
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
@@ -484,6 +500,35 @@ fun Ios5App() {
                                 confirm = { confirm(it) },
                             )
                         }
+                        composable(Ios5Routes.SETTINGS_INTRO) {
+                            com.aurora.music.ui.screens.settings.SongIntroSettingsScreen(
+                                contentPadding = PaddingValues(0.dp),
+                                onBack = { navController.popBackStack() },
+                                confirm = { confirm(it) },
+                                onOpenPrompt = { navController.navigate(Ios5Routes.SETTINGS_INTRO_PROMPT) },
+                                onOpenVoice = { navController.navigate(Ios5Routes.SETTINGS_INTRO_VOICE) },
+                                onOpenLog = { navController.navigate(Ios5Routes.SETTINGS_INTRO_LOG) },
+                            )
+                        }
+                        composable(Ios5Routes.SETTINGS_INTRO_PROMPT) {
+                            com.aurora.music.ui.screens.settings.SongIntroPromptScreen(
+                                contentPadding = PaddingValues(0.dp),
+                                onBack = { navController.popBackStack() },
+                            )
+                        }
+                        composable(Ios5Routes.SETTINGS_INTRO_VOICE) {
+                            com.aurora.music.ui.screens.settings.SongIntroVoiceScreen(
+                                contentPadding = PaddingValues(0.dp),
+                                onBack = { navController.popBackStack() },
+                            )
+                        }
+                        composable(Ios5Routes.SETTINGS_INTRO_LOG) {
+                            com.aurora.music.ui.screens.settings.SongIntroLogScreen(
+                                contentPadding = PaddingValues(0.dp),
+                                onBack = { navController.popBackStack() },
+                                confirm = { confirm(it) },
+                            )
+                        }
                         composable(Ios5Routes.HISTORY) {
                             com.aurora.music.ui.screens.stats.ListeningHistoryScreen(
                                 contentPadding = PaddingValues(0.dp),
@@ -733,6 +778,8 @@ fun Ios5App() {
                                     onToggleShuffle = { playerVM.toggleShuffle() },
                                     onCycleRepeat = { playerVM.cycleRepeat() },
                                     modifier = Modifier.padding(vertical = 2.dp),
+                                    introActive = introState.active,
+                                    onIntroClick = { onIntroClick() },
                                 )
                             }
                         }
@@ -766,6 +813,8 @@ fun Ios5App() {
                         onToggleShuffle = { playerVM.toggleShuffle() },
                         onCycleRepeat = { playerVM.cycleRepeat() },
                         onOpenQueue = { showQueue = true },
+                        introActive = introState.active,
+                        onIntroClick = { onIntroClick() },
                     )
                 }
             }

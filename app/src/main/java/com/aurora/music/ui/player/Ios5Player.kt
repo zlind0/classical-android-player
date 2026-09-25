@@ -38,7 +38,9 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -175,6 +177,8 @@ fun Ios5PlayerPage(
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
     onOpenQueue: () -> Unit,
+    introActive: Boolean = false,
+    onIntroClick: () -> Unit = {},
 ) {
     val song = state.current
     val context = LocalContext.current
@@ -349,6 +353,17 @@ fun Ios5PlayerPage(
                             indication = null,
                             interactionSource = remember { MutableInteractionSource() },
                             onClick = onCycleRepeat,
+                        ).padding(9.dp),
+                )
+                Icon(
+                    if (introActive) Icons.Filled.Stop else Icons.Outlined.HelpOutline,
+                    if (introActive) "停止介绍" else "歌曲介绍",
+                    tint = if (introActive) Color(0xFFD63A3A) else Color(0xFF6B7280),
+                    modifier = Modifier.size(40.dp).clip(CircleShape)
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() },
+                            onClick = onIntroClick,
                         ).padding(9.dp),
                 )
                 Icon(
@@ -562,6 +577,9 @@ fun Ios5TransportControls(
     scale: Float = 1f,
     // 横屏底栏铺开整宽五组均分；悬浮窗居中紧凑
     spread: Boolean = false,
+    introActive: Boolean = false,
+    // null = 不显示介绍键（后台悬浮窗）
+    onIntroClick: (() -> Unit)? = null,
 ) {
     Row(
         if (spread) modifier.fillMaxWidth() else modifier,
@@ -575,6 +593,15 @@ fun Ios5TransportControls(
             modifier = Modifier.size(28.dp * scale).clip(CircleShape).clickable(onClick = onToggleLike).padding(4.dp * scale),
         )
         if (!spread) Spacer(Modifier.width(2.dp * scale))
+        onIntroClick?.let { cb ->
+            Icon(
+                if (introActive) Icons.Filled.Stop else Icons.Outlined.HelpOutline,
+                if (introActive) "停止介绍" else "歌曲介绍",
+                tint = if (introActive) Color(0xFFD63A3A) else Color(0xFF8E8E93),
+                modifier = Modifier.size(28.dp * scale).clip(CircleShape).clickable(onClick = cb).padding(4.dp * scale),
+            )
+            if (!spread) Spacer(Modifier.width(2.dp * scale))
+        }
         Icon(
             Icons.Filled.SkipPrevious, "上一首", tint = Color.White,
             modifier = Modifier.size(36.dp * scale).clip(CircleShape).clickable(onClick = onPrevious).padding(6.dp * scale),
@@ -630,6 +657,8 @@ fun Ios5LandscapeTransport(
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
     modifier: Modifier = Modifier,
+    introActive: Boolean = false,
+    onIntroClick: (() -> Unit)? = null,
 ) {
     Ios5TransportControls(
         isPlaying = state.isPlaying,
@@ -644,5 +673,7 @@ fun Ios5LandscapeTransport(
         onCycleRepeat = onCycleRepeat,
         modifier = modifier,
         spread = true,
+        introActive = introActive,
+        onIntroClick = onIntroClick,
     )
 }
