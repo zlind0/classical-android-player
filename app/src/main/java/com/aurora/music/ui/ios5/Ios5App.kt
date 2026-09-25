@@ -185,6 +185,12 @@ fun Ios5App() {
             }
             onDispose { controller?.show(WindowInsetsCompat.Type.statusBars()) }
         }
+        // 返回键：竖屏且播放页开着 → 先关播放页（再按才作用于主页面）；
+        // 横屏播放页与主页面左右并排 → 返回键直接作用于主页面。
+        // 转横屏时清掉残留的 expanded，否则它会吞掉横屏的返回键。
+        LaunchedEffect(landscape) {
+            if (landscape && playerState.expanded) playerVM.setExpanded(false)
+        }
         // iOS5 翻转：内容面 / 播放面，前半程内容转走，后半程播放页转入（仅竖屏）
         val flipDensity = LocalDensity.current
         val flip by animateFloatAsState(
@@ -786,11 +792,14 @@ fun Ios5App() {
                 snackbarHostState,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 140.dp),
             )
+
+            // 注册在 NavHost 之后 → 优先级高于主页面导航：
+            // 竖屏播放页开着时返回先关播放页，再按才作用于主页面
+            BackHandler(enabled = !landscape && playerState.expanded) { playerVM.setExpanded(false) }
         }
       } // BoxWithConstraints 横竖屏分支结束
     }
 
-    BackHandler(enabled = playerState.expanded) { playerVM.setExpanded(false) }
     BackHandler(enabled = showQueue) { showQueue = false }
 
     // keep liked flags warm for visible tracks
