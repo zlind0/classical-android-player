@@ -250,6 +250,7 @@ fun Ios5PlayerPage(
                     song.artist.ifBlank { " " },
                     color = Color(0xFF9AA0AB),
                     fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
                     fontFamily = Ios5Sans,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
@@ -283,7 +284,7 @@ fun Ios5PlayerPage(
                             merged.second.ifBlank { song.title },
                             color = Color(0xFFB9BEC7),
                             fontSize = 12.sp, lineHeight = 16.sp,
-                            fontWeight = FontWeight.Normal,
+                            fontWeight = FontWeight.Bold,
                             fontFamily = Ios5Sans,
                             modifier = Modifier.fillMaxWidth(),
                         )
@@ -307,13 +308,15 @@ fun Ios5PlayerPage(
         ) {
             Text(
                 posLabel,
-                color = Color(0xFF6B7280), fontSize = 11.sp, lineHeight = 13.sp, fontFamily = Ios5Sans,
+                color = Color(0xFF6B7280), fontSize = 11.sp, lineHeight = 13.sp,
+                fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
                 textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     formatTime(state.positionSec.toInt()),
-                    color = Color(0xFF3E444D), fontSize = 12.sp, fontFamily = Ios5Sans,
+                    color = Color(0xFF3E444D), fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
                     modifier = Modifier.width(44.dp),
                 )
                 Ios5Slider(
@@ -324,7 +327,8 @@ fun Ios5PlayerPage(
                 )
                 Text(
                     "-${formatTime(remaining)}",
-                    color = Color(0xFF3E444D), fontSize = 12.sp, fontFamily = Ios5Sans,
+                    color = Color(0xFF3E444D), fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
                     textAlign = TextAlign.End, modifier = Modifier.width(44.dp),
                 )
             }
@@ -489,7 +493,8 @@ fun Ios5LandscapeSidePlayer(
                     ) {
                         Text(
                             formatTime(state.positionSec.toInt()),
-                            color = Color(0xFFD7DAE0), fontSize = 11.sp, fontFamily = Ios5Sans,
+                            color = Color(0xFFD7DAE0), fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
                             modifier = Modifier.width(40.dp),
                         )
                         Ios5Slider(
@@ -500,7 +505,8 @@ fun Ios5LandscapeSidePlayer(
                         )
                         Text(
                             "-${formatTime(remaining)}",
-                            color = Color(0xFFD7DAE0), fontSize = 11.sp, fontFamily = Ios5Sans,
+                            color = Color(0xFFD7DAE0), fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
                             textAlign = TextAlign.End, modifier = Modifier.width(40.dp),
                         )
                     }
@@ -514,7 +520,8 @@ fun Ios5LandscapeSidePlayer(
                 ) {
                     Text(
                         formatTime(state.positionSec.toInt()),
-                        color = Color(0xFFD7DAE0), fontSize = 11.sp, fontFamily = Ios5Sans,
+                        color = Color(0xFFD7DAE0), fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
                         modifier = Modifier.width(40.dp),
                     )
                     Ios5Slider(
@@ -525,7 +532,8 @@ fun Ios5LandscapeSidePlayer(
                     )
                     Text(
                         "-${formatTime(remaining)}",
-                        color = Color(0xFFD7DAE0), fontSize = 11.sp, fontFamily = Ios5Sans,
+                        color = Color(0xFFD7DAE0), fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
                         textAlign = TextAlign.End, modifier = Modifier.width(40.dp),
                     )
                 }

@@ -646,6 +646,7 @@ fun Ios5App() {
                                     Text(
                                         song.artist.ifBlank { " " },
                                         color = Color(0xFF9AA0AB), fontSize = 10.sp, lineHeight = 12.sp,
+                                        fontWeight = FontWeight.Bold,
                                         fontFamily = Ios5Sans,
                                         maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
                                         modifier = Modifier.fillMaxWidth(),
@@ -661,6 +662,7 @@ fun Ios5App() {
                                         Text(
                                             merged.second.ifBlank { song.title },
                                             color = Color(0xFFB9BEC7), fontSize = 11.sp, lineHeight = 13.sp,
+                                            fontWeight = FontWeight.Bold,
                                             fontFamily = Ios5Sans,
                                             maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
                                             modifier = Modifier.fillMaxWidth(),
