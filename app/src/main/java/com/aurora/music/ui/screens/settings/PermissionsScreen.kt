@@ -39,6 +39,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aurora.music.R
+import com.aurora.music.ui.overlay.canDrawOverlays
+import com.aurora.music.ui.overlay.openOverlaySettings
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5GlossButton
@@ -69,6 +71,7 @@ fun PermissionsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val batteryOk = (ctx.getSystemService(Context.POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(ctx.packageName)
     val exactOk = if (Build.VERSION.SDK_INT >= 31) (ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager).canScheduleExactAlarms() else true
     val fsOk = if (Build.VERSION.SDK_INT >= 34) (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).canUseFullScreenIntent() else true
+    val overlayOk = remember(refresh) { canDrawOverlays(ctx) }
 
     val usbDev = remember(refresh) { com.decent.usbaudio.UsbAudioDevice.getInstance(ctx) }
     val dac = remember(refresh) { usbDev.findUsbAudioDevice() }
@@ -125,6 +128,10 @@ fun PermissionsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
             Ios5CellDivider()
             PermRow(stringResource(R.string.perms_fs_alarm), stringResource(R.string.perms_fs_alarm_sub), fsOk) {
                 if (Build.VERSION.SDK_INT >= 34) open(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, withPackage = true)
+            }
+            Ios5CellDivider()
+            PermRow(stringResource(R.string.perms_overlay), stringResource(R.string.perms_overlay_sub), overlayOk) {
+                openOverlaySettings(ctx)
             }
             Ios5CellDivider()
             PermRow(stringResource(R.string.perms_usb), dacSub, dacOk, enabled = dac != null) {

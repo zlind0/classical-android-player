@@ -22,8 +22,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -34,6 +36,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -41,9 +44,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.R
+import com.aurora.music.data.FloatingPrefs
+import com.aurora.music.ui.overlay.canDrawOverlays
+import com.aurora.music.ui.overlay.openOverlaySettings
 import com.aurora.music.util.AppLocale
 import com.aurora.music.data.AccentMode
 import com.aurora.music.data.CornerStyle
@@ -54,6 +63,7 @@ import com.aurora.music.data.ThemeStyle
 import com.aurora.music.data.UiPrefs
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5Colors
+import com.aurora.music.ui.ios5.Ios5ActionRow
 import com.aurora.music.ui.ios5.Ios5SegmentRow
 import com.aurora.music.ui.ios5.Ios5SettingsPage
 import com.aurora.music.ui.ios5.Ios5SliderRow
@@ -78,7 +88,21 @@ fun AppearanceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val store = container.settingsStore
     val prefs by store.uiPrefs.collectAsStateWithLifecycle(initialValue = UiPrefs())
+    val floating by store.floatingPrefs.collectAsStateWithLifecycle(initialValue = FloatingPrefs())
     val scope = rememberCoroutineScope()
+    val appCtx = LocalContext.current
+    val cfg = LocalConfiguration.current
+    // 悬浮窗上限 = 0.8×短边（dp），和窗口管理器的钳制同口径
+    val floatingMaxDp = (minOf(cfg.screenWidthDp, cfg.screenHeightDp) * FloatingPrefs.MAX_SCREEN_FRACTION).coerceAtLeast(FloatingPrefs.MIN_SIZE_DP)
+    // 从系统设置页授权回来时重读权限态
+    val permOwner = LocalLifecycleOwner.current
+    var permTick by remember { mutableIntStateOf(0) }
+    DisposableEffect(permOwner) {
+        val obs = LifecycleEventObserver { _, e -> if (e == Lifecycle.Event.ON_RESUME) permTick++ }
+        permOwner.lifecycle.addObserver(obs)
+        onDispose { permOwner.lifecycle.removeObserver(obs) }
+    }
+    val overlayOk = remember(permTick) { canDrawOverlays(appCtx) }
     val materialYouSupported = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
     // labels hoisted: stringResource is @Composable and illegal directly in the LazyColumn DSL scope
     val homeSectionLabels = mapOf(
@@ -97,7 +121,9 @@ fun AppearanceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val strAccentSection = stringResource(R.string.appearance_section_accent)
     val strDisplaySection = stringResource(R.string.appearance_section_display)
     val strPlayerSection = stringResource(R.string.appearance_section_player)
+    val strFloatingSection = stringResource(R.string.appearance_section_floating)
     val strMiniSection = stringResource(R.string.appearance_section_mini)
+    val strFloatingSizeSub = stringResource(R.string.appearance_floating_size_sub)
     val strLibrarySection = stringResource(R.string.appearance_section_library)
     val strHomeSection = stringResource(R.string.appearance_section_home)
     val strHint = when (prefs.themeMode) {
@@ -222,6 +248,32 @@ fun AppearanceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                 scope.launch { store.setPlayerShowUtilities(v) }
             }
         }
+
+        ios5Section(strFloatingSection) {
+            if (!overlayOk) {
+                Ios5ActionRow(stringResource(R.string.appearance_floating_permission) + " · " + stringResource(R.string.appearance_floating_grant)) {
+                    openOverlaySettings(appCtx)
+                }
+                Ios5CellDivider()
+            }
+            Ios5SwitchRow(title = stringResource(R.string.appearance_floating_enable), subtitle = stringResource(R.string.appearance_floating_enable_sub), checked = floating.enabled) { v ->
+                scope.launch { store.setFloatingEnabled(v) }
+            }
+            Ios5CellDivider()
+            Ios5SwitchRow(title = stringResource(R.string.appearance_floating_pinch), subtitle = stringResource(R.string.appearance_floating_pinch_sub), checked = floating.pinchZoom) { v ->
+                scope.launch { store.setFloatingPinch(v) }
+            }
+            Ios5CellDivider()
+            Ios5SliderRow(
+                stringResource(R.string.appearance_floating_size),
+                "${floating.sizeDp.roundToInt()}dp",
+                floating.sizeDp.coerceIn(FloatingPrefs.MIN_SIZE_DP, floatingMaxDp),
+                FloatingPrefs.MIN_SIZE_DP..floatingMaxDp,
+            ) { v ->
+                scope.launch { store.setFloatingSize(v) }
+            }
+        }
+        ios5FootNote(strFloatingSizeSub)
 
         ios5Section(strMiniSection) {
             Ios5SegmentRow(

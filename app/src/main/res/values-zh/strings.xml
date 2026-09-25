@@ -909,4 +909,15 @@
     <string name="eq_kind_earbuds_sub">非密封耳塞和开放耳实测，包括 Shokz。</string>
     <string name="eq_kind_speakers">音箱 / 蓝牙音箱</string>
     <string name="eq_kind_speakers_sub">Spinorama 音箱实测校正，包括蓝牙型号，摆位和房间仍有影响。</string>
+    <string name="appearance_section_floating">悬浮窗</string>
+    <string name="appearance_floating_enable">切后台时显示</string>
+    <string name="appearance_floating_enable_sub">切到后台时在其他应用上层显示方形专辑悬浮窗</string>
+    <string name="appearance_floating_pinch">双指捏合缩放</string>
+    <string name="appearance_floating_pinch_sub">在悬浮窗上双指捏合，松手后记住大小</string>
+    <string name="appearance_floating_size">窗口大小</string>
+    <string name="appearance_floating_size_sub">200dp 到屏幕短边的 80%</string>
+    <string name="appearance_floating_permission">悬浮窗权限未开</string>
+    <string name="appearance_floating_grant">去开</string>
+    <string name="perms_overlay">悬浮窗权限</string>
+    <string name="perms_overlay_sub">后台悬浮窗需要此权限</string>
 </resources>

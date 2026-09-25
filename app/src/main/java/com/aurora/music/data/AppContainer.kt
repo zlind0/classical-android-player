@@ -253,6 +253,11 @@ class AppContainer(context: Context) {
         smartEngine = smartEngine,
     )
 
+    // 后台方形悬浮窗（app 作用域，切后台才挂 WindowManager）
+    val floatingWindow by lazy {
+        com.aurora.music.ui.overlay.FloatingWindowManager(appContext, settingsStore, repository)
+    }
+
     private fun recomputeOffline() {
         _offline.value = false
         _noNetwork.value = !networkUp

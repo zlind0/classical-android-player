@@ -912,4 +912,15 @@
     <string name="eq_kind_earbuds_sub">Unsealed earbuds and measured open-ear models, including Shokz.</string>
     <string name="eq_kind_speakers">Speakers / Bluetooth</string>
     <string name="eq_kind_speakers_sub">Measured speaker correction from Spinorama, including Bluetooth models. Placement and room acoustics still affect the result.</string>
+    <string name="appearance_section_floating">Floating window</string>
+    <string name="appearance_floating_enable">Show when in background</string>
+    <string name="appearance_floating_enable_sub">Square album window over other apps when Aurora is backgrounded</string>
+    <string name="appearance_floating_pinch">Pinch to resize</string>
+    <string name="appearance_floating_pinch_sub">Two-finger pinch on the window; size is saved on release</string>
+    <string name="appearance_floating_size">Window size</string>
+    <string name="appearance_floating_size_sub">200dp to 80% of the shorter screen edge</string>
+    <string name="appearance_floating_permission">Overlay permission is off</string>
+    <string name="appearance_floating_grant">Grant</string>
+    <string name="perms_overlay">Display over other apps</string>
+    <string name="perms_overlay_sub">Needed for the background floating window</string>
 </resources>

@@ -517,6 +517,82 @@ fun Ios5LandscapeSidePlayer(
 }
 
 // 横向底部整条栏右侧的走带键：喜欢在上一首左侧垂直居中，循环/随机在下一首右侧上下排列
+//
+// 走带键核心（横屏底栏与后台悬浮窗共用，保证同构）：悬浮窗按窗口边长传 scale 等比缩放图标。
+@Composable
+fun Ios5TransportControls(
+    isPlaying: Boolean,
+    shuffle: Boolean,
+    repeat: RepeatMode,
+    isLiked: Boolean,
+    onTogglePlay: () -> Unit,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
+    onToggleLike: () -> Unit,
+    onToggleShuffle: () -> Unit,
+    onCycleRepeat: () -> Unit,
+    modifier: Modifier = Modifier,
+    scale: Float = 1f,
+    // 横屏底栏铺开整宽五组均分；悬浮窗居中紧凑
+    spread: Boolean = false,
+) {
+    Row(
+        if (spread) modifier.fillMaxWidth() else modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = if (spread) Arrangement.SpaceEvenly else Arrangement.Center,
+    ) {
+        Icon(
+            if (isLiked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+            "喜欢",
+            tint = if (isLiked) Color(0xFFD63A3A) else Color(0xFF8E8E93),
+            modifier = Modifier.size(28.dp * scale).clip(CircleShape).clickable(onClick = onToggleLike).padding(4.dp * scale),
+        )
+        if (!spread) Spacer(Modifier.width(2.dp * scale))
+        Icon(
+            Icons.Filled.SkipPrevious, "上一首", tint = Color.White,
+            modifier = Modifier.size(36.dp * scale).clip(CircleShape).clickable(onClick = onPrevious).padding(6.dp * scale),
+        )
+        Icon(
+            if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+            if (isPlaying) "暂停" else "播放", tint = Color.White,
+            modifier = Modifier.size(48.dp * scale).clip(CircleShape).clickable(onClick = onTogglePlay).padding(6.dp * scale),
+        )
+        Icon(
+            Icons.Filled.SkipNext, "下一首", tint = Color.White,
+            modifier = Modifier.size(36.dp * scale).clip(CircleShape).clickable(onClick = onNext).padding(6.dp * scale),
+        )
+        if (!spread) Spacer(Modifier.width(2.dp * scale))
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Icon(
+                when (repeat) {
+                    RepeatMode.ONE -> Icons.Filled.RepeatOne
+                    else -> Icons.Filled.Repeat
+                },
+                "循环",
+                tint = if (repeat == RepeatMode.OFF) Color(0xFF8E8E93) else Color(0xFF0A60D6),
+                modifier = Modifier.size(22.dp * scale).clip(CircleShape)
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() },
+                        onClick = onCycleRepeat,
+                    ).padding(3.dp * scale),
+            )
+            Icon(
+                Icons.Filled.Shuffle, "随机",
+                tint = if (shuffle) Color(0xFF0A60D6) else Color(0xFF8E8E93),
+                modifier = Modifier.size(22.dp * scale).clip(CircleShape)
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() },
+                        onClick = onToggleShuffle,
+                    ).padding(3.dp * scale),
+            )
+        }
+    }
+}
+
 @Composable
 fun Ios5LandscapeTransport(
     state: PlayerUiState,
@@ -528,57 +604,18 @@ fun Ios5LandscapeTransport(
     onCycleRepeat: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceEvenly,
-    ) {
-        Icon(
-            if (state.isCurrentLiked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-            "喜欢",
-            tint = if (state.isCurrentLiked) Color(0xFFD63A3A) else Color(0xFF8E8E93),
-            modifier = Modifier.size(28.dp).clip(CircleShape).clickable(onClick = onToggleLike).padding(4.dp),
-        )
-        Icon(
-            Icons.Filled.SkipPrevious, "上一首", tint = Color.White,
-            modifier = Modifier.size(36.dp).clip(CircleShape).clickable(onClick = onPrevious).padding(6.dp),
-        )
-        Icon(
-            if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-            if (state.isPlaying) "暂停" else "播放", tint = Color.White,
-            modifier = Modifier.size(48.dp).clip(CircleShape).clickable(onClick = onTogglePlay).padding(6.dp),
-        )
-        Icon(
-            Icons.Filled.SkipNext, "下一首", tint = Color.White,
-            modifier = Modifier.size(36.dp).clip(CircleShape).clickable(onClick = onNext).padding(6.dp),
-        )
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Icon(
-                when (state.repeat) {
-                    RepeatMode.ONE -> Icons.Filled.RepeatOne
-                    else -> Icons.Filled.Repeat
-                },
-                "循环",
-                tint = if (state.repeat == RepeatMode.OFF) Color(0xFF8E8E93) else Color(0xFF0A60D6),
-                modifier = Modifier.size(22.dp).clip(CircleShape)
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() },
-                        onClick = onCycleRepeat,
-                    ).padding(3.dp),
-            )
-            Icon(
-                Icons.Filled.Shuffle, "随机",
-                tint = if (state.shuffle) Color(0xFF0A60D6) else Color(0xFF8E8E93),
-                modifier = Modifier.size(22.dp).clip(CircleShape)
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() },
-                        onClick = onToggleShuffle,
-                    ).padding(3.dp),
-            )
-        }
-    }
+    Ios5TransportControls(
+        isPlaying = state.isPlaying,
+        shuffle = state.shuffle,
+        repeat = state.repeat,
+        isLiked = state.isCurrentLiked,
+        onTogglePlay = onTogglePlay,
+        onNext = onNext,
+        onPrevious = onPrevious,
+        onToggleLike = onToggleLike,
+        onToggleShuffle = onToggleShuffle,
+        onCycleRepeat = onCycleRepeat,
+        modifier = modifier,
+        spread = true,
+    )
 }

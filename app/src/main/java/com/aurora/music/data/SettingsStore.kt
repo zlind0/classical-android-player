@@ -279,6 +279,24 @@ data class GesturePrefs(
     val doubleTapPause: Boolean = true,
 )
 
+// 悬浮窗偏好：切后台时显示的方形封面窗。
+// sizeDp/posX/posY 只在手势放手（拖动/捏合结束）和设置滑杆松手时写入，
+// 手势过程中只更新 WindowManager，不碰 DataStore。
+data class FloatingPrefs(
+    val enabled: Boolean = true,
+    val pinchZoom: Boolean = true,
+    val sizeDp: Float = 280f,
+    // px 绝对坐标；Int.MIN_VALUE = 从未定位，按“右侧垂直居中”自动摆放
+    val posX: Int = Int.MIN_VALUE,
+    val posY: Int = Int.MIN_VALUE,
+) {
+    companion object {
+        const val MIN_SIZE_DP = 200f
+        const val MAX_SCREEN_FRACTION = 0.8f
+        const val UNPLACED = Int.MIN_VALUE
+    }
+}
+
 class SettingsStore(private val context: Context) {
 
     private val gson = Gson()
@@ -397,6 +415,11 @@ class SettingsStore(private val context: Context) {
         val UI_LIBRARY_COLUMNS = intPreferencesKey("ui_library_columns")
         val UI_HIDDEN_HOME = stringSetPreferencesKey("ui_hidden_home")
         val UI_HIDE_STATUS_LANDSCAPE = booleanPreferencesKey("ui_hide_status_landscape")
+        val FLOAT_ENABLED = booleanPreferencesKey("float_enabled")
+        val FLOAT_PINCH = booleanPreferencesKey("float_pinch")
+        val FLOAT_SIZE = floatPreferencesKey("float_size_dp")
+        val FLOAT_X = intPreferencesKey("float_pos_x")
+        val FLOAT_Y = intPreferencesKey("float_pos_y")
     }
 
     val uiPrefs: Flow<UiPrefs> = context.dataStore.data.map { p ->
@@ -840,6 +863,25 @@ class SettingsStore(private val context: Context) {
         val set = (p[Keys.UI_HIDDEN_HOME] ?: emptySet()).toMutableSet()
         if (hidden) set.add(id) else set.remove(id)
         p[Keys.UI_HIDDEN_HOME] = set
+    }
+
+    val floatingPrefs: Flow<FloatingPrefs> = context.dataStore.data.map { p ->
+        FloatingPrefs(
+            enabled = p[Keys.FLOAT_ENABLED] ?: true,
+            pinchZoom = p[Keys.FLOAT_PINCH] ?: true,
+            sizeDp = (p[Keys.FLOAT_SIZE] ?: 280f).coerceIn(FloatingPrefs.MIN_SIZE_DP, 1200f),
+            posX = p[Keys.FLOAT_X] ?: FloatingPrefs.UNPLACED,
+            posY = p[Keys.FLOAT_Y] ?: FloatingPrefs.UNPLACED,
+        )
+    }.distinctUntilChanged()
+
+    suspend fun setFloatingEnabled(v: Boolean) = context.dataStore.edit { it[Keys.FLOAT_ENABLED] = v }
+    suspend fun setFloatingPinch(v: Boolean) = context.dataStore.edit { it[Keys.FLOAT_PINCH] = v }
+    suspend fun setFloatingSize(v: Float) = context.dataStore.edit {
+        it[Keys.FLOAT_SIZE] = v.coerceIn(FloatingPrefs.MIN_SIZE_DP, 1200f)
+    }
+    suspend fun setFloatingPosition(x: Int, y: Int) = context.dataStore.edit {
+        it[Keys.FLOAT_X] = x; it[Keys.FLOAT_Y] = y
     }
 
     // typed so json round-trips losslessly
