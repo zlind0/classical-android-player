@@ -29,8 +29,8 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.TextUnit
 import kotlinx.coroutines.delay
 
-private const val CHARS_PER_SEC = 4f
-private const val EDGE_DWELL_MS = 900L
+private const val CHARS_PER_SEC = 2f
+private const val EDGE_DWELL_MS = 2000L
 
 /**
  * 超长单行标题往返滚动：一起始对齐边停留 → 线性滚到另一边 → 停留 → 线性滚回，一直循环。
