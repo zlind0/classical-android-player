@@ -52,6 +52,33 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- 电子书：作为 epub/mobi/azw/azw3 的打开方式（带类型） -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/epub+zip" />
+                <data android:mimeType="application/x-mobipocket-ebook" />
+                <data android:mimeType="application/vnd.amazon.ebook" />
+                <data android:mimeType="application/vnd.amazon.mobi8-ebook" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:pathPattern=".*\.epub" />
+                <data android:pathPattern=".*\.mobi" />
+                <data android:pathPattern=".*\.azw" />
+                <data android:pathPattern=".*\.azw3" />
+            </intent-filter>
+            <!-- 电子书：部分文件管理器不带 mimeType，只按扩展名匹配 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:pathPattern=".*\.epub" />
+                <data android:pathPattern=".*\.mobi" />
+                <data android:pathPattern=".*\.azw" />
+                <data android:pathPattern=".*\.azw3" />
+            </intent-filter>
             <!-- deliberately no USB_DEVICE_ATTACHED filter or android pops a chooser on every DAC plug -->
         </activity>
 

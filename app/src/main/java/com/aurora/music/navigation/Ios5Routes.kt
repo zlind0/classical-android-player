@@ -12,6 +12,7 @@ object Ios5Routes {
     const val HOME = "ios5_home"
     const val PLAYLISTS = "ios5_playlists"
     const val ARTISTS = "ios5_artists"
+    const val EBOOKS = "ios5_ebooks"
     const val MORE = "ios5_more"
     const val SETTINGS = "ios5_settings"
 
@@ -30,6 +31,19 @@ object Ios5Routes {
     fun detail(kind: String, id: String, title: String = "") =
         "ios5_detail/${Uri.encode(kind)}/${Uri.encode(id)}/${Uri.encode(title)}"
 
+    // ---- 电子书 ----
+    const val EBOOK_LIB = "ios5_ebook_lib?shelf={shelf}&rootId={rootId}&rpath={rpath}&dir={dir}&title={title}"
+    fun ebookLib(
+        shelf: Boolean = false,
+        rootId: Long = 0L,
+        rootPath: String = "",
+        dir: String = "",
+        title: String = "",
+    ) = "ios5_ebook_lib?shelf=$shelf&rootId=$rootId&rpath=${Uri.encode(rootPath)}&dir=${Uri.encode(dir)}&title=${Uri.encode(title)}"
+    const val EBOOK_SEARCH = "ios5_ebook_search"
+    const val EBOOK_READER = "ebook_reader?epath={epath}"
+    fun ebookReader(path: String) = "ebook_reader?epath=${Uri.encode(path)}"
+
     // ---- search (scope = songs|albums|genres|composers|all) ----
     const val SEARCH = "ios5_search?scope={scope}"
     fun search(scope: String = "all") = "ios5_search?scope=${Uri.encode(scope)}"
@@ -47,6 +61,7 @@ object Ios5Routes {
     const val SETTINGS_PERMISSIONS = "settings_permissions"
     const val SETTINGS_BACKUP = "settings_backup"
     const val SETTINGS_SOURCES = "settings_sources"
+    const val SETTINGS_EBOOK_SOURCES = "settings_ebook_sources"
     const val SETTINGS_INTRO = "settings_intro"
     const val SETTINGS_INTRO_PROMPT = "settings_intro_prompt"
     const val SETTINGS_INTRO_VOICE = "settings_intro_voice"
@@ -71,6 +86,7 @@ val ios5Tabs = listOf(
     Ios5Tab(Ios5Routes.HOME, "首页"),
     Ios5Tab(Ios5Routes.PLAYLISTS, "歌单"),
     Ios5Tab(Ios5Routes.ARTISTS, "艺人"),
+    Ios5Tab(Ios5Routes.EBOOKS, "电子书"),
     Ios5Tab(Ios5Routes.MORE, "更多"),
     Ios5Tab(Ios5Routes.SETTINGS, "设置"),
 )

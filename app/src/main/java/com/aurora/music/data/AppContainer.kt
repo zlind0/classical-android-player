@@ -72,6 +72,14 @@ class AppContainer(context: Context) {
     val musicRoots = MusicRootsStore(appContext, filesDb.filesDao())
     val rootScanner = RootScanner(musicRoots, appContext)
 
+    // 电子书栈：独立 Room 库 + 仓库 + 扫描器 + 阅读偏好
+    private val ebookDb: com.aurora.music.data.ebook.EbookDb = Room.databaseBuilder(
+        appContext, com.aurora.music.data.ebook.EbookDb::class.java, "ebook_library.db",
+    ).build()
+    val ebookStore = com.aurora.music.data.ebook.EbookStore(appContext, ebookDb.ebookDao())
+    val ebookScanner = com.aurora.music.data.ebook.EbookScanner(ebookStore, ebookDb.ebookDao())
+    val ebookPrefs = com.aurora.music.data.ebook.EbookPrefs(appContext)
+
     // 曲库来源开关（默认 MEDIastore）。两个栈各自独立，切换 = 换 backend + 按源加载。
     private val _librarySource = MutableStateFlow(LibrarySource.MEDIastore)
     val librarySource: StateFlow<LibrarySource> = _librarySource.asStateFlow()

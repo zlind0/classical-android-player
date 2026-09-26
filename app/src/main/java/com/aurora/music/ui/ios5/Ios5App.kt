@@ -91,6 +91,7 @@ import com.aurora.music.ui.player.Ios5MiniStrip
 import com.aurora.music.ui.player.Ios5PlayerPage
 import com.aurora.music.ui.search.Ios5SearchPage
 import com.aurora.music.ui.tabs.ArtistsTab
+import com.aurora.music.ui.tabs.EbooksTab
 import com.aurora.music.ui.tabs.HomeTab
 import com.aurora.music.ui.tabs.MoreTab
 import com.aurora.music.ui.tabs.PlaylistsTab
@@ -138,6 +139,23 @@ fun Ios5App() {
     LaunchedEffect(playerState.current.id) {
         container.songIntro.onSongChanged(playerState.current.id)
     }
+    // 外部打开电子书（文件关联）：导入完成后跳阅读页；失败则提示
+    val pendingEbook by container.ebookStore.openRequest.collectAsStateWithLifecycle()
+    val ebookNotice by container.ebookStore.notice.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingEbook, sessionReady) {
+        val p = pendingEbook
+        if (p != null && sessionReady != null) {
+            container.ebookStore.takeOpenRequest()
+            navController.navigate(Ios5Routes.ebookReader(p))
+        }
+    }
+    LaunchedEffect(ebookNotice) {
+        val n = ebookNotice
+        if (n != null) {
+            container.ebookStore.takeNotice()
+            confirm(n)
+        }
+    }
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
@@ -146,6 +164,8 @@ fun Ios5App() {
         if (currentRoute in ios5TabRoutes) lastTab = currentRoute ?: Ios5Routes.HOME
     }
     val tabHighlight = if (currentRoute in ios5TabRoutes) currentRoute else lastTab
+    // 阅读器全屏独占：不带 tab/mini 条，不参与翻转动画
+    val isEbookReader = currentRoute?.startsWith("ebook_reader") == true
 
     var showQueue by remember { mutableStateOf(false) }
 
@@ -275,6 +295,63 @@ fun Ios5App() {
                                 onOpenDetail = { k, i, t -> openDetail(k, i, t) },
                                 onOpenSearch = { navController.navigate(Ios5Routes.search("artists")) },
                             )
+                        }
+                        composable(Ios5Routes.EBOOKS) {
+                            EbooksTab(
+                                onOpenShelf = { navController.navigate(Ios5Routes.ebookLib(shelf = true, title = "默认书架")) },
+                                onOpenRoot = { id, dir, title ->
+                                    navController.navigate(
+                                        Ios5Routes.ebookLib(rootId = id, rootPath = dir, dir = dir, title = title),
+                                    )
+                                },
+                                onOpenBook = { p -> navController.navigate(Ios5Routes.ebookReader(p)) },
+                                onOpenSearch = { navController.navigate(Ios5Routes.EBOOK_SEARCH) },
+                            )
+                        }
+                        composable(
+                            Ios5Routes.EBOOK_LIB,
+                            arguments = listOf(
+                                androidx.navigation.navArgument("shelf") { defaultValue = "false" },
+                                androidx.navigation.navArgument("rootId") { defaultValue = "0" },
+                                androidx.navigation.navArgument("rpath") { defaultValue = "" },
+                                androidx.navigation.navArgument("dir") { defaultValue = "" },
+                                androidx.navigation.navArgument("title") { defaultValue = "" },
+                            ),
+                        ) { entry ->
+                            val shelf = entry.arguments?.getString("shelf") == "true"
+                            val rootId = entry.arguments?.getString("rootId")?.toLongOrNull() ?: 0L
+                            val rootPath = Uri.decode(entry.arguments?.getString("rpath").orEmpty())
+                            val dirArg = Uri.decode(entry.arguments?.getString("dir").orEmpty())
+                            val libTitle = Uri.decode(entry.arguments?.getString("title").orEmpty())
+                            com.aurora.music.ui.ebook.EbookLibraryScreen(
+                                isShelf = shelf,
+                                rootPath = rootPath.ifBlank { dirArg },
+                                dirPath = if (shelf) "" else dirArg,
+                                title = libTitle.ifBlank { if (shelf) "默认书架" else "" },
+                                onBack = { navController.popBackStack() },
+                                onOpenDir = { d, t ->
+                                    navController.navigate(
+                                        Ios5Routes.ebookLib(rootId = rootId, rootPath = rootPath.ifBlank { dirArg }, dir = d, title = t),
+                                    )
+                                },
+                                onOpenBook = { p -> navController.navigate(Ios5Routes.ebookReader(p)) },
+                                confirm = { confirm(it) },
+                            )
+                        }
+                        composable(Ios5Routes.EBOOK_SEARCH) {
+                            com.aurora.music.ui.ebook.EbookSearchScreen(
+                                onBack = { navController.popBackStack() },
+                                onOpenBook = { p -> navController.navigate(Ios5Routes.ebookReader(p)) },
+                            )
+                        }
+                        composable(
+                            Ios5Routes.EBOOK_READER,
+                            arguments = listOf(
+                                androidx.navigation.navArgument("epath") { defaultValue = "" },
+                            ),
+                        ) {
+                            // 阅读器全屏渲染在 NavHost 之外（见下），这里留空避免黑屏闪烁
+                            Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black))
                         }
                         composable(Ios5Routes.MORE) {
                             MoreTab(onOpenRoute = { navController.navigate(it) })
@@ -459,6 +536,13 @@ fun Ios5App() {
                                 confirm = { confirm(it) },
                             )
                         }
+                        composable(Ios5Routes.SETTINGS_EBOOK_SOURCES) {
+                            com.aurora.music.ui.screens.settings.EbookSourcesScreen(
+                                contentPadding = PaddingValues(0.dp),
+                                onBack = { navController.popBackStack() },
+                                confirm = { confirm(it) },
+                            )
+                        }
                         composable(Ios5Routes.SETTINGS_STORAGE) {
                             com.aurora.music.ui.screens.settings.StorageSettingsScreen(
                                 contentPadding = PaddingValues(0.dp),
@@ -625,7 +709,14 @@ fun Ios5App() {
             } // 内容 Box 结束
             } // ContentFace 内容面函数结束
 
-            if (landscape) {
+            if (isEbookReader) {
+                // ---- 阅读器：竖横屏一律全屏独占（自己的隐藏状态栏/底键逻辑在内部） ----
+                val epath = Uri.decode(backStackEntry?.arguments?.getString("epath").orEmpty())
+                com.aurora.music.ui.ebook.EbookReaderScreen(
+                    bookPath = epath,
+                    onClose = { navController.popBackStack() },
+                )
+            } else if (landscape) {
                 // ---- 横向：顶整条栏 + 中部（左主界面 + 右播放侧栏）+ 底整条栏 ----
                 // 系统三按钮控制条背后一律黑色：顶/底栏黑底延伸进 insets 区，内容避让
                 val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -654,7 +745,8 @@ fun Ios5App() {
                                 Modifier.weight(1f).fillMaxHeight().padding(horizontal = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Box(Modifier.width(56.dp), contentAlignment = Alignment.CenterStart) {
+                                val sideW = if (topSpec?.onAction != null) 100.dp else 56.dp
+                                Box(Modifier.width(sideW), contentAlignment = Alignment.CenterStart) {
                                     topSpec?.onBack?.let { back ->
                                         Icon(
                                             Icons.AutoMirrored.Filled.ArrowBackIos, "返回", tint = Color.White,
@@ -670,7 +762,15 @@ fun Ios5App() {
                                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
                                     modifier = Modifier.weight(1f),
                                 )
-                                Box(Modifier.width(56.dp), contentAlignment = Alignment.CenterEnd) {
+                                Box(Modifier.width(sideW), contentAlignment = Alignment.CenterEnd) {
+                                    topSpec?.takeIf { it.onAction != null && it.actionLabel != null }?.let { spec ->
+                                        Text(
+                                            spec.actionLabel.orEmpty(), color = Color.White,
+                                            fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
+                                            maxLines = 1,
+                                            modifier = Modifier.clip(CircleShape).clickable(onClick = { spec.onAction?.invoke() }).padding(6.dp),
+                                        )
+                                    }
                                     topSpec?.onSearch?.let { search ->
                                         Icon(
                                             Icons.Filled.Search, "搜索", tint = Color.White,

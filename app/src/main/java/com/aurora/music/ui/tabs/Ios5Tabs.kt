@@ -341,6 +341,8 @@ fun SettingsTab(
                 Ios5Group(Modifier.padding(horizontal = 12.dp)) {
                     Ios5Cell(title = "音乐来源", subtitle = "目录 / 扫描", onClick = { onOpen(Ios5Routes.SETTINGS_SOURCES) })
                     Ios5CellDivider()
+                    Ios5Cell(title = "电子书来源", subtitle = "目录 / 扫描", onClick = { onOpen(Ios5Routes.SETTINGS_EBOOK_SOURCES) })
+                    Ios5CellDivider()
                     Ios5Cell(title = "播放历史", onClick = { onOpen(Ios5Routes.HISTORY) })
                     Ios5CellDivider()
                     Ios5Cell(title = "听歌统计", onClick = { onOpen(Ios5Routes.STATS) })

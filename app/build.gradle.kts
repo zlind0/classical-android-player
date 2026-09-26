@@ -113,4 +113,6 @@ dependencies {
     implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.5.0+1")
     debugImplementation(libs.androidx.ui.tooling)
     testImplementation("junit:junit:4.13.2")
+    // JVM 单测解析 EPUB 用（XmlPullParser 接口实现；APK 内仍用系统 kxml）
+    testImplementation("xpp3:xpp3:1.1.4c")
 }

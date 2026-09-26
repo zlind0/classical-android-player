@@ -51,6 +51,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
@@ -91,6 +92,8 @@ data class TopBarSpec(
     val title: String,
     val onBack: (() -> Unit)? = null,
     val onSearch: (() -> Unit)? = null,
+    val actionLabel: String? = null,
+    val onAction: (() -> Unit)? = null,
 )
 
 class TopBarHost {
@@ -105,14 +108,18 @@ fun Ios5NavBar(
     title: String,
     onBack: (() -> Unit)? = null,
     onSearch: (() -> Unit)? = null,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
 ) {
     // 横向合并模式：自己不上栏，把标题/返回/搜索上报给 App 顶整条栏统一渲染
     val host = LocalTopBarHost.current
     if (host != null) {
-        SideEffect { host.spec = TopBarSpec(title, onBack, onSearch) }
+        SideEffect { host.spec = TopBarSpec(title, onBack, onSearch, actionLabel, onAction) }
         return
     }
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    // 右侧双键（搜索+文字动作）时两侧槽加宽，标题保持真居中
+    val sideWidth = if (actionLabel != null && onAction != null) 108.dp else 64.dp
     Column(
         Modifier.fillMaxWidth()
             .background(Ios5Colors.metalBrush)
@@ -124,7 +131,7 @@ fun Ios5NavBar(
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 // 两侧等宽槽：标题永远真居中
-                Box(Modifier.width(64.dp), contentAlignment = Alignment.CenterStart) {
+                Box(Modifier.width(sideWidth), contentAlignment = Alignment.CenterStart) {
                     if (onBack != null) {
                         Ios5BarButton(onClick = onBack) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBackIos, null, tint = Color.White, modifier = Modifier.size(18.dp))
@@ -142,7 +149,18 @@ fun Ios5NavBar(
                     textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f),
                 )
-                Box(Modifier.width(64.dp), contentAlignment = Alignment.CenterEnd) {
+                Box(Modifier.width(sideWidth), contentAlignment = Alignment.CenterEnd) {
+                    if (actionLabel != null && onAction != null) {
+                        Text(
+                            actionLabel,
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = Ios5Sans,
+                            maxLines = 1,
+                            modifier = Modifier.clickable(onClick = onAction).padding(horizontal = 6.dp, vertical = 8.dp),
+                        )
+                    }
                     if (onSearch != null) {
                         Ios5BarButton(onClick = onSearch) {
                             Icon(Icons.Filled.Search, "搜索", tint = Color.White, modifier = Modifier.size(20.dp))
@@ -178,6 +196,7 @@ private val tabIcons: Map<String, ImageVector> = mapOf(
     "首页" to Icons.Filled.Home,
     "歌单" to Icons.AutoMirrored.Filled.QueueMusic,
     "艺人" to Icons.Filled.Mic,
+    "电子书" to Icons.Filled.Book,
     "更多" to Icons.Filled.GridView,
     "设置" to Icons.Filled.Settings,
 )

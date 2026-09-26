@@ -1,0 +1,775 @@
+package com.aurora.music.ui.ebook
+
+import android.app.Activity
+import android.content.Intent
+import android.content.IntentFilter
+import android.graphics.Typeface
+import android.os.BatteryManager
+import android.view.WindowManager
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.aurora.music.AuroraApplication
+import com.aurora.music.data.ebook.EbookReadPrefs
+import com.aurora.music.data.ebook.EbookTheme
+import com.aurora.music.data.ebook.ParsedEbook
+import com.aurora.music.ui.components.LottieLoader
+import com.aurora.music.ui.ios5.Ios5CellDivider
+import com.aurora.music.ui.ios5.Ios5GlossButton
+import com.aurora.music.ui.ios5.Ios5NavBar
+import com.aurora.music.ui.ios5.Ios5NavRow
+import com.aurora.music.ui.ios5.Ios5SectionTitle
+import com.aurora.music.ui.ios5.Ios5SegmentRow
+import com.aurora.music.ui.ios5.Ios5SettingsPage
+import com.aurora.music.ui.ios5.Ios5SliderRow
+import com.aurora.music.ui.ios5.Ios5StaticText
+import com.aurora.music.ui.ios5.ios5Rows
+import com.aurora.music.ui.ios5.ios5Section
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+// 阅读页（v1）：左右滑动翻页（普通滑动，无上下滚动）、
+// 顶部灰字状态（本章剩余页数/全书进度/时间/电量）、底部 6 键（目录/选项可用，其余占位）。
+// 系统状态栏隐藏，下方安卓导航键保留。解析与分页断点落盘，大书二次秒开。
+
+private data class ReaderTheme(val bg: Color, val ink: Color)
+
+private fun themeOf(t: EbookTheme): ReaderTheme = when (t) {
+    EbookTheme.WHITE -> ReaderTheme(Color(0xFFFFFFFF), Color(0xFF1A1A1A))
+    EbookTheme.SEPIA -> ReaderTheme(Color(0xFFF4ECD8), Color(0xFF5B4636))
+    EbookTheme.DARK -> ReaderTheme(Color(0xFF1C1C1E), Color(0xFFE8E8E8))
+}
+
+@Composable
+fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
+    val context = LocalContext.current
+    val container = (context.applicationContext as AuroraApplication).container
+    val store = container.ebookStore
+    val prefs by container.ebookPrefs.prefs.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+
+    var parsed by remember(bookPath) { mutableStateOf<ParsedEbook?>(null) }
+    var failed by remember(bookPath) { mutableStateOf(false) }
+    var spine by remember(bookPath) { mutableStateOf(0) }
+    var startPage by remember(bookPath) { mutableStateOf(0) }
+    var tocOpen by remember { mutableStateOf(false) }
+    var optionsOpen by remember { mutableStateOf(false) }
+    var toast by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(toast) {
+        if (toast != null) {
+            delay(1200)
+            toast = null
+        }
+    }
+
+    // 隐藏系统状态栏（导航键保留），阅读时保持亮屏
+    DisposableEffect(Unit) {
+        val activity = context as? Activity
+        val controller = activity?.let { WindowCompat.getInsetsController(it.window, it.window.decorView) }
+        controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller?.hide(WindowInsetsCompat.Type.statusBars())
+        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            controller?.show(WindowInsetsCompat.Type.statusBars())
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    LaunchedEffect(bookPath) {
+        parsed = null
+        failed = false
+        val row = store.bookByPath(bookPath)
+        spine = row?.spineIndex ?: 0
+        startPage = row?.pageIndex ?: 0
+        val p = store.openBook(bookPath)
+        if (p == null || p.chapters.isEmpty()) failed = true
+        else {
+            parsed = p
+            spine = (row?.spineIndex ?: 0).coerceIn(0, p.chapters.size - 1)
+        }
+    }
+
+    BackHandler {
+        when {
+            tocOpen -> tocOpen = false
+            optionsOpen -> optionsOpen = false
+            else -> onClose()
+        }
+    }
+
+    val book = parsed
+    if (book == null) {
+        Box(Modifier.fillMaxSize().background(Color.White), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (failed) {
+                    Text("打不开这本书", fontSize = 16.sp, color = Color(0xFF6B7280))
+                    Spacer(Modifier.height(12.dp))
+                    Ios5GlossButton("返回", onClose)
+                } else {
+                    LottieLoader(modifier = Modifier.size(72.dp))
+                    Spacer(Modifier.height(8.dp))
+                    Text("正在打开…（第一本大书稍慢，之后秒开）", fontSize = 13.sp, color = Color(0xFF6B7280))
+                }
+            }
+        }
+        return
+    }
+
+    if (tocOpen) {
+        EbookTocPage(book = book, currentSpine = spine, onBack = { tocOpen = false }, onJump = { s, b ->
+            scope.launch {
+                spine = s
+                startPage = -b - 2 // 标记：按块跳（负数编码块号）
+                tocOpen = false
+            }
+        })
+        return
+    }
+    if (optionsOpen) {
+        EbookOptionsPage(onBack = { optionsOpen = false })
+        return
+    }
+
+    ReaderBody(
+        bookPath = bookPath,
+        book = book,
+        spine = spine,
+        startPage = startPage,
+        prefs = prefs,
+        toast = toast,
+        onToast = { toast = it },
+        onSpineChange = { s, p ->
+            spine = s
+            startPage = p
+        },
+        onOpenToc = { tocOpen = true },
+        onOpenOptions = { optionsOpen = true },
+    )
+}
+
+@Composable
+private fun ReaderBody(
+    bookPath: String,
+    book: ParsedEbook,
+    spine: Int,
+    startPage: Int,
+    prefs: EbookReadPrefs,
+    toast: String?,
+    onToast: (String) -> Unit,
+    onSpineChange: (spine: Int, page: Int) -> Unit,
+    onOpenToc: () -> Unit,
+    onOpenOptions: () -> Unit,
+) {
+    val context = LocalContext.current
+    val container = (context.applicationContext as AuroraApplication).container
+    val store = container.ebookStore
+    val scope = rememberCoroutineScope()
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val th = themeOf(prefs.theme)
+    val meta = th.ink.copy(alpha = 0.55f)
+
+    val fontFamily = remember(prefs.fontPath) { loadFontFamily(prefs.fontPath) }
+
+    // 分页断点：内存 + 磁盘两级。磁盘命中则整本直接可用（秒开）。
+    var breaks by remember(bookPath) { mutableStateOf<Map<Int, List<List<PageSlice>>>>(emptyMap()) }
+    var cacheBase by remember(bookPath) { mutableStateOf<Map<Int, List<List<PageSlice>>>>(emptyMap()) }
+    var cacheKey by remember(bookPath) { mutableStateOf<String?>(null) }
+    var pagerHeightPx by remember { mutableStateOf(0) }
+
+    BoxWithConstraints(Modifier.fillMaxSize().background(th.bg)) {
+        val widthPx = with(density) { (maxWidth - 44.dp).toPx().toInt().coerceAtLeast(200) }
+        val key = remember(prefs.fontSizeSp, prefs.fontPath, widthPx, pagerHeightPx) {
+            if (pagerHeightPx > 100) store.pageCacheKey(prefs, widthPx, pagerHeightPx) else null
+        }
+        LaunchedEffect(bookPath, key) {
+            if (key == null) return@LaunchedEffect
+            cacheKey = key
+            val md5 = store.md5Of(bookPath)
+            val cached = store.loadPageBreaks(md5, key)
+            if (!cached.isNullOrEmpty()) {
+                // 脏缓存自愈：空页/空章视为缺失，会重新排出来覆盖掉
+                val m = pagesFromCache(cached).filterValues { ps -> ps.any { it.isNotEmpty() } }
+                cacheBase = m
+                breaks = m
+            } else {
+                cacheBase = emptyMap()
+                breaks = emptyMap()
+            }
+        }
+        // 当前章缺页就排出来（后台），顺带预排前后一章。
+        // 注意：effect 内多次回写必须用本地累加表，不直接读 breaks（它是启动瞬间快照）。
+        LaunchedEffect(bookPath, spine, key, book, breaks[spine]) {
+            if (key == null || pagerHeightPx <= 100) return@LaunchedEffect
+            if (hasPages(breaks, spine)) return@LaunchedEffect
+            val paginator = ChapterPaginator(measurer, density, widthPx, pagerHeightPx, prefs.fontSizeSp, fontFamily)
+            val acc = breaks.toMutableMap()
+            val pages = paginator.paginate(book.chapters[spine].blocks)
+            acc[spine] = pages.ifEmpty { listOf(emptyList()) }
+            breaks = acc.toMap()
+            // 落盘（与旧缓存合并，避免覆盖别的章）
+            val md5 = store.md5Of(bookPath)
+            store.savePageBreaks(md5, key, pagesToCache(cacheBase + acc))
+            // 预排邻章
+            listOf(spine - 1, spine + 1).forEach { n ->
+                if (n in book.chapters.indices && !hasPages(acc, n)) {
+                    val nb = runCatching {
+                        ChapterPaginator(measurer, density, widthPx, pagerHeightPx, prefs.fontSizeSp, fontFamily)
+                            .paginate(book.chapters[n].blocks)
+                    }.getOrDefault(emptyList())
+                    if (nb.isNotEmpty()) {
+                        acc[n] = nb
+                        breaks = acc.toMap()
+                        store.savePageBreaks(md5, key, pagesToCache(cacheBase + acc))
+                    }
+                }
+            }
+        }
+
+        val pages = breaks[spine]?.filter { it.isNotEmpty() }.orEmpty()
+        // startPage 负数 = 按块跳（目录过来）：-b-2 → 块号 b
+        val jumpBlock = if (startPage < 0) -startPage - 2 else -1
+        val initialPage = when {
+            jumpBlock >= 0 -> pageForBlock(pages, jumpBlock)
+            else -> startPage.coerceIn(0, (pages.size - 1).coerceAtLeast(0))
+        }
+
+        // 章节字符统计（进度用，不依赖分页）
+        val chapterChars = remember(book) {
+            book.chapters.map { c -> c.blocks.sumOf { it.text.length } }
+        }
+        val totalChars = remember(chapterChars) { chapterChars.sum().coerceAtLeast(1) }
+        val charsBefore = remember(chapterChars, spine) { chapterChars.take(spine).sum() }
+
+        Column(Modifier.fillMaxSize()) {
+            // ---- 顶栏：灰字状态，无按钮 ----
+            var pageIdx by remember(spine, bookPath, pages.size) { mutableStateOf(initialPage) }
+            val pageChars = remember(pages, pageIdx) { charsOfPage(book, spine, pages, pageIdx) }
+            val pct = ((charsBefore + pageChars).toFloat() / totalChars).coerceIn(0f, 1f)
+            val remain = (pages.size - 1 - pageIdx).coerceAtLeast(0)
+            ReaderStatusBar(
+                left = if (pages.isEmpty()) "" else "本章还剩${remain}页 · ${(pct * 100).toInt()}%",
+                right = "${rememberTimeText()} · ${rememberBatteryPct()}%",
+                color = meta,
+            )
+
+            // ---- 正文 ----
+            Box(
+                Modifier.weight(1f).fillMaxWidth()
+                    .onSizeChanged { pagerHeightPx = it.height }
+                    .padding(horizontal = 22.dp),
+            ) {
+                if (pages.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        LottieLoader(modifier = Modifier.size(64.dp))
+                    }
+                } else {
+                    key(spine, pages.size) {
+                        val pager = rememberPagerState(initialPage = initialPage) { pages.size }
+                        LaunchedEffect(pager.currentPage) {
+                            pageIdx = pager.currentPage
+                        }
+                        // 翻页即存进度（防抖）
+                        LaunchedEffect(pager.currentPage, spine) {
+                            val pg = pager.currentPage
+                            delay(400)
+                            if (pager.currentPage == pg) {
+                                val chars = charsBefore + charsOfPage(book, spine, pages, pg)
+                                store.saveProgress(bookPath, spine, pg, (chars.toFloat() / totalChars).coerceIn(0f, 1f))
+                            }
+                        }
+                        // 边缘滑动跨章：最后一页继续左滑 → 下一章；第一页右滑 → 上一章
+                        var turning by remember { mutableStateOf(false) }
+                        LaunchedEffect(spine) { turning = false }
+                        LaunchedEffect(pager.isScrollInProgress, pager.currentPage) {
+                            try {
+                                val off = pager.currentPageOffsetFraction
+                                if (pager.isScrollInProgress && !turning) {
+                                    if (pager.currentPage == pages.size - 1 && off < -0.22f && spine + 1 < book.chapters.size) {
+                                        turning = true
+                                        onSpineChange(spine + 1, 0)
+                                    } else if (pager.currentPage == 0 && off > 0.22f && spine - 1 >= 0) {
+                                        turning = true
+                                        scope.launch {
+                                            // 上一章先排好再跳，避免闪 loader
+                                            onSpineChange(spine - 1, Int.MAX_VALUE)
+                                        }
+                                    }
+                                }
+                            } catch (_: Exception) {
+                            }
+                        }
+                        HorizontalPager(
+                            state = pager,
+                            modifier = Modifier.fillMaxSize()
+                                .pointerInput(spine, pages.size) {
+                                    detectTapGestures { offset ->
+                                        val w = size.width
+                                        when {
+                                            offset.x < w * 0.18f -> prevPage(pager, spine, onSpineChange, scope)
+                                            offset.x > w * 0.82f -> nextPage(pager, spine, pages.size, book.chapters.size, onSpineChange, scope)
+                                        }
+                                    }
+                                },
+                            beyondViewportPageCount = 1,
+                        ) { pi ->
+                            PageView(
+                                book = book,
+                                spine = spine,
+                                slices = pages[pi],
+                                prefs = prefs,
+                                fontFamily = fontFamily,
+                                ink = th.ink,
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ---- 底栏：6 键 space evenly ----
+            ReaderBottomBar(
+                ink = th.ink,
+                divider = meta.copy(alpha = 0.4f),
+                onToc = onOpenToc,
+                onOptions = onOpenOptions,
+                onPlaceholder = { onToast("即将推出") },
+            )
+        }
+
+        // toast
+        if (toast != null) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+                Text(
+                    toast, fontSize = 13.sp, color = Color.White,
+                    modifier = Modifier.padding(bottom = 110.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color.Black.copy(alpha = 0.75f))
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            }
+        }
+    }
+}
+
+private fun prevPage(
+    pager: androidx.compose.foundation.pager.PagerState,
+    spine: Int,
+    onSpineChange: (Int, Int) -> Unit,
+    scope: kotlinx.coroutines.CoroutineScope,
+) {
+    scope.launch {
+        if (pager.currentPage > 0) pager.animateScrollToPage(pager.currentPage - 1)
+        else if (spine - 1 >= 0) onSpineChange(spine - 1, Int.MAX_VALUE)
+    }
+}
+
+private fun nextPage(
+    pager: androidx.compose.foundation.pager.PagerState,
+    spine: Int,
+    pageCount: Int,
+    chapterCount: Int,
+    onSpineChange: (Int, Int) -> Unit,
+    scope: kotlinx.coroutines.CoroutineScope,
+) {
+    scope.launch {
+        if (pager.currentPage < pageCount - 1) pager.animateScrollToPage(pager.currentPage + 1)
+        else if (spine + 1 < chapterCount) onSpineChange(spine + 1, 0)
+    }
+}
+
+private fun pageForBlock(pages: List<List<PageSlice>>, block: Int): Int {
+    pages.forEachIndexed { i, page ->
+        if (page.any { it.block >= block }) return i
+    }
+    return 0
+}
+
+/** 该章是否有可用页（空页列表视为缺失，触发重排并自愈脏缓存）。 */
+private fun hasPages(m: Map<Int, List<List<PageSlice>>>, ci: Int): Boolean =
+    m[ci]?.any { it.isNotEmpty() } == true
+
+private fun charsOfPage(book: ParsedEbook, spine: Int, pages: List<List<PageSlice>>, page: Int): Int {
+    if (page < 0) return 0
+    val blocks = book.chapters.getOrNull(spine)?.blocks ?: return 0
+    var n = 0
+    for (i in 0 until page.coerceAtMost(pages.size)) {
+        pages[i].forEach { s ->
+            val len = blocks.getOrNull(s.block)?.text?.length ?: 0
+            n += (s.end.coerceAtMost(len) - s.start.coerceAtLeast(0)).coerceAtLeast(0)
+        }
+    }
+    // 当前页读了一半也算读过？只算整页之前，简单可预期
+    return n
+}
+
+@Composable
+private fun PageView(
+    book: ParsedEbook,
+    spine: Int,
+    slices: List<PageSlice>,
+    prefs: EbookReadPrefs,
+    fontFamily: FontFamily,
+    ink: Color,
+) {
+    val blocks = book.chapters[spine].blocks
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Top) {
+        // 按块聚合成段显示
+        val byBlock = slices.groupBy { it.block }.toSortedMap()
+        byBlock.forEach { (bi, ss) ->
+            val b = blocks.getOrNull(bi) ?: return@forEach
+            val text = ss.sortedBy { it.start }.joinToString("") {
+                b.text.substring(it.start.coerceIn(0, b.text.length), it.end.coerceIn(0, b.text.length))
+            }
+            val mult = when (b.level) {
+                1 -> 1.45f
+                2 -> 1.28f
+                3 -> 1.16f
+                4, 5, 6 -> 1.08f
+                else -> 1f
+            }
+            if (b.level in 1..6) Spacer(Modifier.height((prefs.fontSizeSp * 0.4f).dp))
+            Text(
+                text,
+                style = TextStyle(
+                    fontSize = (prefs.fontSizeSp * mult).sp,
+                    lineHeight = (prefs.fontSizeSp * mult * 1.55f).sp,
+                    fontFamily = fontFamily,
+                    fontWeight = if (b.level in 1..6) FontWeight.Bold else FontWeight.Normal,
+                    color = ink,
+                ),
+                maxLines = Int.MAX_VALUE,
+                overflow = TextOverflow.Visible,
+            )
+            Spacer(Modifier.height((prefs.fontSizeSp * (if (b.level in 1..6) 0.3f else 0.45f)).dp))
+        }
+    }
+}
+
+@Composable
+private fun ReaderStatusBar(left: String, right: String, color: Color) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(left, fontSize = 12.sp, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(right, fontSize = 12.sp, color = color, maxLines = 1)
+    }
+}
+
+@Composable
+private fun ReaderBottomBar(
+    ink: Color,
+    divider: Color,
+    onToc: () -> Unit,
+    onOptions: () -> Unit,
+    onPlaceholder: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Box(Modifier.fillMaxWidth().height(1.dp).background(divider))
+        Row(
+            Modifier.fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ReaderButton("目录", Icons.AutoMirrored.Filled.List, ink, 1f, onToc)
+            ReaderButton("音乐", Icons.Filled.MusicNote, ink, 0.35f, onPlaceholder)
+            ReaderButton("上一首", Icons.Filled.SkipPrevious, ink, 0.35f, onPlaceholder)
+            ReaderButton("播放", Icons.Filled.PlayArrow, ink, 0.35f, onPlaceholder)
+            ReaderButton("下一首", Icons.Filled.SkipNext, ink, 0.35f, onPlaceholder)
+            ReaderButton("选项", Icons.Filled.Settings, ink, 1f, onOptions)
+        }
+    }
+}
+
+@Composable
+private fun ReaderButton(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    ink: Color,
+    alpha: Float,
+    onClick: () -> Unit,
+) {
+    Column(
+        Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(icon, label, tint = ink.copy(alpha = alpha), modifier = Modifier.size(24.dp))
+        Text(label, fontSize = 10.sp, color = ink.copy(alpha = alpha), maxLines = 1)
+    }
+}
+
+// ---- 时间 / 电量 ----
+
+@Composable
+private fun rememberTimeText(): String {
+    var now by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
+        while (true) {
+            now = fmt.format(Date())
+            delay(20_000)
+        }
+    }
+    return now
+}
+
+@Composable
+private fun rememberBatteryPct(): Int {
+    val context = LocalContext.current
+    var pct by remember { mutableStateOf(100) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            pct = runCatching {
+                val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, 100) ?: 100
+                val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+                (level * 100 / scale.coerceAtLeast(1))
+            }.getOrDefault(100)
+            delay(60_000)
+        }
+    }
+    return pct
+}
+
+private fun loadFontFamily(path: String): FontFamily {
+    if (path.isBlank()) return FontFamily.Default
+    return runCatching {
+        val f = File(path)
+        if (!f.exists()) return FontFamily.Default
+        FontFamily(Typeface.createFromFile(f))
+    }.getOrDefault(FontFamily.Default)
+}
+
+// ---- 目录页：h1/h2 默认展开，更深默认叠起，当前章自动展开 ----
+
+@Composable
+private fun EbookTocPage(
+    book: ParsedEbook,
+    currentSpine: Int,
+    onBack: () -> Unit,
+    onJump: (spine: Int, block: Int) -> Unit,
+) {
+    // toggled = 与默认相反的手动项
+    val toggled = remember { mutableStateMapOf<Int, Boolean>() }
+    val hasChildren = remember(book) {
+        BooleanArray(book.toc.size) { i ->
+            val lv = book.toc[i].level
+            var j = i + 1
+            while (j < book.toc.size && book.toc[j].level > lv) {
+                if (book.toc[j].level == lv + 1) return@BooleanArray true
+                j++
+            }
+            false
+        }
+    }
+    fun defaultExpanded(i: Int): Boolean {
+        val e = book.toc[i]
+        return e.level <= 2 || e.chapterIndex == currentSpine
+    }
+    fun expanded(i: Int): Boolean {
+        val d = defaultExpanded(i)
+        return if (toggled.containsKey(i)) !d else d
+    }
+    // 可见性：所有祖先都展开
+    val visible = remember(book, currentSpine, toggled.toMap()) {
+        val stack = ArrayDeque<Pair<Int, Int>>() // (tocIndex, level)
+        BooleanArray(book.toc.size) { i ->
+            val lv = book.toc[i].level
+            while (stack.isNotEmpty() && stack.last().second >= lv) stack.removeLast()
+            val ok = stack.all { expanded(it.first) }
+            stack.add(i to lv)
+            ok
+        }
+    }
+    Column(Modifier.fillMaxSize()) {
+        Ios5NavBar(title = "目录", onBack = onBack)
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            item { Ios5SectionTitle(book.title) }
+            val rows = book.toc.mapIndexedNotNull { i, e -> if (visible[i]) i to e else null }
+            ios5Rows(rows, key = { it.first }) { _, (i, e) ->
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clickable { onJump(e.chapterIndex, e.blockIndex) }
+                        .padding(start = (12 + (e.level - 1) * 16).dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    val current = e.chapterIndex == currentSpine
+                    if (hasChildren[i]) {
+                        val ex = expanded(i)
+                        Text(
+                            if (ex) "▾" else "▸",
+                            fontSize = 16.sp,
+                            color = com.aurora.music.ui.ios5.Ios5Colors.TextSecondary,
+                            modifier = Modifier.width(22.dp).clickable {
+                                if (toggled.containsKey(i)) toggled.remove(i) else toggled[i] = true
+                            }.padding(vertical = 2.dp),
+                        )
+                    } else {
+                        Spacer(Modifier.width(22.dp))
+                    }
+                    Text(
+                        e.title.ifBlank { "（无标题）" },
+                        fontSize = if (e.level <= 2) 15.sp else 14.sp,
+                        fontWeight = if (e.level == 1) FontWeight.Bold else FontWeight.Normal,
+                        color = if (current) com.aurora.music.ui.ios5.Ios5Colors.IosBlue
+                        else com.aurora.music.ui.ios5.Ios5Colors.TextPrimary,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ---- 阅读设置页：风格 / 字体 / 字号（复用 Ios5 设置组件） ----
+
+@Composable
+private fun EbookOptionsPage(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val container = (context.applicationContext as AuroraApplication).container
+    val prefs by container.ebookPrefs.prefs.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    val fontPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            runCatching {
+                val name = runCatching {
+                    context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                        val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (c.moveToFirst() && idx >= 0) c.getString(idx) else null
+                    }
+                }.getOrNull() ?: "custom.ttf"
+                val ext = name.substringAfterLast('.', "").lowercase()
+                if (ext != "ttf" && ext != "otf") return@launch
+                val dir = File(context.filesDir, "fonts")
+                dir.mkdirs()
+                val dest = File(dir, name.replace(Regex("""[\\/:*?"<>|]"""), "_"))
+                context.contentResolver.openInputStream(uri)?.use { ins ->
+                    dest.outputStream().use { out -> ins.copyTo(out) }
+                }
+                container.ebookPrefs.setFontPath(dest.absolutePath)
+            }
+        }
+    }
+    val themeIdx = when (prefs.theme) {
+        EbookTheme.WHITE -> 0
+        EbookTheme.SEPIA -> 1
+        EbookTheme.DARK -> 2
+    }
+    Ios5SettingsPage(title = "阅读设置", onBack = onBack) {
+        ios5Section("页面风格") {
+            Ios5SegmentRow(
+                title = "底色",
+                options = listOf("白色", "护眼", "夜间"),
+                selected = themeIdx,
+                onSelect = {
+                    container.ebookPrefs.setTheme(
+                        when (it) {
+                            1 -> EbookTheme.SEPIA
+                            2 -> EbookTheme.DARK
+                            else -> EbookTheme.WHITE
+                        },
+                    )
+                },
+            )
+        }
+        ios5Section("字体") {
+            com.aurora.music.ui.ios5.Ios5CheckRow(
+                title = "系统默认",
+                checked = prefs.fontPath.isBlank(),
+                onClick = { container.ebookPrefs.setFontPath("") },
+            )
+            Ios5CellDivider()
+            if (prefs.fontPath.isNotBlank()) {
+                com.aurora.music.ui.ios5.Ios5CheckRow(
+                    title = File(prefs.fontPath).name,
+                    subtitle = "自定义字体",
+                    checked = true,
+                    onClick = {},
+                )
+                Ios5CellDivider()
+            }
+            Ios5NavRow(title = "选择字体文件", subtitle = "ttf / otf", onClick = { fontPicker.launch("*/*") })
+        }
+        ios5Section("文字大小") {
+            Ios5SliderRow(
+                title = "字号",
+                valueLabel = "${prefs.fontSizeSp.toInt()}",
+                value = prefs.fontSizeSp,
+                range = 12f..28f,
+                steps = 15,
+                onValueChange = { container.ebookPrefs.setFontSize(it) },
+            )
+            Ios5StaticText("左右滑动翻页时的每页字数会随字号变化，断点会自动重排并记住。")
+        }
+    }
+}
