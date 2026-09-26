@@ -263,41 +263,60 @@ private fun ReaderBody(
                 breaks = emptyMap()
             }
         }
-        // 当前章缺页就排出来（后台），顺带预排前后一章。
-        // 注意：effect 内多次回写必须用本地累加表，不直接读 breaks（它是启动瞬间快照）。
-        LaunchedEffect(bookPath, spine, key, book, breaks[spine]) {
+        // 窗口分页：当前章优先（阻塞首屏），随后把前后各两章排好，
+        // 落到哪一章，相邻章都已就绪，切窗无 loader。
+        // effect 内多次回写用本地累加表，不直接读 breaks（它是启动瞬间快照）。
+        LaunchedEffect(bookPath, spine, key, book, breaks) {
             if (key == null || pagerHeightPx <= 100) return@LaunchedEffect
-            if (hasPages(breaks, spine)) return@LaunchedEffect
+            val need = (-2..2).map { spine + it }
+                .filter { it in book.chapters.indices && !hasPages(breaks, it) }
+                .sortedBy { kotlin.math.abs(it - spine) }
+            if (need.isEmpty()) return@LaunchedEffect
             val paginator = ChapterPaginator(measurer, density, widthPx, pagerHeightPx, prefs.fontSizeSp, fontFamily)
             val acc = breaks.toMutableMap()
-            val pages = paginator.paginate(book.chapters[spine].blocks)
-            acc[spine] = pages.ifEmpty { listOf(emptyList()) }
-            breaks = acc.toMap()
-            // 落盘（与旧缓存合并，避免覆盖别的章）
             val md5 = store.md5Of(bookPath)
-            store.savePageBreaks(md5, key, pagesToCache(cacheBase + acc))
-            // 预排邻章
-            listOf(spine - 1, spine + 1).forEach { n ->
-                if (n in book.chapters.indices && !hasPages(acc, n)) {
-                    val nb = runCatching {
-                        ChapterPaginator(measurer, density, widthPx, pagerHeightPx, prefs.fontSizeSp, fontFamily)
-                            .paginate(book.chapters[n].blocks)
-                    }.getOrDefault(emptyList())
-                    if (nb.isNotEmpty()) {
-                        acc[n] = nb
-                        breaks = acc.toMap()
-                        store.savePageBreaks(md5, key, pagesToCache(cacheBase + acc))
-                    }
+            for (n in need) {
+                val nb = runCatching { paginator.paginate(book.chapters[n].blocks) }.getOrDefault(emptyList())
+                if (nb.isNotEmpty()) {
+                    acc[n] = nb
+                    breaks = acc.toMap()
+                    // 落盘（与旧缓存合并，避免覆盖别的章）
+                    store.savePageBreaks(md5, key, pagesToCache(cacheBase + acc))
                 }
+                // 每章让出主线程：大书首开不卡手势（TextMeasurer 必须主线程，只能协作式）
+                kotlinx.coroutines.yield()
             }
         }
 
-        val pages = breaks[spine]?.filter { it.isNotEmpty() }.orEmpty()
+        // ---- 三章窗口：[上一章, 当前章, 下一章]拼成一条连续长卷 ----
+        // 跨章就是 pager 内的普通翻页，手势逻辑里不再有章节概念，
+        // 不会多翻也不会卡死；落到邻章区间才整体换窗（跳变无动画，同一页无闪烁）。
+        // 到达边界页时相邻章已预排好（上面的窗口分页），切窗无 loader。
+        var livePos by remember(bookPath) { mutableStateOf<Pair<Int, Int>?>(null) } // (章, 页)实时位置
+        var lastSettled by remember(bookPath) { mutableStateOf<Pair<Int, Int>?>(null) }
         // startPage 负数 = 按块跳（目录过来）：-b-2 → 块号 b
         val jumpBlock = if (startPage < 0) -startPage - 2 else -1
-        val initialPage = when {
-            jumpBlock >= 0 -> pageForBlock(pages, jumpBlock)
-            else -> startPage.coerceIn(0, (pages.size - 1).coerceAtLeast(0))
+        val spinePages0 = breaks[spine]?.filter { it.isNotEmpty() }.orEmpty()
+        val spineTarget = when {
+            lastSettled?.first == spine -> lastSettled!!.second
+            jumpBlock >= 0 -> pageForBlock(spinePages0, jumpBlock)
+            else -> startPage.coerceIn(0, (spinePages0.size - 1).coerceAtLeast(0))
+        }
+        val windowPages: List<Pair<Int, Int>> = remember(breaks, spine, book) {
+            if (!hasPages(breaks, spine)) emptyList()
+            else buildList {
+                listOfNotNull(
+                    (spine - 1).takeIf { it >= 0 },
+                    spine,
+                    (spine + 1).takeIf { it < book.chapters.size },
+                ).filter { hasPages(breaks, it) }.forEach { ci ->
+                    breaks[ci]?.filter { it.isNotEmpty() }?.forEachIndexed { pi, _ -> add(ci to pi) }
+                }
+            }
+        }
+        val winSig = remember(windowPages) { windowPages.joinToString(",") { "${it.first}:${it.second}" } }
+        val startIndex = remember(windowPages, spine, spineTarget) {
+            windowPages.indexOfFirst { it.first == spine && it.second == spineTarget }.takeIf { it >= 0 } ?: 0
         }
 
         // 章节字符统计（进度用，不依赖分页）
@@ -305,16 +324,17 @@ private fun ReaderBody(
             book.chapters.map { c -> c.blocks.sumOf { it.text.length } }
         }
         val totalChars = remember(chapterChars) { chapterChars.sum().coerceAtLeast(1) }
-        val charsBefore = remember(chapterChars, spine) { chapterChars.take(spine).sum() }
+        fun charsBeforeChapter(ci: Int): Int = chapterChars.take(ci).sum()
 
         Column(Modifier.fillMaxSize()) {
             // ---- 顶栏：灰字状态，无按钮 ----
-            var pageIdx by remember(spine, bookPath, pages.size) { mutableStateOf(initialPage) }
-            val pageChars = remember(pages, pageIdx) { charsOfPage(book, spine, pages, pageIdx) }
-            val pct = ((charsBefore + pageChars).toFloat() / totalChars).coerceIn(0f, 1f)
-            val remain = (pages.size - 1 - pageIdx).coerceAtLeast(0)
+            val curGP = livePos?.takeIf { gp -> windowPages.any { it == gp } } ?: (spine to spineTarget)
+            val curPages = breaks[curGP.first]?.filter { it.isNotEmpty() }.orEmpty()
+            val pageChars = remember(book, curGP, curPages) { charsOfPage(book, curGP.first, curPages, curGP.second) }
+            val pct = ((charsBeforeChapter(curGP.first) + pageChars).toFloat() / totalChars).coerceIn(0f, 1f)
+            val remain = (curPages.size - 1 - curGP.second).coerceAtLeast(0)
             ReaderStatusBar(
-                left = if (pages.isEmpty()) "" else "本章还剩${remain}页 · ${(pct * 100).toInt()}%",
+                left = if (windowPages.isEmpty()) "" else "本章还剩${remain}页 · ${(pct * 100).toInt()}%",
                 right = "${rememberTimeText()} · ${rememberBatteryPct()}%",
                 color = meta,
             )
@@ -325,64 +345,46 @@ private fun ReaderBody(
                     .onSizeChanged { pagerHeightPx = it.height }
                     .padding(horizontal = 22.dp),
             ) {
-                if (pages.isEmpty()) {
+                if (windowPages.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         LottieLoader(modifier = Modifier.size(64.dp))
                     }
                 } else {
-                    key(spine, pages.size) {
-                        val pager = rememberPagerState(initialPage = initialPage) { pages.size }
+                    key("$winSig|$spine") {
+                        val pager = rememberPagerState(initialPage = startIndex) { windowPages.size }
                         LaunchedEffect(pager.currentPage) {
-                            pageIdx = pager.currentPage
+                            windowPages.getOrNull(pager.currentPage)?.let { livePos = it }
                         }
-                        // 翻页即存进度（防抖）
-                        LaunchedEffect(pager.currentPage, spine) {
-                            val pg = pager.currentPage
-                            delay(400)
-                            if (pager.currentPage == pg) {
-                                val chars = charsBefore + charsOfPage(book, spine, pages, pg)
-                                store.saveProgress(bookPath, spine, pg, (chars.toFloat() / totalChars).coerceIn(0f, 1f))
-                            }
-                        }
-                        // 边缘滑动跨章：最后一页继续左滑 → 下一章；第一页右滑 → 上一章
-                        var turning by remember { mutableStateOf(false) }
-                        LaunchedEffect(spine) { turning = false }
-                        LaunchedEffect(pager.isScrollInProgress, pager.currentPage) {
-                            try {
-                                val off = pager.currentPageOffsetFraction
-                                if (pager.isScrollInProgress && !turning) {
-                                    if (pager.currentPage == pages.size - 1 && off < -0.22f && spine + 1 < book.chapters.size) {
-                                        turning = true
-                                        onSpineChange(spine + 1, 0)
-                                    } else if (pager.currentPage == 0 && off > 0.22f && spine - 1 >= 0) {
-                                        turning = true
-                                        scope.launch {
-                                            // 上一章先排好再跳，避免闪 loader
-                                            onSpineChange(spine - 1, Int.MAX_VALUE)
-                                        }
-                                    }
-                                }
-                            } catch (_: Exception) {
-                            }
+                        // 落定即存进度；落到邻章区间则整体换窗（同页跳变，无动画无闪烁）
+                        LaunchedEffect(pager.settledPage) {
+                            val gp = windowPages.getOrNull(pager.settledPage) ?: return@LaunchedEffect
+                            lastSettled = gp
+                            livePos = gp
+                            val cps = breaks[gp.first]?.filter { it.isNotEmpty() }.orEmpty()
+                            val chars = charsBeforeChapter(gp.first) + charsOfPage(book, gp.first, cps, gp.second)
+                            store.saveProgress(bookPath, gp.first, gp.second, (chars.toFloat() / totalChars).coerceIn(0f, 1f))
+                            if (gp.first != spine) onSpineChange(gp.first, gp.second)
                         }
                         HorizontalPager(
                             state = pager,
                             modifier = Modifier.fillMaxSize()
-                                .pointerInput(spine, pages.size) {
+                                .pointerInput(spine, winSig) {
                                     detectTapGestures { offset ->
                                         val w = size.width
                                         when {
-                                            offset.x < w * 0.18f -> prevPage(pager, spine, onSpineChange, scope)
-                                            offset.x > w * 0.82f -> nextPage(pager, spine, pages.size, book.chapters.size, onSpineChange, scope)
+                                            offset.x < w * 0.18f -> winPrevPage(pager, windowPages, onSpineChange, scope)
+                                            offset.x > w * 0.82f -> winNextPage(pager, windowPages, book.chapters.size, onSpineChange, scope)
                                         }
                                     }
                                 },
                             beyondViewportPageCount = 1,
                         ) { pi ->
+                            val (c, p) = windowPages[pi]
+                            val slices = breaks[c]?.filter { it.isNotEmpty() }?.getOrNull(p).orEmpty()
                             PageView(
                                 book = book,
-                                spine = spine,
-                                slices = pages[pi],
+                                spine = c,
+                                slices = slices,
                                 prefs = prefs,
                                 fontFamily = fontFamily,
                                 ink = th.ink,
@@ -417,29 +419,37 @@ private fun ReaderBody(
     }
 }
 
-private fun prevPage(
+private fun winPrevPage(
     pager: androidx.compose.foundation.pager.PagerState,
-    spine: Int,
+    windowPages: List<Pair<Int, Int>>,
     onSpineChange: (Int, Int) -> Unit,
     scope: kotlinx.coroutines.CoroutineScope,
 ) {
     scope.launch {
-        if (pager.currentPage > 0) pager.animateScrollToPage(pager.currentPage - 1)
-        else if (spine - 1 >= 0) onSpineChange(spine - 1, Int.MAX_VALUE)
+        if (pager.currentPage > 0) {
+            pager.animateScrollToPage(pager.currentPage - 1)
+        } else {
+            // 窗口起点：往更早的章跳一章（目标多半已预排好）
+            val (c, _) = windowPages.firstOrNull() ?: return@launch
+            if (c - 1 >= 0) onSpineChange(c - 1, Int.MAX_VALUE)
+        }
     }
 }
 
-private fun nextPage(
+private fun winNextPage(
     pager: androidx.compose.foundation.pager.PagerState,
-    spine: Int,
-    pageCount: Int,
+    windowPages: List<Pair<Int, Int>>,
     chapterCount: Int,
     onSpineChange: (Int, Int) -> Unit,
     scope: kotlinx.coroutines.CoroutineScope,
 ) {
     scope.launch {
-        if (pager.currentPage < pageCount - 1) pager.animateScrollToPage(pager.currentPage + 1)
-        else if (spine + 1 < chapterCount) onSpineChange(spine + 1, 0)
+        if (pager.currentPage < windowPages.size - 1) {
+            pager.animateScrollToPage(pager.currentPage + 1)
+        } else {
+            val (c, _) = windowPages.lastOrNull() ?: return@launch
+            if (c + 1 < chapterCount) onSpineChange(c + 1, 0)
+        }
     }
 }
 
