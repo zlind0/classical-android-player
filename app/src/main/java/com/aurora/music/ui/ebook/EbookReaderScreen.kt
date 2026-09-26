@@ -59,9 +59,16 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.LinkInteractionListener
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -234,6 +241,28 @@ private fun ReaderBody(
     val density = LocalDensity.current
     val th = themeOf(prefs.theme)
     val meta = th.ink.copy(alpha = 0.55f)
+    val linkColor = if (prefs.theme == EbookTheme.DARK) Color(0xFF7AB3FF) else Color(0xFF0A60D6)
+
+    /** 超链接点击：i:章:块 = 站内跳转（复用目录跳转编码），e:url = 外部浏览器。 */
+    fun handleLink(tag: String) {
+        if (tag.startsWith("e:")) {
+            val url = tag.removePrefix("e:")
+            val opened = runCatching {
+                if (!url.startsWith("http://") && !url.startsWith("https://")) return@runCatching false
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+                true
+            }.getOrDefault(false)
+            if (!opened) onToast("无法打开链接")
+        } else if (tag.startsWith("i:")) {
+            val parts = tag.removePrefix("i:").split(":")
+            val ci = parts.getOrNull(0)?.toIntOrNull() ?: return
+            val bi = parts.getOrNull(1)?.toIntOrNull() ?: 0
+            if (ci in book.chapters.indices) onSpineChange(ci, -bi - 2)
+        }
+    }
 
     val fontFamily = remember(prefs.fontPath) { loadFontFamily(prefs.fontPath) }
 
@@ -388,6 +417,8 @@ private fun ReaderBody(
                                 prefs = prefs,
                                 fontFamily = fontFamily,
                                 ink = th.ink,
+                                linkColor = linkColor,
+                                onLinkClick = { tag -> handleLink(tag) },
                             )
                         }
                     }
@@ -479,6 +510,7 @@ private fun charsOfPage(book: ParsedEbook, spine: Int, pages: List<List<PageSlic
 }
 
 @Composable
+@OptIn(ExperimentalTextApi::class)
 private fun PageView(
     book: ParsedEbook,
     spine: Int,
@@ -486,15 +518,48 @@ private fun PageView(
     prefs: EbookReadPrefs,
     fontFamily: FontFamily,
     ink: Color,
+    linkColor: Color,
+    onLinkClick: (String) -> Unit,
 ) {
     val blocks = book.chapters[spine].blocks
+    val linkListener = remember(onLinkClick) {
+        object : LinkInteractionListener {
+            override fun onClick(link: LinkAnnotation) {
+                (link as? LinkAnnotation.Clickable)?.let { onLinkClick(it.tag) }
+            }
+        }
+    }
+    val linkStyles = remember(linkColor) {
+        TextLinkStyles(style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))
+    }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Top) {
-        // 按块聚合成段显示
+        // 按块聚合成段显示；超链接按块坐标裁到当前页片后挂 annotation
         val byBlock = slices.groupBy { it.block }.toSortedMap()
         byBlock.forEach { (bi, ss) ->
             val b = blocks.getOrNull(bi) ?: return@forEach
-            val text = ss.sortedBy { it.start }.joinToString("") {
-                b.text.substring(it.start.coerceIn(0, b.text.length), it.end.coerceIn(0, b.text.length))
+            val ordered = ss.sortedBy { it.start }
+            val annotated = buildAnnotatedString {
+                var off = 0
+                ordered.forEach { s ->
+                    val from = s.start.coerceIn(0, b.text.length)
+                    val to = s.end.coerceIn(0, b.text.length)
+                    if (from >= to) return@forEach
+                    val segBase = off
+                    append(b.text.substring(from, to))
+                    off += to - from
+                    b.links.forEach { l ->
+                        val a = maxOf(l.start, from)
+                        val e = minOf(l.end, to)
+                        if (a < e) {
+                            val tag = if (l.chapter < 0) "e:${l.url}" else "i:${l.chapter}:${l.block}"
+                            addLink(
+                                LinkAnnotation.Clickable(tag, linkStyles, linkListener),
+                                segBase + (a - from),
+                                segBase + (e - from),
+                            )
+                        }
+                    }
+                }
             }
             val mult = when (b.level) {
                 1 -> 1.45f
@@ -505,7 +570,7 @@ private fun PageView(
             }
             if (b.level in 1..6) Spacer(Modifier.height((prefs.fontSizeSp * 0.4f).dp))
             Text(
-                text,
+                annotated,
                 style = TextStyle(
                     fontSize = (prefs.fontSizeSp * mult).sp,
                     lineHeight = (prefs.fontSizeSp * mult * 1.55f).sp,

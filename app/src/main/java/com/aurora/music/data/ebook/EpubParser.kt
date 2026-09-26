@@ -20,7 +20,10 @@ private fun newPullParser(): XmlPullParser = try {
 // NCX 或 EPUB3 nav（嵌套目录 + 级别）→ spine XHTML 正文块（h1..h6 保留级别）。
 // 正文图片 v1 只取 alt 文本；容错：任何单章失败跳过该章，不整本失败。
 
-private data class RichBlock(val text: String, val level: Int, val id: String)
+private data class RichBlock(val text: String, val level: Int, val id: String, val links: List<RawLink>)
+
+/** 原始超链接（块坐标，href 未解析）。 */
+private data class RawLink(val start: Int, val end: Int, val href: String)
 
 object EpubParser {
 
@@ -48,10 +51,17 @@ object EpubParser {
             // 章节：spine 顺序，只读 linear（缺 linear 视为 yes）
             val spineHrefs = opf.spine.mapNotNull { opf.manifest[it] }.map { it.href }
             if (spineHrefs.isEmpty()) return emptyBook(file)
-            val chapters = mutableListOf<EbookChapter>()
+            // entry 路径 → spine 序号（与 resolveEntry 同一归一化口径，供超链接定位）
+            val entryToSpine = spineHrefs.mapIndexed { i, h ->
+                val dec = runCatching { URLDecoder.decode(h.substringBefore('#'), "UTF-8") }
+                    .getOrDefault(h.substringBefore('#'))
+                normalizeZipPath(if (base.isBlank()) dec else "$base/$dec") to i
+            }.toMap()
+            val rawChapters = mutableListOf<List<RichBlock>>()
+            val chapterEntries = mutableListOf<String>()
             // 无文字 spine（封面页/纯图页）会被跳过，spine 序号 ≠ 章节序号，这里记映射
             val spineToChapter = mutableMapOf<Int, Int>()
-            // (spineIndex, blockId) → blockIndex，供目录锚点定位
+            // (spineIndex, blockId) → blockIndex，供目录锚点/超链接定位
             val idIndex = mutableMapOf<Pair<Int, String>, Int>()
             spineHrefs.forEachIndexed { si, href ->
                 runCatching {
@@ -62,14 +72,29 @@ object EpubParser {
                         blocks.forEachIndexed { bi, b ->
                             if (b.id.isNotBlank()) idIndex[si to b.id] = bi
                         }
-                        val title = blocks.firstOrNull { it.level in 1..6 }?.text
-                            ?: file.name.substringBeforeLast('.')
-                        spineToChapter[si] = chapters.size
-                        chapters.add(EbookChapter(title, blocks.map { EbookBlock(it.text, it.level) }))
+                        spineToChapter[si] = rawChapters.size
+                        rawChapters.add(blocks)
+                        chapterEntries.add(entry)
                     }
                 }
             }
-            if (chapters.isEmpty()) return emptyBook(file)
+            if (rawChapters.isEmpty()) return emptyBook(file)
+            // 超链接解析（此时映射齐了）：站内 → 章/块下标，站外 → url，其余丢弃
+            val chapters = rawChapters.mapIndexed { ci, blocks ->
+                val title = blocks.firstOrNull { it.level in 1..6 }?.text
+                    ?: file.name.substringBeforeLast('.')
+                EbookChapter(
+                    title,
+                    blocks.mapIndexed { bi, b ->
+                        EbookBlock(
+                            b.text, b.level,
+                            b.links.mapNotNull { l ->
+                                resolveEbookLink(l.href, chapterEntries[ci], entryToSpine, spineToChapter, idIndex, l.start, l.end)
+                            },
+                        )
+                    },
+                )
+            }
 
             val toc = buildToc(zip, base, opf, spineHrefs, spineToChapter, idIndex, chapters)
             return ParsedEbook(
@@ -79,6 +104,43 @@ object EpubParser {
                 toc = toc,
             )
         }
+    }
+
+    /** 超链接 href → 已解析目标。站内：相对当前章节文件定位；锚点对不上就落章首。 */
+    private fun resolveEbookLink(
+        href: String,
+        curEntry: String,
+        entryToSpine: Map<String, Int>,
+        spineToChapter: Map<Int, Int>,
+        idIndex: Map<Pair<Int, String>, Int>,
+        start: Int,
+        end: Int,
+    ): EbookLink? {
+        val h = href.trim()
+        if (h.isEmpty()) return null
+        val scheme = Regex("""^([a-zA-Z][a-zA-Z0-9+.-]*):""").find(h)?.groupValues?.get(1)?.lowercase()
+        if (scheme != null) {
+            return if (scheme == "http" || scheme == "https") EbookLink(start, end, -1, -1, h) else null
+        }
+        val filePart = h.substringBefore('#')
+        val frag = h.substringAfter('#', "")
+        val targetEntry = if (filePart.isBlank()) {
+            curEntry
+        } else {
+            val dec = runCatching { URLDecoder.decode(filePart, "UTF-8") }.getOrDefault(filePart)
+            val dir = curEntry.substringBeforeLast('/', "")
+            normalizeZipPath(
+                when {
+                    dec.startsWith("/") -> dec.drop(1)
+                    dir.isBlank() -> dec
+                    else -> "$dir/$dec"
+                },
+            )
+        }
+        val si = entryToSpine[targetEntry] ?: return null
+        val ci = spineToChapter[si] ?: return null
+        val bi = if (frag.isBlank()) 0 else idIndex[si to frag] ?: 0
+        return EbookLink(start, end, ci, bi)
     }
 
     private fun emptyBook(file: File): ParsedEbook {
@@ -396,6 +458,88 @@ object EpubParser {
     private val idRe = Regex("""\bid\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
     private val innerTagRe = Regex("""<[^>]+>""")
     private val imgAltRe = Regex("""<img\b[^>]*\balt\s*=\s*["']([^"']*)["'][^>]*>""", RegexOption.IGNORE_CASE)
+    private val aTagRe = Regex("""<a\b([^>]*)>(.*?)</a\s*>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+    private val hrefRe = Regex("""\bhref\s*=\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+    private val blankCollapseRe = Regex("""[ \t\x0B\f\r]+""")
+
+    private fun cleanInline(s: String): String = unescape(innerTagRe.replace(s, ""))
+
+    /**
+     * 块内 HTML 按 <a> 切段：每段单独去标签+反转义后拼接，超链接区间
+     * 直接就是拼接坐标，无需事后对齐。无 href 的纯锚点当普通文本。
+     */
+    private fun extractLinkPieces(inner: String): Pair<String, List<RawLink>> {
+        if (!inner.contains("<a", ignoreCase = true)) return cleanInline(inner) to emptyList()
+        val sb = StringBuilder()
+        val links = mutableListOf<RawLink>()
+        var pos = 0
+        aTagRe.findAll(inner).forEach { m ->
+            sb.append(cleanInline(inner.substring(pos, m.range.first)))
+            val href = hrefRe.find(m.groupValues[1])?.groupValues?.get(1).orEmpty()
+            val label = cleanInline(m.groupValues[2])
+            if (href.isNotBlank() && label.isNotBlank()) {
+                links.add(RawLink(sb.length, sb.length + label.length, href))
+            }
+            sb.append(label)
+            pos = m.range.last + 1
+        }
+        sb.append(cleanInline(inner.substring(pos)))
+        return sb.toString() to links
+    }
+
+    /**
+     * 与旧管线逐字节一致的 trim + 压空白，并把链接区间重映射过去
+     * （旧：unescape(strip).trim().replace([ \t\x0B\f\r]+ → " ")）。
+     */
+    private fun finalizeBlock(merged: String, links: List<RawLink>): Pair<String, List<RawLink>> {
+        // 与旧管线逐字节一致：Kotlin trim() 只去 <= ' ' 的字符，再把 [ \t\x0B\f\r]+ 压成单空格
+        fun isTrimChar(c: Char): Boolean = c <= ' '
+        var s = 0
+        var e = merged.length
+        while (s < e && isTrimChar(merged[s])) s++
+        while (e > s && isTrimChar(merged[e - 1])) e--
+        if (links.isEmpty()) {
+            val text = merged.substring(s, e).replace(blankCollapseRe, " ")
+            return text to emptyList()
+        }
+        val out = StringBuilder()
+        val map = mutableListOf<Int>() // out 坐标 → merged 坐标
+        var i = s
+        while (i < e) {
+            val c = merged[i]
+            if (c == ' ' || c == '\t' || c == '\u000B' || c == '\u000C' || c == '\r') {
+                out.append(' ')
+                map.add(i++)
+                while (i < e && (merged[i] == ' ' || merged[i] == '\t' || merged[i] == '\u000B' || merged[i] == '\u000C' || merged[i] == '\r')) i++
+            } else {
+                out.append(c)
+                map.add(i++)
+            }
+        }
+        fun lowerBound(v: Int): Int {
+            var lo = 0
+            var hi = map.size
+            while (lo < hi) {
+                val mid = (lo + hi) / 2
+                if (map[mid] < v) lo = mid + 1 else hi = mid
+            }
+            return lo
+        }
+        val remapped = links.mapNotNull { l ->
+            val ns = lowerBound(l.start.coerceIn(s, e))
+            val ne = lowerBound(l.end.coerceIn(s, e))
+            if (ns < ne) RawLink(ns, ne, l.href) else null
+        }
+        return out.toString() to remapped
+    }
+
+    /** 把链接裁剪到 [from, to) 并平移到以 from 为 0 的坐标。 */
+    private fun clipLinks(links: List<RawLink>, from: Int, to: Int, base: Int): List<RawLink> =
+        links.mapNotNull { l ->
+            val a = maxOf(l.start, from)
+            val e = minOf(l.end, to)
+            if (a < e) RawLink(a - base, e - base, l.href) else null
+        }
 
     private fun parseBodyBlocks(html: String): List<RichBlock> {
         // 去掉 head/script/style
@@ -417,13 +561,29 @@ object EpubParser {
                 val alt = im.groupValues[1]
                 inner = inner.replace(im.value, if (alt.isBlank()) "" else "［图：$alt］")
             }
-            val text = unescape(innerTagRe.replace(inner, "")).trim()
-                .replace(Regex("""[ \t\x0B\f\r]+"""), " ")
+            // 先按 <a> 切段（逐段去标签+反转义，超链接区间天然对齐），再整体 trim+压空白
+            val (merged, rawLinks) = extractLinkPieces(inner)
+            val (text, links) = finalizeBlock(merged, rawLinks)
             if (text.isBlank() || text.length < 2 && tag == "div") return@forEach
-            // 过长 div（含整章的容器 div）拆行，避免一页巨块
+            // 过长 div（含整章的容器 div）拆行，避免一页巨块；链接按行裁剪
             if (tag == "div" && text.length > 600) {
-                text.split('\n').map { it.trim() }.filter { it.isNotBlank() }.forEach {
-                    out.add(RichBlock(it, 0, ""))
+                var pos = 0
+                text.split('\n').forEach { piece ->
+                    val t = piece.trim()
+                    if (t.isNotBlank()) {
+                        // piece 在 text 中的区间（trim 前后偏移需回扣）
+                        val start = text.indexOf(piece, pos)
+                        if (start >= 0) {
+                            val lead = piece.length - piece.trimStart().length
+                            val trail = piece.length - t.length - lead
+                            val from = start + lead
+                            val to = start + piece.length - trail
+                            out.add(RichBlock(t, 0, "", clipLinks(links, from, to, from)))
+                            pos = start + piece.length
+                        }
+                    } else {
+                        pos += piece.length + 1
+                    }
                 }
                 return@forEach
             }
@@ -437,13 +597,13 @@ object EpubParser {
                 else -> 0
             }
             val id = idRe.find(attrs)?.groupValues?.get(1).orEmpty()
-            out.add(RichBlock(text, level, id))
+            out.add(RichBlock(text, level, id, links))
         }
         // 兜底：没有任何块级标签（纯文本 spine），按行切
         if (out.isEmpty()) {
             val text = unescape(innerTagRe.replace(s, "")).trim()
             text.split(Regex("""\n\s*\n|\n""")).map { it.trim() }.filter { it.isNotBlank() }
-                .forEach { out.add(RichBlock(it, 0, "")) }
+                .forEach { out.add(RichBlock(it, 0, "", emptyList())) }
         }
         return out
     }

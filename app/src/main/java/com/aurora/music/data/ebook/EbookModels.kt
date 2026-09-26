@@ -55,8 +55,24 @@ data class EbookBook(
 
 // ---- 解析产物（进磁盘缓存，二次打开直接读） ----
 
-/** 正文块：level 0 = 正文，1..6 = h1..h6 */
-data class EbookBlock(val text: String, val level: Int = 0)
+/** 正文块：level 0 = 正文，1..6 = h1..h6；links 为块内超链接（字符区间，块坐标） */
+data class EbookBlock(
+    val text: String,
+    val level: Int = 0,
+    val links: List<EbookLink> = emptyList(),
+)
+
+/**
+ * 已解析的超链接：chapter >= 0 = 站内跳转（章/块下标，与目录跳转同一套）；
+ * chapter = -1 = 外部链接，看 url（仅 http/https 会被打开）。
+ */
+data class EbookLink(
+    val start: Int,
+    val end: Int,
+    val chapter: Int,
+    val block: Int,
+    val url: String = "",
+)
 
 data class EbookChapter(val title: String, val blocks: List<EbookBlock>)
 

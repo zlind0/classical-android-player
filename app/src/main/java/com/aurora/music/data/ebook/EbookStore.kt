@@ -193,7 +193,8 @@ class EbookStore(context: Context, private val dao: EbookDao) {
     }
 
     private fun readParsedCache(md5: String): ParsedEbook? = runCatching {
-        val f = File(cacheDirFor(md5), "parsed.json")
+        // v2 起带超链接；v1 无该字段直接废弃重解析（分页断点按块字符区间，与此无关不受影响）
+        val f = File(cacheDirFor(md5), "parsed_v2.json")
         if (!f.exists()) return null
         gson.fromJson<ParsedEbook>(f.readText(), parsedType)
     }.getOrNull()
@@ -202,7 +203,8 @@ class EbookStore(context: Context, private val dao: EbookDao) {
         runCatching {
             val dir = cacheDirFor(md5)
             dir.mkdirs()
-            File(dir, "parsed.json").writeText(gson.toJson(parsed))
+            runCatching { File(dir, "parsed.json").delete() }
+            File(dir, "parsed_v2.json").writeText(gson.toJson(parsed))
         }
     }
 
