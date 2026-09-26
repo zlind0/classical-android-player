@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -125,6 +126,7 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
     var spine by remember(bookPath) { mutableStateOf(0) }
     var startPage by remember(bookPath) { mutableStateOf(0) }
     var tocOpen by remember { mutableStateOf(false) }
+    var tocAnchor by remember(bookPath) { mutableStateOf(0 to 0) }
     var optionsOpen by remember { mutableStateOf(false) }
     var toast by remember { mutableStateOf<String?>(null) }
 
@@ -189,13 +191,19 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
     }
 
     if (tocOpen) {
-        EbookTocPage(book = book, currentSpine = spine, onBack = { tocOpen = false }, onJump = { s, b ->
-            scope.launch {
-                spine = s
-                startPage = -b - 2 // 标记：按块跳（负数编码块号）
-                tocOpen = false
-            }
-        })
+        EbookTocPage(
+            book = book,
+            currentSpine = tocAnchor.first,
+            currentBlock = tocAnchor.second,
+            onBack = { tocOpen = false },
+            onJump = { s, b ->
+                scope.launch {
+                    spine = s
+                    startPage = -b - 2 // 标记：按块跳（负数编码块号）
+                    tocOpen = false
+                }
+            },
+        )
         return
     }
     if (optionsOpen) {
@@ -215,7 +223,10 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
             spine = s
             startPage = p
         },
-        onOpenToc = { tocOpen = true },
+        onOpenToc = { c, b ->
+            tocAnchor = c to b
+            tocOpen = true
+        },
         onOpenOptions = { optionsOpen = true },
     )
 }
@@ -230,7 +241,7 @@ private fun ReaderBody(
     toast: String?,
     onToast: (String) -> Unit,
     onSpineChange: (spine: Int, page: Int) -> Unit,
-    onOpenToc: () -> Unit,
+    onOpenToc: (chapter: Int, block: Int) -> Unit,
     onOpenOptions: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -429,7 +440,11 @@ private fun ReaderBody(
             ReaderBottomBar(
                 ink = th.ink,
                 divider = meta.copy(alpha = 0.4f),
-                onToc = onOpenToc,
+                onToc = {
+                    val (c, p) = livePos ?: (spine to 0)
+                    val blk = breaks[c]?.filter { it.isNotEmpty() }?.getOrNull(p)?.firstOrNull()?.block ?: 0
+                    onOpenToc(c, blk)
+                },
                 onOptions = onOpenOptions,
                 onPlaceholder = { onToast("即将推出") },
             )
@@ -494,6 +509,18 @@ private fun pageForBlock(pages: List<List<PageSlice>>, block: Int): Int {
 /** 该章是否有可用页（空页列表视为缺失，触发重排并自愈脏缓存）。 */
 private fun hasPages(m: Map<Int, List<List<PageSlice>>>, ci: Int): Boolean =
     m[ci]?.any { it.isNotEmpty() } == true
+
+/** 按展开规则数可见条目（目录自适应深度的计数用）。 */
+private fun countVisible(toc: List<com.aurora.music.data.ebook.EbookTocEntry>, expanded: (Int) -> Boolean): Int {
+    val stack = ArrayDeque<Pair<Int, Int>>()
+    var n = 0
+    toc.forEachIndexed { i, e ->
+        while (stack.isNotEmpty() && stack.last().second >= e.level) stack.removeLast()
+        if (stack.all { expanded(it.first) }) n++
+        stack.add(i to e.level)
+    }
+    return n
+}
 
 private fun charsOfPage(book: ParsedEbook, spine: Int, pages: List<List<PageSlice>>, page: Int): Int {
     if (page < 0) return 0
@@ -689,6 +716,7 @@ private fun loadFontFamily(path: String): FontFamily {
 private fun EbookTocPage(
     book: ParsedEbook,
     currentSpine: Int,
+    currentBlock: Int,
     onBack: () -> Unit,
     onJump: (spine: Int, block: Int) -> Unit,
 ) {
@@ -705,16 +733,55 @@ private fun EbookTocPage(
             false
         }
     }
+    // 当前位置对应的条目：同章且块号不超过当前位置的最后一条
+    val currentEntry = remember(book, currentSpine, currentBlock) {
+        if (book.toc.isEmpty()) return@remember -1
+        var idx = book.toc.indexOfFirst { it.chapterIndex == currentSpine }
+        book.toc.forEachIndexed { i, e ->
+            if (e.chapterIndex == currentSpine && e.blockIndex <= currentBlock) idx = i
+        }
+        if (idx < 0) 0 else idx
+    }
+    // 当前条目的祖先 + 自己 + 子孙：打开即展开到最详细
+    val forceExpanded = remember(book, currentEntry) {
+        val s = mutableSetOf<Int>()
+        if (currentEntry >= 0) {
+            var lv = book.toc[currentEntry].level
+            var j = currentEntry - 1
+            while (j >= 0) {
+                if (book.toc[j].level < lv) {
+                    s.add(j)
+                    lv = book.toc[j].level
+                }
+                j--
+            }
+            s.add(currentEntry)
+            var k = currentEntry + 1
+            while (k < book.toc.size && book.toc[k].level > book.toc[currentEntry].level) {
+                s.add(k)
+                k++
+            }
+        }
+        s
+    }
+    // 自适应深度：把“展开 level ≤ D 的节点”后的可见条目数压到 200 以内，取最大的 D。
+    // 不按 h1/h2 字面定——有些书的层级本来就不是 h1/h2。
+    // 当前阅读路径（上面）无条件全展，优先级高于计数。
+    val expandDepth = remember(book) {
+        var d = 6
+        while (d > 0 && countVisible(book.toc) { book.toc[it].level <= d } > 200) d--
+        d
+    }
     fun defaultExpanded(i: Int): Boolean {
-        val e = book.toc[i]
-        return e.level <= 2 || e.chapterIndex == currentSpine
+        if (i in forceExpanded) return true
+        return book.toc[i].level <= expandDepth
     }
     fun expanded(i: Int): Boolean {
         val d = defaultExpanded(i)
         return if (toggled.containsKey(i)) !d else d
     }
     // 可见性：所有祖先都展开
-    val visible = remember(book, currentSpine, toggled.toMap()) {
+    val visible = remember(book, toggled.toMap(), forceExpanded, expandDepth) {
         val stack = ArrayDeque<Pair<Int, Int>>() // (tocIndex, level)
         BooleanArray(book.toc.size) { i ->
             val lv = book.toc[i].level
@@ -724,11 +791,31 @@ private fun EbookTocPage(
             ok
         }
     }
-    Column(Modifier.fillMaxSize()) {
-        Ios5NavBar(title = "目录", onBack = onBack)
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+    val rows = remember(book, visible) {
+        book.toc.mapIndexedNotNull { i, e -> if (visible[i]) i to e else null }
+    }
+    val targetPos = remember(rows, currentEntry) {
+        rows.indexOfFirst { it.first == currentEntry }.takeIf { it >= 0 } ?: 0
+    }
+    val listState = rememberLazyListState()
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val tocDensity = LocalDensity.current
+        // 打开即定位到当前 heading 并大致居中
+        LaunchedEffect(Unit) {
+            if (targetPos > 0) {
+                val viewportH = maxHeight - 120.dp
+                val halfViewport = with(tocDensity) { viewportH.toPx().toInt().coerceAtLeast(0) } / 2
+                listState.scrollToItem(targetPos, scrollOffset = -halfViewport)
+            }
+        }
+        Column(Modifier.fillMaxSize()) {
+            Ios5NavBar(title = "目录", onBack = onBack)
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 16.dp),
+            ) {
             item { Ios5SectionTitle(book.title) }
-            val rows = book.toc.mapIndexedNotNull { i, e -> if (visible[i]) i to e else null }
             ios5Rows(rows, key = { it.first }) { _, (i, e) ->
                 Row(
                     Modifier.fillMaxWidth()
@@ -736,7 +823,7 @@ private fun EbookTocPage(
                         .padding(start = (12 + (e.level - 1) * 16).dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    val current = e.chapterIndex == currentSpine
+                    val current = i == currentEntry
                     if (hasChildren[i]) {
                         val ex = expanded(i)
                         Text(
@@ -760,6 +847,7 @@ private fun EbookTocPage(
                         modifier = Modifier.weight(1f),
                     )
                 }
+            }
             }
         }
     }
