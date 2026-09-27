@@ -189,6 +189,8 @@ fun Ios5SliderRow(
     value: Float,
     range: ClosedFloatingPointRange<Float>,
     steps: Int = 0,
+    // 刻意放 onValueChange 前面：尾随 lambda 永远绑定 onValueChange，历史调用方零改动。
+    onValueChangeFinished: () -> Unit = {},
     onValueChange: (Float) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
@@ -201,6 +203,7 @@ fun Ios5SliderRow(
             onValueChange = onValueChange,
             range = range,
             steps = steps,
+            onValueChangeFinished = onValueChangeFinished,
         )
     }
 }

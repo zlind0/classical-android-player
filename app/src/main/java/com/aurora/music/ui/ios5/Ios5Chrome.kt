@@ -542,6 +542,8 @@ fun Ios5Slider(
     steps: Int = 0,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
+    /** 抬手（拖动结束）或点按落定后调用一次；默认空实现，其他调用方行为不变。 */
+    onValueChangeFinished: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var dragging by remember { mutableStateOf(false) }
@@ -578,6 +580,7 @@ fun Ios5Slider(
                     detectTapGestures { offset ->
                         val f = (offset.x / size.width).coerceIn(0f, 1f)
                         onValueChange(snap(range.start + (range.endInclusive - range.start) * f))
+                        onValueChangeFinished()
                     }
                 }
                 .draggable(
@@ -593,7 +596,11 @@ fun Ios5Slider(
                     },
                     onDragStopped = {
                         dragging = false
-                        scope.launch { onValueChange(snap(value)) }
+                        val release = snap(range.start + (range.endInclusive - range.start) * dragFrac)
+                        scope.launch {
+                            onValueChange(release)
+                            onValueChangeFinished()
+                        }
                     },
                 ),
         ) {

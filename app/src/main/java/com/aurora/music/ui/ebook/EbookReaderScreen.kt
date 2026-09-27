@@ -50,6 +50,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -84,6 +85,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.ebook.EbookReadPrefs
 import com.aurora.music.data.ebook.EbookTheme
+import com.aurora.music.data.ebook.MAX_RECENT_FONTS
 import com.aurora.music.data.ebook.EbookTtsEngine
 import com.aurora.music.data.ebook.ParsedEbook
 import com.aurora.music.tts.MsVoices
@@ -1100,26 +1102,35 @@ private fun EbookOptionsPage(onBack: () -> Unit) {
                 checked = prefs.fontPath.isBlank(),
                 onClick = { container.ebookPrefs.setFontPath("") },
             )
-            Ios5CellDivider()
-            if (prefs.fontPath.isNotBlank()) {
-                com.aurora.music.ui.ios5.Ios5CheckRow(
-                    title = File(prefs.fontPath).name,
-                    subtitle = "自定义字体",
-                    checked = true,
-                    onClick = {},
-                )
-                Ios5CellDivider()
+            // 最近用过的自定义字体（当前选中的即便还没进名单也排第一，方便老用户迁移）
+            val recentFonts by container.ebookPrefs.recentFonts.collectAsStateWithLifecycle()
+            val fontOptions = remember(prefs.fontPath, recentFonts) {
+                (listOf(prefs.fontPath).filter { it.isNotBlank() } + recentFonts)
+                    .distinct().take(MAX_RECENT_FONTS)
             }
+            fontOptions.forEach { path ->
+                Ios5CellDivider()
+                com.aurora.music.ui.ios5.Ios5CheckRow(
+                    title = File(path).name,
+                    subtitle = "自定义字体",
+                    checked = prefs.fontPath == path,
+                    onClick = { container.ebookPrefs.setFontPath(path) },
+                )
+            }
+            Ios5CellDivider()
             Ios5NavRow(title = "选择字体文件", subtitle = "ttf / otf", onClick = { fontPicker.launch("*/*") })
         }
         ios5Section("文字大小") {
+            // 拖动只改本地预览，抬手才落盘，避免每 tick 重排分页
+            var sizeDraft by remember(prefs.fontSizeSp) { mutableFloatStateOf(prefs.fontSizeSp) }
             Ios5SliderRow(
                 title = "字号",
-                valueLabel = "${prefs.fontSizeSp.toInt()}",
-                value = prefs.fontSizeSp,
-                range = 12f..28f,
-                steps = 15,
-                onValueChange = { container.ebookPrefs.setFontSize(it) },
+                valueLabel = "${sizeDraft.toInt()}",
+                value = sizeDraft,
+                range = 12f..50f,
+                steps = 37,
+                onValueChange = { sizeDraft = it },
+                onValueChangeFinished = { container.ebookPrefs.setFontSize(sizeDraft) },
             )
             Ios5StaticText("左右滑动翻页时的每页字数会随字号变化，断点会自动重排并记住。")
         }
