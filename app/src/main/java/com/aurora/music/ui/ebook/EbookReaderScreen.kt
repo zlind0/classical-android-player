@@ -136,6 +136,8 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
     var failed by remember(bookPath) { mutableStateOf(false) }
     var spine by remember(bookPath) { mutableStateOf(0) }
     var startPage by remember(bookPath) { mutableStateOf(0) }
+    // 每翻一页同步到这里：进设置/目录返回、进程被杀重进都从它恢复，不再用打开时的旧页
+    var resumePos by remember(bookPath) { mutableStateOf<Pair<Int, Int>?>(null) }
     var tocOpen by remember { mutableStateOf(false) }
     var tocAnchor by remember(bookPath) { mutableStateOf(0 to 0) }
     var optionsOpen by remember { mutableStateOf(false) }
@@ -164,6 +166,7 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
     LaunchedEffect(bookPath) {
         parsed = null
         failed = false
+        resumePos = null
         val row = store.bookByPath(bookPath)
         spine = row?.spineIndex ?: 0
         startPage = row?.pageIndex ?: 0
@@ -211,6 +214,7 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
                 scope.launch {
                     spine = s
                     startPage = -b - 2 // 标记：按块跳（负数编码块号）
+                    resumePos = null
                     tocOpen = false
                 }
             },
@@ -227,13 +231,17 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
         book = book,
         spine = spine,
         startPage = startPage,
+        resumePos = resumePos,
         prefs = prefs,
         toast = toast,
         onToast = { toast = it },
         onSpineChange = { s, p ->
             spine = s
             startPage = p
+            // 上一章末页（Int.MAX_VALUE）真实页码未知，等 ReaderBody 回报；其余直接记
+            resumePos = if (p >= 0 && p != Int.MAX_VALUE) s to p else null
         },
+        onPosition = { c, p -> resumePos = c to p },
         onOpenToc = { c, b ->
             tocAnchor = c to b
             tocOpen = true
@@ -248,10 +256,12 @@ private fun ReaderBody(
     book: ParsedEbook,
     spine: Int,
     startPage: Int,
+    resumePos: Pair<Int, Int>?,
     prefs: EbookReadPrefs,
     toast: String?,
     onToast: (String) -> Unit,
     onSpineChange: (spine: Int, page: Int) -> Unit,
+    onPosition: (chapter: Int, page: Int) -> Unit,
     onOpenToc: (chapter: Int, block: Int) -> Unit,
     onOpenOptions: () -> Unit,
 ) {
@@ -345,29 +355,33 @@ private fun ReaderBody(
         // 到达边界页时相邻章已预排好（上面的窗口分页），切窗无 loader。
         var livePos by remember(bookPath) { mutableStateOf<Pair<Int, Int>?>(null) } // (章, 页)实时位置
         var lastSettled by remember(bookPath) { mutableStateOf<Pair<Int, Int>?>(null) }
+        // 有效位置：resumePos（每翻一页同步）优先，没有才用打开/跳转时的 spine/startPage
+        val effSpine = resumePos?.first ?: spine
+        val effStartPage = resumePos?.second ?: startPage
         // startPage 负数 = 按块跳（目录过来）：-b-2 → 块号 b
-        val jumpBlock = if (startPage < 0) -startPage - 2 else -1
-        val spinePages0 = breaks[spine]?.filter { it.isNotEmpty() }.orEmpty()
+        val jumpBlock = if (effStartPage < 0) -effStartPage - 2 else -1
+        val spinePages0 = breaks[effSpine]?.filter { it.isNotEmpty() }.orEmpty()
         val spineTarget = when {
-            lastSettled?.first == spine -> lastSettled!!.second
+            lastSettled?.first == effSpine -> lastSettled!!.second
+            resumePos?.first == effSpine -> resumePos.second
             jumpBlock >= 0 -> pageForBlock(spinePages0, jumpBlock)
-            else -> startPage.coerceIn(0, (spinePages0.size - 1).coerceAtLeast(0))
+            else -> effStartPage.coerceIn(0, (spinePages0.size - 1).coerceAtLeast(0))
         }
-        val windowPages: List<Pair<Int, Int>> = remember(breaks, spine, book) {
-            if (!hasPages(breaks, spine)) emptyList()
+        val windowPages: List<Pair<Int, Int>> = remember(breaks, effSpine, book) {
+            if (!hasPages(breaks, effSpine)) emptyList()
             else buildList {
                 listOfNotNull(
-                    (spine - 1).takeIf { it >= 0 },
-                    spine,
-                    (spine + 1).takeIf { it < book.chapters.size },
+                    (effSpine - 1).takeIf { it >= 0 },
+                    effSpine,
+                    (effSpine + 1).takeIf { it < book.chapters.size },
                 ).filter { hasPages(breaks, it) }.forEach { ci ->
                     breaks[ci]?.filter { it.isNotEmpty() }?.forEachIndexed { pi, _ -> add(ci to pi) }
                 }
             }
         }
         val winSig = remember(windowPages) { windowPages.joinToString(",") { "${it.first}:${it.second}" } }
-        val startIndex = remember(windowPages, spine, spineTarget) {
-            windowPages.indexOfFirst { it.first == spine && it.second == spineTarget }.takeIf { it >= 0 } ?: 0
+        val startIndex = remember(windowPages, effSpine, spineTarget) {
+            windowPages.indexOfFirst { it.first == effSpine && it.second == spineTarget }.takeIf { it >= 0 } ?: 0
         }
 
         // 章节字符统计（进度用，不依赖分页）
@@ -379,7 +393,7 @@ private fun ReaderBody(
 
         Column(Modifier.fillMaxSize()) {
             // ---- 顶栏：灰字状态，无按钮 ----
-            val curGP = livePos?.takeIf { gp -> windowPages.any { it == gp } } ?: (spine to spineTarget)
+            val curGP = livePos?.takeIf { gp -> windowPages.any { it == gp } } ?: (effSpine to spineTarget)
             val curPages = breaks[curGP.first]?.filter { it.isNotEmpty() }.orEmpty()
             val pageChars = remember(book, curGP, curPages) { charsOfPage(book, curGP.first, curPages, curGP.second) }
             val pct = ((charsBeforeChapter(curGP.first) + pageChars).toFloat() / totalChars).coerceIn(0f, 1f)
@@ -401,20 +415,25 @@ private fun ReaderBody(
                         LottieLoader(modifier = Modifier.size(64.dp))
                     }
                 } else {
-                    key("$winSig|$spine") {
+                    key("$winSig|$effSpine") {
                         val pager = rememberPagerState(initialPage = startIndex) { windowPages.size }
-                        LaunchedEffect(pager.currentPage) {
-                            windowPages.getOrNull(pager.currentPage)?.let { livePos = it }
-                        }
-                        // 落定即存进度；落到邻章区间则整体换窗（同页跳变，无动画无闪烁）
-                        LaunchedEffect(pager.settledPage) {
-                            val gp = windowPages.getOrNull(pager.settledPage) ?: return@LaunchedEffect
-                            lastSettled = gp
+                        // 每翻一页立刻存档（无防抖）：进设置、进程被杀都不丢；同时同步恢复位置
+                        fun persist(gp: Pair<Int, Int>) {
                             livePos = gp
+                            onPosition(gp.first, gp.second)
                             val cps = breaks[gp.first]?.filter { it.isNotEmpty() }.orEmpty()
                             val chars = charsBeforeChapter(gp.first) + charsOfPage(book, gp.first, cps, gp.second)
                             store.saveProgress(bookPath, gp.first, gp.second, (chars.toFloat() / totalChars).coerceIn(0f, 1f))
-                            if (gp.first != spine) onSpineChange(gp.first, gp.second)
+                        }
+                        LaunchedEffect(pager.currentPage) {
+                            windowPages.getOrNull(pager.currentPage)?.let { persist(it) }
+                        }
+                        // 落到邻章区间则整体换窗（同页跳变，无动画无闪烁）
+                        LaunchedEffect(pager.settledPage) {
+                            val gp = windowPages.getOrNull(pager.settledPage) ?: return@LaunchedEffect
+                            lastSettled = gp
+                            persist(gp)
+                            if (gp.first != effSpine) onSpineChange(gp.first, gp.second)
                         }
                         HorizontalPager(
                             state = pager,
@@ -452,7 +471,7 @@ private fun ReaderBody(
                 barBrush = th.barBrush,
                 barInk = th.barInk,
                 onToc = {
-                    val (c, p) = livePos ?: (spine to 0)
+                    val (c, p) = livePos ?: (effSpine to 0)
                     val blk = breaks[c]?.filter { it.isNotEmpty() }?.getOrNull(p)?.firstOrNull()?.block ?: 0
                     onOpenToc(c, blk)
                 },
