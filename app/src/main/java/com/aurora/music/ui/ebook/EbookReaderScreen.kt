@@ -216,50 +216,52 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
         return
     }
 
-    if (tocOpen) {
-        EbookTocPage(
+    // 使用 Box 叠加：ReaderBody 常驻，TOC/Options 覆盖在上层
+    // 这样返回时不重建 pager、不丢分页缓存、不触发多 LaunchedEffect 竞争
+    Box(Modifier.fillMaxSize()) {
+        ReaderBody(
+            bookPath = bookPath,
             book = book,
-            currentSpine = tocAnchor.first,
-            currentBlock = tocAnchor.second,
-            onBack = { tocOpen = false },
-            onJump = { s, b ->
-                scope.launch {
-                    spine = s
-                    startPage = -b - 2 // 标记：按块跳（负数编码块号）
-                    resumePos = null
-                    tocOpen = false
-                }
+            spine = spine,
+            startPage = startPage,
+            resumePos = resumePos,
+            prefs = prefs,
+            toast = toast,
+            onToast = { toast = it },
+            onSpineChange = { s, p ->
+                spine = s
+                startPage = p
+                // 上一章末页（Int.MAX_VALUE）真实页码未知，等 ReaderBody 回报；其余直接记
+                resumePos = if (p >= 0 && p != Int.MAX_VALUE) s to p else null
             },
+            onPosition = { c, p -> resumePos = c to p },
+            onOpenToc = { c, b ->
+                tocAnchor = c to b
+                tocOpen = true
+            },
+            onOpenOptions = { optionsOpen = true },
         )
-        return
-    }
-    if (optionsOpen) {
-        EbookOptionsPage(onBack = { optionsOpen = false })
-        return
-    }
 
-    ReaderBody(
-        bookPath = bookPath,
-        book = book,
-        spine = spine,
-        startPage = startPage,
-        resumePos = resumePos,
-        prefs = prefs,
-        toast = toast,
-        onToast = { toast = it },
-        onSpineChange = { s, p ->
-            spine = s
-            startPage = p
-            // 上一章末页（Int.MAX_VALUE）真实页码未知，等 ReaderBody 回报；其余直接记
-            resumePos = if (p >= 0 && p != Int.MAX_VALUE) s to p else null
-        },
-        onPosition = { c, p -> resumePos = c to p },
-        onOpenToc = { c, b ->
-            tocAnchor = c to b
-            tocOpen = true
-        },
-        onOpenOptions = { optionsOpen = true },
-    )
+        if (tocOpen) {
+            EbookTocPage(
+                book = book,
+                currentSpine = tocAnchor.first,
+                currentBlock = tocAnchor.second,
+                onBack = { tocOpen = false },
+                onJump = { s, b ->
+                    scope.launch {
+                        spine = s
+                        startPage = -b - 2 // 标记：按块跳（负数编码块号）
+                        resumePos = null
+                        tocOpen = false
+                    }
+                },
+            )
+        }
+        if (optionsOpen) {
+            EbookOptionsPage(onBack = { optionsOpen = false })
+        }
+    }
 }
 
 @Composable
@@ -435,22 +437,26 @@ private fun ReaderBody(
                         LottieLoader(modifier = Modifier.size(64.dp))
                     }
                 } else {
-                    // pager 只在换章/换书时重建（邻章拼进窗口只平移下标，不重建，
-                    // 否则后台分页写 breaks 会把快滑中的手拽回上次落定页）
-                    key(bookPath, effSpine) {
-                        val pager = rememberPagerState(initialPage = startIndex) { windowPages.size }
-                        // 窗口变化（邻章页拼到前面/后面）时，把当前逻辑页平移到新下标，
-                        // 无动画，视觉不动。
-                        // 注意：换窗跳变（跨章：TTS 到下一章/上一节回上一章、目录跳转等）
-                        // 会重建 pager 且新下标已由 startIndex 定位，此时 livePos 还停在
-                        // 旧章、而旧章的页仍在新窗口内，不加守卫会被拽回旧章、
-                        // 连带把 effSpine 翻回去，导致跨章朗读只出声不翻页。
-                        LaunchedEffect(winSig) {
-                            val cur = livePos ?: return@LaunchedEffect
-                            if (cur.first != effSpine) return@LaunchedEffect
-                            val wi = windowPages.indexOf(cur)
-                            if (wi >= 0 && wi != pager.currentPage) {
-                                runCatching { pager.scrollToPage(wi) }
+                    // pager 只在换书时重建；章内/跨章靠 windowPages 窗口滑动，不重建 pager
+                    // 避免 key() 导致 TOC/设置返回时整体重建
+                    val pager = rememberPagerState(initialPage = startIndex) { windowPages.size }
+                    // 窗口变化（邻章页拼到前面/后面）时，把当前逻辑页平移到新下标，无动画，视觉不动。
+                    // 同时处理程序化导航（目录跳转、TTS 跨章）：startIndex 变化时滚动到新位置。
+                    LaunchedEffect(winSig, startIndex) {
+                            val cur = livePos
+                            // 1) 窗口内章未变：同步 livePos 到新下标（防邻章分页导致的下标漂移）
+                            if (cur != null && cur.first == effSpine) {
+                                val wi = windowPages.indexOf(cur)
+                                if (wi >= 0 && wi != pager.currentPage) {
+                                    runCatching { pager.scrollToPage(wi) }
+                                }
+                            }
+                            // 2) 程序化导航（目录跳转等）：startIndex 变化且不在当前页，动画滚动过去
+                            if (startIndex >= 0 && startIndex < windowPages.size && startIndex != pager.currentPage) {
+                                // 仅当非用户拖拽中：currentPage == settledPage 表示空闲
+                                if (pager.currentPage == pager.settledPage) {
+                                    runCatching { pager.animateScrollToPage(startIndex) }
+                                }
                             }
                         }
                         // 朗读翻页：段落播完/上下段跳转时翻到该字所在页（跨章走换窗）
@@ -552,7 +558,6 @@ private fun ReaderBody(
                         }
                     }
                 }
-            }
 
             // ---- 底栏：6 键 space evenly（底条连同导航键一整条渐变） ----
             // 上一首/播放/下一首 = 听书控制（段落级，跨页自动翻）
@@ -907,6 +912,8 @@ private fun EbookTocPage(
     onBack: () -> Unit,
     onJump: (spine: Int, block: Int) -> Unit,
 ) {
+    val prefs = (LocalContext.current.applicationContext as AuroraApplication).container.ebookPrefs.prefs.collectAsStateWithLifecycle().value
+    val th = themeOf(prefs.theme)
     // toggled = 与默认相反的手动项
     val toggled = remember { mutableStateMapOf<Int, Boolean>() }
     val hasChildren = remember(book) {
@@ -985,7 +992,7 @@ private fun EbookTocPage(
         rows.indexOfFirst { it.first == currentEntry }.takeIf { it >= 0 } ?: 0
     }
     val listState = rememberLazyListState()
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(th.bg)) {
         val tocDensity = LocalDensity.current
         // 打开即定位到当前 heading 并大致居中
         LaunchedEffect(Unit) {
@@ -1079,8 +1086,10 @@ private fun EbookOptionsPage(onBack: () -> Unit) {
         EbookTheme.SEPIA -> 1
         EbookTheme.DARK -> 2
     }
-    Ios5SettingsPage(title = "阅读设置", onBack = onBack) {
-        ios5Section("页面风格") {
+    val th = themeOf(prefs.theme)
+    Box(Modifier.fillMaxSize().background(th.bg)) {
+        Ios5SettingsPage(title = "阅读设置", onBack = onBack) {
+            ios5Section("页面风格") {
             Ios5SegmentRow(
                 title = "底色",
                 options = listOf("白色", "护眼", "夜间"),
@@ -1207,4 +1216,5 @@ private fun EbookOptionsPage(onBack: () -> Unit) {
             Ios5StaticText("内置与系统语音都经过均衡器 DSP 链（校正/用户均衡/动态等）。切换引擎或音色会停掉当前朗读。")
         }
     }
+}
 }
