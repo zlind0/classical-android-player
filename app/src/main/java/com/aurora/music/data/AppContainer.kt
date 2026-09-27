@@ -213,6 +213,13 @@ class AppContainer(context: Context) {
 
     val audioEffects = AudioEffectsController(audioSessionId, settingsStore, scope)
 
+    // 听书：独立播放器（与音乐链相同的 DSP 链）+ 控制器（App 作用域）
+    val ebookTtsPlayer = com.aurora.music.playback.EbookTtsPlayer(appContext, settingsStore, audioSessionId)
+    val ebookTts = com.aurora.music.data.ebook.EbookTtsController(appContext).also {
+        it.prefs = ebookPrefs
+        it.player = ebookTtsPlayer
+    }
+
     val visualizer = com.aurora.music.playback.VisualizerController(scope)
 
     @Volatile

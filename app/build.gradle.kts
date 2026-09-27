@@ -69,6 +69,11 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        jniLibs {
+            // client-sdk AAR 自带的 core/bindings 与 jniLibs/ 下（验过一致）重复，任选其一
+            pickFirsts += "**/libMicrosoft.CognitiveServices.Speech.*"
+            pickFirsts += "**/libspeexdsp.so"
+        }
     }
 }
 
@@ -105,6 +110,9 @@ dependencies {
     implementation(libs.glance.appwidget)
     implementation(libs.glance.material3)
     implementation(libs.jaudiotagger)
+    // 内置微软离线 TTS（电子书听书默认引擎）：client-sdk Java 绑定 + jniLibs 下的
+    // embedded tts runtime；azure-core 仅在线鉴权用，离线用不到，排除以保 minSdk 24 可 dex
+    implementation(libs.msspeech) { exclude(group = "com.azure") }
     // Experimental USB bit-perfect audio driver (vendored decent-player, MIT).
     implementation(project(":decent-usb-audio-wrapper-media3"))
     implementation(project(":lib-titlemerge"))

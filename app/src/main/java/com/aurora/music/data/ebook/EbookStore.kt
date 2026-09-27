@@ -157,6 +157,8 @@ class EbookStore(context: Context, private val dao: EbookDao) {
 
     private val parsedType = object : TypeToken<ParsedEbook>() {}.type
 
+    // ---- 打开 / 进度 ----
+
     /** 打开一本书：缓存命中直接读，否则解析后写缓存。IO 线程调用。 */
     suspend fun openBook(path: String): ParsedEbook? = withContext(Dispatchers.IO) {
         val file = File(path)

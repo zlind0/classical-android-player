@@ -324,51 +324,10 @@ class PlaybackService : MediaLibraryService() {
         val ap = lastAudioPrefs ?: return
         // v0.5.1: engine selector removed — the software DSP chain is always on
         // (bit-perfect USB keeps its own bypass chain).
-        val layout = DspCoeffBuilder.GRAPHIC_LAYOUTS.getOrElse(ap.dspGraphicLayout) { DspCoeffBuilder.GRAPHIC_LAYOUTS[0] }
-        val graphic = FloatArray(layout.freqs.size) { ap.dspGraphicBands.getOrElse(it) { 0f } }
-        // v0.5 auto headroom (plan §28): preamp covers the max positive gain of
-        // user EQ + correction FIR; manual preamp trims on top.
-        val userPeak = DspCoeffBuilder.eqPeakDb(
-            DspParams(graphic = graphic, graphicFreqs = layout.freqs, graphicQ = layout.q), 48000,
-        )
-        val combinedPeak = maxOf(userPeak, correctionMaxGainDb)
-        val autoPre = if (ap.dspAutoHeadroom) -combinedPeak.coerceAtLeast(0f) else 0f
-        // v0.6 driving presets override the static compressor (plan §35)
-        driveOn = ap.dspDriveMode != com.aurora.music.data.DrivingMode.OFF
+        // 参数装配见 playback/DspChain（听书链共用同一份，保证两边效果一致）
+        driveOn = isDrivingOn(ap)
         driveTargetDb = ap.dspDriveTargetDb
-        val compEff = when (ap.dspDriveMode) {
-            com.aurora.music.data.DrivingMode.NATURAL -> floatArrayOf(-20f, 1.5f, 80f, 400f, 6f)
-            com.aurora.music.data.DrivingMode.BALANCED -> floatArrayOf(-24f, 2f, 60f, 400f, 6f)
-            com.aurora.music.data.DrivingMode.STRONG -> floatArrayOf(-28f, 3.5f, 40f, 300f, 3f)
-            else -> null
-        }
-        val params = DspParams(
-            graphic = graphic,
-            graphicFreqs = layout.freqs,
-            graphicQ = layout.q,
-            parametric = ap.dspParametric.map { DspBand(it.freqHz, it.gainDb, it.q, it.type) },
-            preampDb = ap.dspPreampDb + correctionTrimDb + autoPre,
-            balance = ap.dspBalance,
-            width = ap.dspWidth,
-            crossfeed = ap.dspCrossfeed,
-            saturation = ap.dspSaturation,
-            delayLeftMs = ap.dspDelayLeftMs,
-            delayRightMs = ap.dspDelayRightMs,
-            trimLeftDb = ap.dspTrimLeftDb,
-            trimRightDb = ap.dspTrimRightDb,
-            limiterEnabled = ap.dspLimiterEnabled,
-            limiterCeilingDb = ap.dspLimiterCeilingDb,
-            compEnabled = compEff != null || ap.dspCompEnabled,
-            compThreshDb = compEff?.get(0) ?: ap.dspCompThreshDb,
-            compRatio = compEff?.get(1) ?: ap.dspCompRatio,
-            compAttackMs = compEff?.get(2) ?: ap.dspCompAttackMs,
-            compReleaseMs = compEff?.get(3) ?: ap.dspCompReleaseMs,
-            compKneeDb = compEff?.get(4) ?: ap.dspCompKneeDb,
-            compMakeupDb = ap.dspCompMakeupDb,
-            makeupAuto = ap.dspMakeupAuto,
-            driveGainDb = driveGainDb,
-        )
-        auroraDsp.update(params)
+        auroraDsp.update(buildDspParams(ap, correctionMaxGainDb, correctionTrimDb, driveGainDb))
         auroraDsp.enabled = true
         audioEffects?.setMasterEnabled(false)
         correctionConv.enabled = correctionActive

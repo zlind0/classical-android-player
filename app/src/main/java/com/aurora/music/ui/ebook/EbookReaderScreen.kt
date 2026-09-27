@@ -37,10 +37,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -82,7 +84,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.ebook.EbookReadPrefs
 import com.aurora.music.data.ebook.EbookTheme
+import com.aurora.music.data.ebook.EbookTtsEngine
 import com.aurora.music.data.ebook.ParsedEbook
+import com.aurora.music.tts.MsVoices
 import com.aurora.music.ui.components.LottieLoader
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5GlossButton
@@ -175,7 +179,13 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
         else {
             parsed = p
             spine = (row?.spineIndex ?: 0).coerceIn(0, p.chapters.size - 1)
+            container.ebookTts.setBook(store.md5Of(bookPath), p)
         }
+    }
+
+    // 离开阅读页停掉朗读（进目录/设置是页内状态，不经过这里）
+    DisposableEffect(bookPath) {
+        onDispose { container.ebookTts.stop() }
     }
 
     BackHandler {
@@ -268,6 +278,13 @@ private fun ReaderBody(
     val context = LocalContext.current
     val container = (context.applicationContext as AuroraApplication).container
     val store = container.ebookStore
+    val tts = container.ebookTts
+    val ttsPlaying by tts.playing.collectAsStateWithLifecycle()
+    val ttsInstalling by tts.installing.collectAsStateWithLifecycle()
+    val ttsNotice by tts.notice.collectAsStateWithLifecycle()
+    LaunchedEffect(ttsNotice) {
+        tts.takeNotice()?.let { onToast(it) }
+    }
     val scope = rememberCoroutineScope()
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
@@ -304,6 +321,7 @@ private fun ReaderBody(
     var cacheKey by remember(bookPath) { mutableStateOf<String?>(null) }
     var pagerHeightPx by remember { mutableStateOf(0) }
 
+    val ttsPos by tts.position.collectAsStateWithLifecycle()
     BoxWithConstraints(Modifier.fillMaxSize().background(th.bg)) {
         val widthPx = with(density) { (maxWidth - 44.dp).toPx().toInt().coerceAtLeast(200) }
         val key = remember(prefs.fontSizeSp, prefs.fontPath, widthPx, pagerHeightPx) {
@@ -417,6 +435,56 @@ private fun ReaderBody(
                 } else {
                     key("$winSig|$effSpine") {
                         val pager = rememberPagerState(initialPage = startIndex) { windowPages.size }
+                        // 朗读翻页：段落播完/上下段跳转时翻到该字所在页（跨章走换窗）
+                        val turnReq by tts.turnRequest.collectAsStateWithLifecycle()
+                        LaunchedEffect(turnReq) {
+                            val (c, b, ch) = turnReq ?: return@LaunchedEffect
+                            val cps = breaks[c]?.filter { it.isNotEmpty() }.orEmpty()
+                            // 该字所在页（同一块可能跨多页，不能只取块首页）
+                            val p = cps.indexOfFirst { page ->
+                                page.any { s -> s.block == b && s.end > ch }
+                            }.takeIf { it >= 0 } ?: if (cps.isNotEmpty()) pageForBlock(cps, b) else 0
+                            if (c != effSpine) {
+                                onSpineChange(c, p)
+                            } else {
+                                val wi = windowPages.indexOf(c to p)
+                                if (wi >= 0 && wi != pager.currentPage) pager.animateScrollToPage(wi)
+                            }
+                        }
+                        // 段内跟读：段落跨页时按朗读进度自动翻（只往前翻，不把用户拽回来）
+                        val paraTiming by tts.paraTiming.collectAsStateWithLifecycle()
+                        LaunchedEffect(paraTiming, ttsPlaying, winSig) {
+                            val t = paraTiming ?: return@LaunchedEffect
+                            if (!ttsPlaying || t.chapter != effSpine) return@LaunchedEffect
+                            val cps = breaks[t.chapter]?.filter { it.isNotEmpty() }.orEmpty()
+                            if (cps.isEmpty()) return@LaunchedEffect
+                            val total = t.totalChars.coerceAtLeast(1)
+                            val dur = t.durationMs.coerceAtLeast(1)
+                            while (true) {
+                                delay(250)
+                                if (!tts.playing.value) break
+                                val elapsed = android.os.SystemClock.elapsedRealtime() - t.startedAt
+                                if (elapsed > dur + 2000) break
+                                // 全局字坐标 = 起始偏移 + 已读字数
+                                val targetChar = t.startChar +
+                                    (elapsed.toFloat() / dur * total).toInt().coerceAtLeast(0)
+                                var acc = 0
+                                var targetPage = 0
+                                for ((pi, page) in cps.withIndex()) {
+                                    val pc = page.sumOf { (it.end - it.start).coerceAtLeast(0) }
+                                    if (targetChar < acc + pc) {
+                                        targetPage = pi
+                                        break
+                                    }
+                                    acc += pc
+                                    targetPage = pi
+                                }
+                                val wi = windowPages.indexOf(t.chapter to targetPage)
+                                if (wi >= 0 && wi > pager.currentPage) {
+                                    runCatching { pager.animateScrollToPage(wi) }
+                                }
+                            }
+                        }
                         // 每翻一页立刻存档（无防抖）：进设置、进程被杀都不丢；同时同步恢复位置
                         fun persist(gp: Pair<Int, Int>) {
                             livePos = gp
@@ -460,6 +528,8 @@ private fun ReaderBody(
                                 ink = th.ink,
                                 linkColor = linkColor,
                                 onLinkClick = { tag -> handleLink(tag) },
+                                highlightBlock = ttsPos?.takeIf { it.chapter == c }?.block,
+                                highlightFrom = ttsPos?.takeIf { it.chapter == c }?.startChar ?: 0,
                             )
                         }
                     }
@@ -467,9 +537,24 @@ private fun ReaderBody(
             }
 
             // ---- 底栏：6 键 space evenly（底条连同导航键一整条渐变） ----
+            // 上一首/播放/下一首 = 听书控制（段落级，跨页自动翻）
             ReaderBottomBar(
                 barBrush = th.barBrush,
                 barInk = th.barInk,
+                isTtsPlaying = ttsPlaying,
+                onTtsPrev = { tts.prev() },
+                onTtsToggle = {
+                    if (ttsPlaying) {
+                        tts.stop()
+                    } else {
+                        // 每次点播放都从当前页最顶上第一个字开始读
+                        // （页顶可能是段落中间，带上块内字偏移）
+                        val (c, p) = livePos ?: (effSpine to 0)
+                        val sl = breaks[c]?.filter { it.isNotEmpty() }?.getOrNull(p)?.firstOrNull()
+                        if (sl != null) tts.playFrom(c, sl.block, sl.start)
+                    }
+                },
+                onTtsNext = { tts.next() },
                 onToc = {
                     val (c, p) = livePos ?: (effSpine to 0)
                     val blk = breaks[c]?.filter { it.isNotEmpty() }?.getOrNull(p)?.firstOrNull()?.block ?: 0
@@ -490,6 +575,38 @@ private fun ReaderBody(
                         .background(Color.Black.copy(alpha = 0.75f))
                         .padding(horizontal = 14.dp, vertical = 8.dp),
                 )
+            }
+        }
+        // 内置语音首次释放进度（173MB，几十秒）：居中遮罩
+        val inst = ttsInstalling
+        if (inst != null) {
+            val (done, total, name) = inst
+            Box(
+                Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    Modifier.fillMaxWidth(0.8f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White)
+                        .padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("正在准备内置语音", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1A1D22))
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "$name（$done/$total）",
+                        fontSize = 13.sp, color = Color(0xFF6B7280),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    LinearProgressIndicator(
+                        progress = { (done.toFloat() / total.coerceAtLeast(1)).coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text("首次使用需释放语音数据，之后不再等待", fontSize = 12.sp, color = Color(0xFF6B7280))
+                }
             }
         }
     }
@@ -577,6 +694,8 @@ private fun PageView(
     ink: Color,
     linkColor: Color,
     onLinkClick: (String) -> Unit,
+    highlightBlock: Int? = null,
+    highlightFrom: Int = 0,
 ) {
     val blocks = book.chapters[spine].blocks
     val linkListener = remember(onLinkClick) {
@@ -613,6 +732,18 @@ private fun PageView(
                                 LinkAnnotation.Clickable(tag, linkStyles, linkListener),
                                 segBase + (a - from),
                                 segBase + (e - from),
+                            )
+                        }
+                    }
+                    // 在读段落黄底高亮（后加，盖掉链接色，字强制黑色保证可读）；
+                    // 起点是段中时，只染起始字之后
+                    if (highlightBlock != null && bi == highlightBlock) {
+                        val hs = maxOf(from, highlightFrom.coerceIn(0, b.text.length))
+                        if (hs < to) {
+                            addStyle(
+                                SpanStyle(background = Color(0xFFFFEB3B), color = Color.Black),
+                                segBase + (hs - from),
+                                segBase + (to - from),
                             )
                         }
                     }
@@ -658,6 +789,10 @@ private fun ReaderStatusBar(left: String, right: String, color: Color) {
 private fun ReaderBottomBar(
     barBrush: Brush,
     barInk: Color,
+    isTtsPlaying: Boolean,
+    onTtsPrev: () -> Unit,
+    onTtsToggle: () -> Unit,
+    onTtsNext: () -> Unit,
     onToc: () -> Unit,
     onOptions: () -> Unit,
     onPlaceholder: () -> Unit,
@@ -673,9 +808,13 @@ private fun ReaderBottomBar(
         ) {
             ReaderButton("目录", Icons.AutoMirrored.Filled.List, barInk, 1f, onToc)
             ReaderButton("音乐", Icons.Filled.MusicNote, barInk, 0.35f, onPlaceholder)
-            ReaderButton("上一首", Icons.Filled.SkipPrevious, barInk, 0.35f, onPlaceholder)
-            ReaderButton("播放", Icons.Filled.PlayArrow, barInk, 0.35f, onPlaceholder)
-            ReaderButton("下一首", Icons.Filled.SkipNext, barInk, 0.35f, onPlaceholder)
+            ReaderButton("上一首", Icons.Filled.SkipPrevious, barInk, 1f, onTtsPrev)
+            ReaderButton(
+                if (isTtsPlaying) "停止" else "播放",
+                if (isTtsPlaying) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                barInk, 1f, onTtsToggle,
+            )
+            ReaderButton("下一首", Icons.Filled.SkipNext, barInk, 1f, onTtsNext)
             ReaderButton("选项", Icons.Filled.Settings, barInk, 1f, onOptions)
         }
     }
@@ -890,7 +1029,11 @@ private fun EbookOptionsPage(onBack: () -> Unit) {
     val context = LocalContext.current
     val container = (context.applicationContext as AuroraApplication).container
     val prefs by container.ebookPrefs.prefs.collectAsStateWithLifecycle()
+    val ttsPrefs by container.ebookPrefs.tts.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    // 进设置页即预热系统 TTS（音色列表要用）
+    LaunchedEffect(Unit) { container.ebookTts.refreshSystemVoices() }
+    val systemVoices by container.ebookTts.systemVoices.collectAsStateWithLifecycle()
     val fontPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
@@ -963,6 +1106,78 @@ private fun EbookOptionsPage(onBack: () -> Unit) {
                 onValueChange = { container.ebookPrefs.setFontSize(it) },
             )
             Ios5StaticText("左右滑动翻页时的每页字数会随字号变化，断点会自动重排并记住。")
+        }
+        ios5Section("听书语音") {
+            val engineIdx = if (ttsPrefs.engine == EbookTtsEngine.SYSTEM) 1 else 0
+            Ios5SegmentRow(
+                title = "语音引擎",
+                options = listOf("内置微软", "系统TTS"),
+                selected = engineIdx,
+                onSelect = {
+                    container.ebookTts.stop()
+                    container.ebookPrefs.setTtsEngine(
+                        if (it == 1) EbookTtsEngine.SYSTEM else EbookTtsEngine.INTERNAL,
+                    )
+                },
+            )
+            Ios5CellDivider()
+            if (ttsPrefs.engine == EbookTtsEngine.INTERNAL) {
+                com.aurora.music.ui.ios5.Ios5StaticText("内置离线语音（随 App 打包，无需联网）")
+                MsVoices.ALL.forEach { v ->
+                    Ios5CellDivider()
+                    com.aurora.music.ui.ios5.Ios5CheckRow(
+                        title = v.showName,
+                        subtitle = v.code,
+                        checked = (ttsPrefs.voice.ifBlank { MsVoices.DEFAULT }) == v.code,
+                        onClick = {
+                            container.ebookTts.stop()
+                            container.ebookPrefs.setTtsVoice(v.code)
+                        },
+                    )
+                }
+            } else {
+                com.aurora.music.ui.ios5.Ios5CheckRow(
+                    title = "自动",
+                    subtitle = "优先中文语音",
+                    checked = ttsPrefs.voice.isBlank(),
+                    onClick = {
+                        container.ebookTts.stop()
+                        container.ebookPrefs.setTtsVoice("")
+                    },
+                )
+                systemVoices.take(60).forEach { v ->
+                    Ios5CellDivider()
+                    com.aurora.music.ui.ios5.Ios5CheckRow(
+                        title = v.name,
+                        subtitle = v.locale.toString(),
+                        checked = ttsPrefs.voice == v.name,
+                        onClick = {
+                            container.ebookTts.stop()
+                            container.ebookPrefs.setTtsVoice(v.name)
+                        },
+                    )
+                }
+            }
+        }
+        ios5Section("听书语速") {
+            Ios5SliderRow(
+                title = "语速",
+                valueLabel = String.format(java.util.Locale.US, "%.2fx", ttsPrefs.rate),
+                value = ttsPrefs.rate,
+                range = 0.5f..2f,
+                steps = 29,
+                onValueChange = { container.ebookPrefs.setTtsRate(it) },
+            )
+            Ios5CellDivider()
+            Ios5SliderRow(
+                title = "音调",
+                valueLabel = String.format(java.util.Locale.US, "%.2fx", ttsPrefs.pitch),
+                value = ttsPrefs.pitch,
+                range = 0.5f..2f,
+                steps = 29,
+                onValueChange = { container.ebookPrefs.setTtsPitch(it) },
+            )
+            Ios5StaticText("内置与系统语音都经过均衡器 DSP 链（校正/用户均衡/动态等）。切换引擎或音色会停掉当前朗读。")
         }
     }
 }

@@ -1,0 +1,34 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3" xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10" IgnorableNamespaces="uap uap3 uap10" xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest">
+  <Identity Name="MicrosoftWindows.Voice.en-GB.Ryan.1" Publisher="CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" Version="1.0.3.0" ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>Microsoft Ryan (Natural) - English (United Kingdom)</DisplayName>
+    <PublisherDisplayName>Microsoft Windows</PublisherDisplayName>
+    <Description>Microsoft Ryan (Natural) - English (United Kingdom)</Description>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <uap10:PackageIntegrity>
+      <uap10:Content Enforcement="on" />
+    </uap10:PackageIntegrity>
+  </Properties>
+  <Resources>
+    <Resource Language="en-GB" />
+  </Resources>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.25290.1" />
+  </Dependencies>
+  <Applications>
+    <Application Id="VoiceRyanEnGB">
+      <uap:VisualElements DisplayName="Microsoft Ryan (Natural) - English (United Kingdom)" Description="Microsoft Ryan (Natural) - English (United Kingdom)" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" BackgroundColor="transparent" AppListEntry="none"></uap:VisualElements>
+      <Extensions>
+        <uap3:Extension Category="windows.appExtension">
+          <uap3:AppExtension Name="com.microsoft.voice.model.1" Id="VoiceRyanEnGB" DisplayName="Microsoft Ryan (Natural) - English (United Kingdom)" PublicFolder="Public">
+            <uap3:Properties>
+              <LocaleId>en-GB</LocaleId>
+            </uap3:Properties>
+          </uap3:AppExtension>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <mp:PhoneIdentity PhoneProductId="698cfbc5-f946-4283-ad7e-e1cc0a6a6272" PhonePublisherId="6145b212-a274-4517-8abe-1e015f21ff03" />
+</Package>

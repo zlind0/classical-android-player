@@ -104,6 +104,17 @@ data class EbookReadPrefs(
     val fontPath: String = "",
 )
 
+/** 听书设置：默认内置微软离线引擎。 */
+enum class EbookTtsEngine { INTERNAL, SYSTEM }
+
+data class EbookTtsPrefs(
+    val engine: EbookTtsEngine = EbookTtsEngine.INTERNAL,
+    /** 内置=语音 code；系统=语音 name；空 = 自动（内置默认晓晓，系统跟随语言） */
+    val voice: String = "",
+    val rate: Float = 1f,
+    val pitch: Float = 1f,
+)
+
 data class EbookScanProgress(
     val running: Boolean = false,
     val rootId: Long = 0L,
