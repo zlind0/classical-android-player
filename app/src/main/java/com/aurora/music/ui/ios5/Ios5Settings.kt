@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -34,8 +35,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -298,7 +302,7 @@ fun Ios5TextRow(
     }
 }
 
-/** iOS segmented control. */
+/** iOS5 经典分段控件：颜色逐像素采自系统截图，无高光分层，选中蓝稳重平滑。 */
 @Composable
 fun Ios5SegmentRow(
     title: String,
@@ -311,33 +315,77 @@ fun Ios5SegmentRow(
         Spacer(Modifier.height(8.dp))
         Row(
             Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFFD6DAE0))
-                .border(1.dp, Color(0xFFAEB4BE), RoundedCornerShape(8.dp))
-                .padding(2.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                .height(36.dp)
+                .clip(RoundedCornerShape(9.dp))
+                .background(segmentOffBrush)
+                .border(1.dp, Color(0xFFB2B2B2), RoundedCornerShape(9.dp)),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             options.forEachIndexed { i, opt ->
                 val active = i == selected
+                val shape = when {
+                    options.size == 1 -> RoundedCornerShape(8.dp)
+                    i == 0 -> RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp)
+                    i == options.lastIndex -> RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp)
+                    else -> RectangleShape
+                }
                 Box(
-                    Modifier.weight(1f)
-                        .clip(RoundedCornerShape(6.dp))
-                        .then(if (active) Modifier.background(Ios5Colors.glossBrush) else Modifier)
+                    Modifier.weight(1f).fillMaxHeight()
+                        .clip(shape)
+                        .background(if (active) segmentOnBrush else Brush.verticalGradient(
+                            listOf(Color.Transparent, Color.Transparent),
+                        ))
                         .clickable { onSelect(i) }
-                        .padding(vertical = 7.dp),
+                        .padding(horizontal = 2.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         opt,
                         fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                        color = if (active) Color.White else Ios5Colors.TextSecondary,
+                        color = if (active) Color.White else Color(0xFF727272),
+                        style = androidx.compose.ui.text.TextStyle(
+                            shadow = Shadow(
+                                color = if (active) Color(0xFF2A4A94) else Color.White,
+                                offset = Offset(0f, 1f),
+                            ),
+                        ),
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                // 段间分隔线：只在两边都没选中时画灰线，挨着选中段画实测的深蓝边
+                if (i != options.lastIndex) {
+                    val besideActive = active || i + 1 == selected
+                    Box(
+                        Modifier.width(1.dp).fillMaxHeight()
+                            .background(if (besideActive) Color(0xFF4868AF) else Color(0xFFBFBFBF)),
                     )
                 }
             }
         }
     }
 }
+
+/**
+ * 未选中段底（实测中线中值）：顶部近白到底部浅灰，平滑无分层。
+ * #FCFCFC → #E9E9E9 → #D1D1D1 → #CBCBCB
+ */
+private val segmentOffBrush = Brush.verticalGradient(
+    0f to Color(0xFFFCFCFC),
+    0.4f to Color(0xFFE9E9E9),
+    0.7f to Color(0xFFD1D1D1),
+    1f to Color(0xFFCBCBCB),
+)
+
+/**
+ * 选中段底（实测中线中值）：顶部深蓝藏青描边起，到底部亮蓝，平滑无高光带。
+ * #334A89 → #405FAF → #4F76D6 → #7BA4F2
+ */
+private val segmentOnBrush = Brush.verticalGradient(
+    0f to Color(0xFF334A89),
+    0.08f to Color(0xFF405FAF),
+    0.5f to Color(0xFF4E74D4),
+    1f to Color(0xFF7BA4F2),
+)
 
 /** Small gray explanatory footer. */
 fun LazyListScope.ios5FootNote(text: String) {
