@@ -438,9 +438,14 @@ private fun ReaderBody(
                     key(bookPath, effSpine) {
                         val pager = rememberPagerState(initialPage = startIndex) { windowPages.size }
                         // 窗口变化（邻章页拼到前面/后面）时，把当前逻辑页平移到新下标，
-                        // 无动画，视觉不动
+                        // 无动画，视觉不动。
+                        // 注意：换窗跳变（跨章：TTS 到下一章/上一节回上一章、目录跳转等）
+                        // 会重建 pager 且新下标已由 startIndex 定位，此时 livePos 还停在
+                        // 旧章、而旧章的页仍在新窗口内，不加守卫会被拽回旧章、
+                        // 连带把 effSpine 翻回去，导致跨章朗读只出声不翻页。
                         LaunchedEffect(winSig) {
                             val cur = livePos ?: return@LaunchedEffect
+                            if (cur.first != effSpine) return@LaunchedEffect
                             val wi = windowPages.indexOf(cur)
                             if (wi >= 0 && wi != pager.currentPage) {
                                 runCatching { pager.scrollToPage(wi) }
