@@ -55,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -105,12 +106,22 @@ import kotlinx.coroutines.launch
 // 顶部灰字状态（本章剩余页数/全书进度/时间/电量）、底部 6 键（目录/选项可用，其余占位）。
 // 系统状态栏隐藏，下方安卓导航键保留。解析与分页断点落盘，大书二次秒开。
 
-private data class ReaderTheme(val bg: Color, val ink: Color)
+private data class ReaderTheme(val bg: Color, val ink: Color, val barBrush: Brush, val barInk: Color)
+
+// 底条与安卓导航键连成一条：白色/深色用播放界面同款黑渐变，sepia 用深棕渐变
+private val readerBarBlack = Brush.verticalGradient(
+    0f to Color(0xFF3D434C),
+    1f to Color(0xFF14161B),
+)
+private val readerBarBrown = Brush.verticalGradient(
+    0f to Color(0xFF8A755C),
+    1f to Color(0xFF54432F),
+)
 
 private fun themeOf(t: EbookTheme): ReaderTheme = when (t) {
-    EbookTheme.WHITE -> ReaderTheme(Color(0xFFFFFFFF), Color(0xFF1A1A1A))
-    EbookTheme.SEPIA -> ReaderTheme(Color(0xFFF4ECD8), Color(0xFF5B4636))
-    EbookTheme.DARK -> ReaderTheme(Color(0xFF1C1C1E), Color(0xFFE8E8E8))
+    EbookTheme.WHITE -> ReaderTheme(Color(0xFFFFFFFF), Color(0xFF1A1A1A), readerBarBlack, Color.White)
+    EbookTheme.SEPIA -> ReaderTheme(Color(0xFFF4ECD8), Color(0xFF5B4636), readerBarBrown, Color(0xFFF5EBD5))
+    EbookTheme.DARK -> ReaderTheme(Color(0xFF1C1C1E), Color(0xFFE8E8E8), readerBarBlack, Color.White)
 }
 
 @Composable
@@ -436,10 +447,10 @@ private fun ReaderBody(
                 }
             }
 
-            // ---- 底栏：6 键 space evenly ----
+            // ---- 底栏：6 键 space evenly（底条连同导航键一整条渐变） ----
             ReaderBottomBar(
-                ink = th.ink,
-                divider = meta.copy(alpha = 0.4f),
+                barBrush = th.barBrush,
+                barInk = th.barInk,
                 onToc = {
                     val (c, p) = livePos ?: (spine to 0)
                     val blk = breaks[c]?.filter { it.isNotEmpty() }?.getOrNull(p)?.firstOrNull()?.block ?: 0
@@ -626,27 +637,27 @@ private fun ReaderStatusBar(left: String, right: String, color: Color) {
 
 @Composable
 private fun ReaderBottomBar(
-    ink: Color,
-    divider: Color,
+    barBrush: Brush,
+    barInk: Color,
     onToc: () -> Unit,
     onOptions: () -> Unit,
     onPlaceholder: () -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth()) {
-        Box(Modifier.fillMaxWidth().height(1.dp).background(divider))
+    // 背景盖住按钮区 + 底部导航键区，两者连成一条（播放界面同款做法）
+    Column(Modifier.fillMaxWidth().background(barBrush)) {
         Row(
             Modifier.fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.navigationBars)
-                .padding(vertical = 8.dp),
+                .padding(top = 8.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ReaderButton("目录", Icons.AutoMirrored.Filled.List, ink, 1f, onToc)
-            ReaderButton("音乐", Icons.Filled.MusicNote, ink, 0.35f, onPlaceholder)
-            ReaderButton("上一首", Icons.Filled.SkipPrevious, ink, 0.35f, onPlaceholder)
-            ReaderButton("播放", Icons.Filled.PlayArrow, ink, 0.35f, onPlaceholder)
-            ReaderButton("下一首", Icons.Filled.SkipNext, ink, 0.35f, onPlaceholder)
-            ReaderButton("选项", Icons.Filled.Settings, ink, 1f, onOptions)
+            ReaderButton("目录", Icons.AutoMirrored.Filled.List, barInk, 1f, onToc)
+            ReaderButton("音乐", Icons.Filled.MusicNote, barInk, 0.35f, onPlaceholder)
+            ReaderButton("上一首", Icons.Filled.SkipPrevious, barInk, 0.35f, onPlaceholder)
+            ReaderButton("播放", Icons.Filled.PlayArrow, barInk, 0.35f, onPlaceholder)
+            ReaderButton("下一首", Icons.Filled.SkipNext, barInk, 0.35f, onPlaceholder)
+            ReaderButton("选项", Icons.Filled.Settings, barInk, 1f, onOptions)
         }
     }
 }
