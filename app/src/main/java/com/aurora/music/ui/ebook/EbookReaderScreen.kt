@@ -433,8 +433,19 @@ private fun ReaderBody(
                         LottieLoader(modifier = Modifier.size(64.dp))
                     }
                 } else {
-                    key("$winSig|$effSpine") {
+                    // pager 只在换章/换书时重建（邻章拼进窗口只平移下标，不重建，
+                    // 否则后台分页写 breaks 会把快滑中的手拽回上次落定页）
+                    key(bookPath, effSpine) {
                         val pager = rememberPagerState(initialPage = startIndex) { windowPages.size }
+                        // 窗口变化（邻章页拼到前面/后面）时，把当前逻辑页平移到新下标，
+                        // 无动画，视觉不动
+                        LaunchedEffect(winSig) {
+                            val cur = livePos ?: return@LaunchedEffect
+                            val wi = windowPages.indexOf(cur)
+                            if (wi >= 0 && wi != pager.currentPage) {
+                                runCatching { pager.scrollToPage(wi) }
+                            }
+                        }
                         // 朗读翻页：段落播完/上下段跳转时翻到该字所在页（跨章走换窗）
                         val turnReq by tts.turnRequest.collectAsStateWithLifecycle()
                         LaunchedEffect(turnReq) {
