@@ -93,6 +93,16 @@
             </intent-filter>
         </service>
 
+        <!-- 听书媒体会话：通知栏 上一节/播放-停止/下一节 + 耳机等系统媒体控制（只转接 EbookTtsController，不碰 TTS 逻辑） -->
+        <service
+            android:name=".playback.EbookTtsMediaService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
+
         <activity
             android:name=".playback.AlarmActivity"
             android:exported="false"

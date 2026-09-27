@@ -325,6 +325,14 @@ class AppContainer(context: Context) {
         scope.launch {
             settingsStore.alarmPrefs.collect { com.aurora.music.playback.AlarmScheduler.apply(appContext, it) }
         }
+        scope.launch {
+            // 听书通知栏/耳机控制：开始朗读即拉起媒体会话服务（纯集成，不碰 TTS 合成与播放逻辑）。
+            ebookTts.playing.collect { playing ->
+                if (playing) {
+                    runCatching { com.aurora.music.playback.EbookTtsMediaService.start(appContext) }
+                }
+            }
+        }
         registerConnectivity()
     }
 
