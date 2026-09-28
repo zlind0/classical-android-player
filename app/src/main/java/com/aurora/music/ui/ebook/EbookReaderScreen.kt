@@ -1,6 +1,7 @@
 package com.aurora.music.ui.ebook
 
 import android.app.Activity
+import android.app.TimePickerDialog
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Typeface
@@ -51,6 +52,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -104,6 +106,7 @@ import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.ui.ios5.ios5Section
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
@@ -1230,6 +1233,51 @@ private fun EbookOptionsPage(onBack: () -> Unit) {
                 onValueChange = { container.ebookPrefs.setTtsPitch(it) },
             )
             Ios5StaticText("内置与系统语音都经过均衡器 DSP 链（校正/用户均衡/动态等）。切换引擎或音色会停掉当前朗读。")
+        }
+        ios5Section("睡眠定时") {
+            val timer by container.ebookTts.sleepTimer.collectAsStateWithLifecycle()
+            val countMinutes = listOf(0, 15, 30, 45, 60)
+            Ios5SegmentRow(
+                title = "倒计时",
+                options = listOf("关闭", "15分钟", "30分钟", "45分钟", "60分钟"),
+                selected = countMinutes.indexOf(timer?.totalMinutes ?: 0).takeIf { it >= 0 } ?: 0,
+                onSelect = {
+                    val m = countMinutes[it]
+                    if (m == 0) container.ebookTts.cancelSleepTimer()
+                    else container.ebookTts.setSleepMinutes(m)
+                },
+            )
+            Ios5CellDivider()
+            Ios5NavRow(
+                title = "定时停止",
+                subtitle = timer?.clockLabel?.let { "$it（读完当前再停）" } ?: "未设置",
+                onClick = {
+                    val c = Calendar.getInstance()
+                    TimePickerDialog(
+                        context,
+                        { _, h, m -> container.ebookTts.setSleepAt(h, m) },
+                        c.get(Calendar.HOUR_OF_DAY),
+                        c.get(Calendar.MINUTE),
+                        true,
+                    ).show()
+                },
+            )
+            val cur = timer
+            if (cur != null) {
+                Ios5CellDivider()
+                var nowMs by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
+                LaunchedEffect(Unit) {
+                    while (container.ebookTts.sleepTimer.value != null) {
+                        delay(20_000)
+                        nowMs = android.os.SystemClock.elapsedRealtime()
+                    }
+                }
+                val remainMin = ((cur.deadlineElapsed - nowMs + 59_999) / 60_000).coerceAtLeast(1)
+                val unitName = if (ttsPrefs.unit == EbookTtsUnit.SENTENCE) "句" else "段"
+                Ios5StaticText("约 $remainMin 分钟后停止，将读完当前${unitName}再停。手动停止朗读会清除定时。")
+            } else {
+                Ios5StaticText("到点后读完当前再停。倒计时与定时二选一，后设的生效；选关闭可清除定时。")
+            }
         }
     }
 }

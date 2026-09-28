@@ -13,6 +13,7 @@ import com.aurora.music.tts.MsVoice
 import com.aurora.music.tts.MsVoices
 import com.aurora.music.tts.TtsWav
 import java.io.File
+import java.util.Calendar
 import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -27,6 +28,30 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
+
+/**
+ * 睡眠定时（读完当前单位再停，一次性）：
+ * deadlineElapsed = 到点时刻（elapsedRealtime 系）；
+ * totalMinutes = 倒计时分钟（倒计时方式才有）；clockLabel = 定时时钟 "HH:mm"（定时方式才有）。
+ */
+data class SleepTimer(
+    val deadlineElapsed: Long,
+    val totalMinutes: Int?,
+    val clockLabel: String?,
+)
+
+/** 距下一个 HH:mm 的毫秒数（已过则明天，纯函数，可单测）。 */
+internal fun delayUntilNextClock(hour: Int, minute: Int, nowMillis: Long): Long {
+    val target = Calendar.getInstance().apply {
+        timeInMillis = nowMillis
+        set(Calendar.HOUR_OF_DAY, hour)
+        set(Calendar.MINUTE, minute)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
+    if (target.timeInMillis <= nowMillis) target.add(Calendar.DATE, 1)
+    return (target.timeInMillis - nowMillis).coerceAtLeast(0)
+}
 
 /**
  * 电子书听书控制器（App 作用域，阅读界面驱动）：
@@ -105,6 +130,37 @@ class EbookTtsController(context: Context) {
         val v = _notice.value
         _notice.value = null
         return v
+    }
+
+    /** 睡眠定时：到点后读完当前单位（段/句）再停，一次性。 */
+    private val _sleepTimer = MutableStateFlow<SleepTimer?>(null)
+    val sleepTimer: StateFlow<SleepTimer?> = _sleepTimer.asStateFlow()
+
+    /** 倒计时：从现在起 minutes 分钟后到点。 */
+    fun setSleepMinutes(minutes: Int) {
+        if (minutes <= 0) {
+            _sleepTimer.value = null
+            return
+        }
+        _sleepTimer.value = SleepTimer(
+            deadlineElapsed = android.os.SystemClock.elapsedRealtime() + minutes * 60_000L,
+            totalMinutes = minutes,
+            clockLabel = null,
+        )
+    }
+
+    /** 定时：下一个 HH:mm 到点（已过则明天）。 */
+    fun setSleepAt(hour: Int, minute: Int) {
+        val delayMs = delayUntilNextClock(hour, minute, System.currentTimeMillis())
+        _sleepTimer.value = SleepTimer(
+            deadlineElapsed = android.os.SystemClock.elapsedRealtime() + delayMs,
+            totalMinutes = null,
+            clockLabel = "%02d:%02d".format(hour, minute),
+        )
+    }
+
+    fun cancelSleepTimer() {
+        _sleepTimer.value = null
     }
 
     /** 系统 TTS 可选音色（初始化后可用）。 */
@@ -191,7 +247,7 @@ class EbookTtsController(context: Context) {
         startAt(idx, true)
     }
 
-    /** 停止：什么都不读，高亮清除。没有暂停状态。 */
+    /** 停止：什么都不读，高亮清除。没有暂停状态。睡眠定时按会话生效，手动停止即清除。 */
     fun stop() {
         playJob?.cancel()
         playJob = null
@@ -201,6 +257,7 @@ class EbookTtsController(context: Context) {
         _paraTiming.value = null
         _position.value = null
         positionIdx = -1
+        _sleepTimer.value = null
     }
 
     fun prev() {
@@ -241,6 +298,8 @@ class EbookTtsController(context: Context) {
         playJob?.cancel()
         msEngine.requestStop()
         player?.stop()
+        // 已过期的定时直接清除，避免下次起读播一句即停
+        _sleepTimer.value?.let { if (android.os.SystemClock.elapsedRealtime() >= it.deadlineElapsed) _sleepTimer.value = null }
         val job = scope.launch(Dispatchers.IO) {
             try {
                 _playing.value = true
@@ -312,6 +371,16 @@ class EbookTtsController(context: Context) {
             }
             prefetch?.cancelAndJoin()
             if (!done) return // 被 pause/stop/切段取消
+            // 睡眠定时：本单位读完后若已到点就停（一次性，读完这段/句再停）
+            _sleepTimer.value?.let { st ->
+                if (android.os.SystemClock.elapsedRealtime() >= st.deadlineElapsed) {
+                    _sleepTimer.value = null
+                    _notice.value = "睡眠定时已到，停止朗读"
+                    _paraTiming.value = null
+                    _playing.value = false
+                    return
+                }
+            }
             idx++
             staged = null
         }
