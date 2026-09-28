@@ -107,12 +107,16 @@ data class EbookReadPrefs(
 /** 听书设置：默认内置微软离线引擎。 */
 enum class EbookTtsEngine { INTERNAL, SYSTEM }
 
+/** 朗读切片单位：PARA = 按段落（<p>块），SENTENCE = 按句子（中英文标点切分）。 */
+enum class EbookTtsUnit { PARA, SENTENCE }
+
 data class EbookTtsPrefs(
     val engine: EbookTtsEngine = EbookTtsEngine.INTERNAL,
     /** 内置=语音 code；系统=语音 name；空 = 自动（内置默认晓晓，系统跟随语言） */
     val voice: String = "",
     val rate: Float = 1f,
     val pitch: Float = 1f,
+    val unit: EbookTtsUnit = EbookTtsUnit.PARA,
 )
 
 data class EbookScanProgress(

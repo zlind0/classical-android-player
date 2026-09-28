@@ -66,6 +66,54 @@ class TtsUnitTest {
     }
 
     @Test
+    fun sentences_chinese() {
+        val t = "床前明月光，疑是地上霜。举头望明月，低头思故乡！"
+        val rs = SentenceSplitter.split(t)
+        assertEquals(2, rs.size)
+        assertEquals(t, rs.joinToString("") { t.substring(it.first, it.last + 1) })
+        assertEquals("床前明月光，疑是地上霜。", t.substring(rs[0].first, rs[0].last + 1))
+    }
+
+    @Test
+    fun sentences_english() {
+        val t = "Hello world. How are you? Fine!"
+        val rs = SentenceSplitter.split(t)
+        assertEquals(3, rs.size)
+        assertEquals(t, rs.joinToString("") { t.substring(it.first, it.last + 1) })
+    }
+
+    @Test
+    fun sentences_decimalNotSplit() {
+        val t = "圆周率是 3.14，记住它。The value is 3.14. Got it?"
+        val rs = SentenceSplitter.split(t)
+        val texts = rs.map { t.substring(it.first, it.last + 1) }
+        assertEquals(3, texts.size)
+        assertTrue(texts[0].contains("3.14"))
+        assertTrue(texts[1].contains("3.14"))
+    }
+
+    @Test
+    fun sentences_groupedPunctAndQuotes() {
+        val t = "他说：“真的吗？！”然后走了。Wait?! Really… yes."
+        val rs = SentenceSplitter.split(t)
+        val texts = rs.map { t.substring(it.first, it.last + 1) }
+        // 中文 ？！” 收拢为一句，英文 ?! / … 各收拢
+        assertEquals(5, texts.size)
+        assertTrue(texts[0].endsWith("？！”"))
+        assertEquals(t, texts.joinToString(""))
+    }
+
+    @Test
+    fun sentences_noPunctAndBlank() {
+        assertEquals(1, SentenceSplitter.split("无标点整块一句").size)
+        assertTrue(SentenceSplitter.split("   ").isEmpty())
+        // 换行断句，不丢字
+        val t = "第一行\n第二行"
+        val rs = SentenceSplitter.split(t)
+        assertEquals(2, rs.size)
+        assertEquals(t, rs.joinToString("") { t.substring(it.first, it.last + 1) })
+    }
+    @Test
     fun mono24k_upasmples2x() {
         val mono = byteArrayOf(0, 0, 0x10, 0x27) // 0, 10000
         val out = TtsWav.mono24kToStereo48k(mono)

@@ -7,6 +7,7 @@ import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import com.aurora.music.playback.EbookTtsPlayer
 import com.aurora.music.tts.Chunker
+import com.aurora.music.tts.SentenceSplitter
 import com.aurora.music.tts.MsEmbeddedEngine
 import com.aurora.music.tts.MsVoice
 import com.aurora.music.tts.MsVoices
@@ -29,11 +30,13 @@ import kotlin.coroutines.resume
 
 /**
  * 电子书听书控制器（App 作用域，阅读界面驱动）：
- * - 段落 = 正文块（含标题块），上下首跨章移动，播完一段自动下一段并翻页。
+ * - 朗读单位由 [EbookTtsUnit] 决定：PARA = 段落（正文块，含标题块），
+ *   SENTENCE = 句子（段落按中英文标点再切分）；上下首跨章移动，
+ *   句子模式下即上一句/下一句，播完一句自动下一句并翻页。
  * - 双引擎都产出 48k 立体声 WAV → 同一个 [EbookTtsPlayer]（完整 DSP 链）播放：
  *   内置走 MS 离线合成（分句流式，首块即播）；系统走 synthesizeToFile。
  * - 预合成下一段（lookahead 1），连续听无断档；合成文件按书 md5+引擎+音色+语速
- *   内容寻址缓存，重听秒播。
+ *   +切片单位内容寻址缓存，重听秒播。
  */
 class EbookTtsController(context: Context) {
 
@@ -50,16 +53,21 @@ class EbookTtsController(context: Context) {
         }
     private val msEngine = MsEmbeddedEngine(appContext)
 
-    data class Para(val chapter: Int, val block: Int, val text: String, val startChar: Int = 0) {
-        /** 实际朗读文本（页顶可能是段落中间）。 */
-        val readText: String get() = text.drop(startChar.coerceIn(0, text.length))
+    data class Para(val chapter: Int, val block: Int, val text: String, val startChar: Int = 0, val endChar: Int = Int.MAX_VALUE) {
+        /** 实际朗读文本（页顶可能是段落中间；句子模式下只读本句区间）。 */
+        val readText: String get() {
+            val s = startChar.coerceIn(0, text.length)
+            val e = endChar.coerceIn(s, text.length)
+            return text.substring(s, e)
+        }
     }
 
-    /** 当前段落朗读计时：UI 按它算出读到第几页并自动翻（duration 为实测音频时长）。 */
+    /** 当前朗读单位计时：UI 按它算出读到第几页并自动翻（duration 为实测音频时长）。 */
     data class ParaTiming(
         val chapter: Int,
         val block: Int,
         val startChar: Int,
+        val endChar: Int,
         val totalChars: Int,
         val durationMs: Long,
         val startedAt: Long,
@@ -70,6 +78,8 @@ class EbookTtsController(context: Context) {
 
     private var bookMd5: String = ""
     private var paras: List<Para> = emptyList()
+    private var lastBook: ParsedEbook? = null
+    private var unit: EbookTtsUnit = EbookTtsUnit.PARA
 
     private val _position = MutableStateFlow<Para?>(null)
     val position: StateFlow<Para?> = _position.asStateFlow()
@@ -98,6 +108,8 @@ class EbookTtsController(context: Context) {
     val systemVoices: StateFlow<List<Voice>> = _systemVoices.asStateFlow()
 
     @Volatile private var playJob: kotlinx.coroutines.Job? = null
+    /** 当前朗读单位在建表里的下标（起点带页顶偏移时 position.startChar 与建表对不上，按它定位）。 */
+    @Volatile private var positionIdx: Int = -1
     @Volatile private var pendingStartChar: Int = 0
     @Volatile private var sysTts: TextToSpeech? = null
     @Volatile private var sysTtsReady: Boolean = false
@@ -108,13 +120,36 @@ class EbookTtsController(context: Context) {
         if (bookMd5 == md5 && paras.isNotEmpty()) return
         stop()
         bookMd5 = md5
-        paras = book.chapters.flatMapIndexed { ci, c ->
-            c.blocks.mapIndexedNotNull { bi, b ->
-                if (b.text.isBlank()) null else Para(ci, bi, b.text)
+        lastBook = book
+        unit = runCatching { prefs.tts.value.unit }.getOrDefault(EbookTtsUnit.PARA)
+        paras = buildUnits(book, unit)
+        _position.value = null
+        positionIdx = -1
+    }
+
+    /** 切换朗读切片单位：停掉当前朗读，按新单位重建（设置页调用）。 */
+    fun setUnit(u: EbookTtsUnit) {
+        if (u == unit && paras.isNotEmpty()) return
+        stop()
+        unit = u
+        lastBook?.let { paras = buildUnits(it, u) }
+        _position.value = null
+        positionIdx = -1
+    }
+
+    private fun buildUnits(book: ParsedEbook, u: EbookTtsUnit): List<Para> =
+        book.chapters.flatMapIndexed { ci, c ->
+            c.blocks.flatMapIndexed { bi, b ->
+                if (b.text.isBlank()) emptyList()
+                else if (u == EbookTtsUnit.SENTENCE) {
+                    SentenceSplitter.split(b.text)
+                        .map { r -> Para(ci, bi, b.text, r.first, r.last + 1) }
+                        .ifEmpty { listOf(Para(ci, bi, b.text)) }
+                } else {
+                    listOf(Para(ci, bi, b.text))
+                }
             }
         }
-        _position.value = null
-    }
 
     fun paraIndexOf(chapter: Int, block: Int): Int =
         paras.indexOfFirst { it.chapter == chapter && it.block >= block }
@@ -124,11 +159,23 @@ class EbookTtsController(context: Context) {
 
     // ---- 播放控制 ----
 
-    /** 从指定位置开始读；charOffset = 块内字偏移（页顶是段中时用）。 */
+    /** 从指定位置开始读；charOffset = 块内字偏移（页顶是段中时用，句子模式下定位到包含该字的那句）。 */
     fun playFrom(chapter: Int, block: Int, charOffset: Int = 0) {
-        val idx = paraIndexOf(chapter, block)
+        // 先精确定位到包含该字的朗读单位（句子模式下一块多句），找不到再按块回退
+        var idx = paras.indexOfFirst {
+            it.chapter == chapter && it.block == block &&
+                charOffset >= it.startChar && charOffset < it.endChar.coerceAtMost(it.text.length)
+        }
+        if (idx < 0) {
+            idx = paras.indexOfFirst {
+                it.chapter == chapter && it.block == block && it.endChar.coerceAtMost(it.text.length) > charOffset
+            }
+        }
+        if (idx < 0) idx = paraIndexOf(chapter, block)
         if (idx < 0 || idx >= paras.size) return
         val base = paras[idx]
+        // 起点就是屏幕首字（页顶偏移）：句中也从该字起读，不吸附回句首，
+        // 否则 turn 会翻回上一页；读完本句后按整句继续
         pendingStartChar = charOffset.coerceIn(0, base.text.length)
         startAt(idx, true)
     }
@@ -142,25 +189,41 @@ class EbookTtsController(context: Context) {
         _playing.value = false
         _paraTiming.value = null
         _position.value = null
+        positionIdx = -1
     }
 
     fun prev() {
-        val cur = _position.value ?: return
-        val idx = paras.indexOfFirst { it.chapter == cur.chapter && it.block == cur.block }
-        val target = (if (idx < 0) 0 else idx - 1).coerceAtLeast(0)
-        if (target == idx) {
-            // 已经是第一段：重播本段
-            startAt(idx, true)
-        } else {
-            startAt(target, true)
-        }
+        val idx = currentIndex() ?: return
+        val target = (idx - 1).coerceAtLeast(0)
+        // 已经是第一段：重播本段
+        startAt(if (target == idx) idx else target, true)
     }
 
     fun next() {
-        val cur = _position.value ?: return
-        val idx = paras.indexOfFirst { it.chapter == cur.chapter && it.block == cur.block }
-        val target = (if (idx < 0) 0 else idx + 1).coerceAtMost(paras.size - 1)
+        val idx = currentIndex() ?: return
+        val target = (idx + 1).coerceAtMost(paras.size - 1)
         startAt(target, true)
+    }
+
+    /**
+     * 当前朗读单位的建表下标：优先用主循环记录的 [positionIdx]；
+     * 对不上（重建等竞态）再按区间回退——起点可能带页顶偏移（句中），
+     * 此时按包含该字的单位定位，不能按块首回退（否则会跳回段首句）。
+     */
+    private fun currentIndex(): Int? {
+        val cur = _position.value ?: return null
+        val saved = positionIdx
+        if (saved in paras.indices) {
+            val p = paras[saved]
+            if (p.chapter == cur.chapter && p.block == cur.block) return saved
+        }
+        val s = cur.startChar
+        paras.indexOfFirst {
+            it.chapter == cur.chapter && it.block == cur.block &&
+                s >= it.startChar && s < it.endChar.coerceAtMost(it.text.length)
+        }.takeIf { it >= 0 }?.let { return it }
+        return paras.indexOfFirst { it.chapter == cur.chapter && it.block == cur.block }
+            .takeIf { it >= 0 }
     }
 
     private fun startAt(index: Int, movePage: Boolean) {
@@ -170,7 +233,8 @@ class EbookTtsController(context: Context) {
         val job = scope.launch(Dispatchers.IO) {
             try {
                 _playing.value = true
-                playLoop(index, movePage, resolveEngineForPlay())
+                // 切片单位以控制器实际建表的为准（设置页先停播再切，DataStore 回写有延迟，这里强制对齐）
+                playLoop(index, movePage, resolveEngineForPlay().copy(unit = unit))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -190,15 +254,16 @@ class EbookTtsController(context: Context) {
         var staged: Pair<Int, List<File>>? = null
         while (idx < paras.size) {
             val base = paras[idx]
-            // 只有起点段落带字偏移，后续段落都从头读
-            val para = if (idx == startIndex && pendingStartChar > 0) {
-                base.copy(startChar = pendingStartChar.coerceIn(0, base.text.length))
+            // 只有起点单位可带字偏移（页顶是段中时）；后续单位按建表区间原样读，
+            // 句子模式下句首必须保留，不能重置为 0（否则第 N 句会读成段首到第 N 句尾）
+            val para = if (idx == startIndex && pendingStartChar > base.startChar) {
+                base.copy(startChar = pendingStartChar.coerceIn(base.startChar, base.endChar.coerceAtMost(base.text.length)))
             } else {
-                base.copy(startChar = 0)
+                base
             }
             pendingStartChar = 0
-            // 预取的都是从头合成的，带字偏移的起点段不能复用
-            val files = if (staged?.first == idx && para.startChar == 0) staged.second
+            // 预取的是完整单位合成，起点单位带偏移时不能复用
+            val files = if (staged?.first == idx && para == paras[idx]) staged.second
             else synthesizePara(para, tp)
             if (files.isEmpty()) {
                 idx++
@@ -213,6 +278,7 @@ class EbookTtsController(context: Context) {
                 }
             } else null
             _position.value = para
+            positionIdx = idx
             if (first && movePage || !first) _turn.value = Triple(para.chapter, para.block, para.startChar)
             first = false
             // 实测时长（48k 立体声 16bit：192000 字节/秒，去 44 字节头）
@@ -221,6 +287,7 @@ class EbookTtsController(context: Context) {
                 chapter = para.chapter,
                 block = para.block,
                 startChar = para.startChar,
+                endChar = para.endChar.coerceAtMost(para.text.length),
                 totalChars = para.readText.length.coerceAtLeast(1),
                 durationMs = durMs.coerceAtLeast(1000),
                 startedAt = android.os.SystemClock.elapsedRealtime(),
@@ -253,7 +320,7 @@ class EbookTtsController(context: Context) {
         val v = voiceId.replace(Regex("[^A-Za-z0-9_-]"), "_").take(48)
         val r = (tp.rate * 100).toInt()
         val p = (tp.pitch * 100).toInt()
-        return "${tp.engine.name}_${v}_r${r}_p${p}"
+        return "${tp.engine.name}_${v}_r${r}_p${p}_u${tp.unit.name}"
     }
 
     private fun paraDir(tp: EbookTtsPrefs, voiceId: String): File =

@@ -87,6 +87,7 @@ import com.aurora.music.data.ebook.EbookReadPrefs
 import com.aurora.music.data.ebook.EbookTheme
 import com.aurora.music.data.ebook.MAX_RECENT_FONTS
 import com.aurora.music.data.ebook.EbookTtsEngine
+import com.aurora.music.data.ebook.EbookTtsUnit
 import com.aurora.music.data.ebook.ParsedEbook
 import com.aurora.music.tts.MsVoices
 import com.aurora.music.ui.components.LottieLoader
@@ -284,6 +285,7 @@ private fun ReaderBody(
     val store = container.ebookStore
     val tts = container.ebookTts
     val ttsPlaying by tts.playing.collectAsStateWithLifecycle()
+    val ttsPrefs by container.ebookPrefs.tts.collectAsStateWithLifecycle()
     val ttsInstalling by tts.installing.collectAsStateWithLifecycle()
     val ttsNotice by tts.notice.collectAsStateWithLifecycle()
     LaunchedEffect(ttsNotice) {
@@ -554,17 +556,19 @@ private fun ReaderBody(
                                 onLinkClick = { tag -> handleLink(tag) },
                                 highlightBlock = ttsPos?.takeIf { it.chapter == c }?.block,
                                 highlightFrom = ttsPos?.takeIf { it.chapter == c }?.startChar ?: 0,
+                                highlightTo = ttsPos?.takeIf { it.chapter == c }?.endChar ?: Int.MAX_VALUE,
                             )
                         }
                     }
                 }
 
             // ---- 底栏：6 键 space evenly（底条连同导航键一整条渐变） ----
-            // 上一首/播放/下一首 = 听书控制（段落级，跨页自动翻）
+            // 上一首/播放/下一首 = 听书控制（段落级，跨页自动翻；句子模式下即上一句/下一句）
             ReaderBottomBar(
                 barBrush = th.barBrush,
                 barInk = th.barInk,
                 isTtsPlaying = ttsPlaying,
+                sentenceMode = ttsPrefs.unit == EbookTtsUnit.SENTENCE,
                 onTtsPrev = { tts.prev() },
                 onTtsToggle = {
                     if (ttsPlaying) {
@@ -719,6 +723,7 @@ private fun PageView(
     onLinkClick: (String) -> Unit,
     highlightBlock: Int? = null,
     highlightFrom: Int = 0,
+    highlightTo: Int = Int.MAX_VALUE,
 ) {
     val blocks = book.chapters[spine].blocks
     val linkListener = remember(onLinkClick) {
@@ -759,14 +764,15 @@ private fun PageView(
                         }
                     }
                     // 在读段落黄底高亮（后加，盖掉链接色，字强制黑色保证可读）；
-                    // 起点是段中时，只染起始字之后
+                    // 起点是段中时，只染起始字之后；句子模式下只染当前句区间
                     if (highlightBlock != null && bi == highlightBlock) {
                         val hs = maxOf(from, highlightFrom.coerceIn(0, b.text.length))
-                        if (hs < to) {
+                        val he = minOf(to, highlightTo.coerceIn(0, b.text.length))
+                        if (hs < he) {
                             addStyle(
                                 SpanStyle(background = Color(0xFFFFEB3B), color = Color.Black),
                                 segBase + (hs - from),
-                                segBase + (to - from),
+                                segBase + (he - from),
                             )
                         }
                     }
@@ -813,6 +819,7 @@ private fun ReaderBottomBar(
     barBrush: Brush,
     barInk: Color,
     isTtsPlaying: Boolean,
+    sentenceMode: Boolean = false,
     onTtsPrev: () -> Unit,
     onTtsToggle: () -> Unit,
     onTtsNext: () -> Unit,
@@ -831,13 +838,13 @@ private fun ReaderBottomBar(
         ) {
             ReaderButton("目录", Icons.AutoMirrored.Filled.List, barInk, 1f, onToc)
             ReaderButton("音乐", Icons.Filled.MusicNote, barInk, 0.35f, onPlaceholder)
-            ReaderButton("上一首", Icons.Filled.SkipPrevious, barInk, 1f, onTtsPrev)
+            ReaderButton(if (sentenceMode) "上一句" else "上一首", Icons.Filled.SkipPrevious, barInk, 1f, onTtsPrev)
             ReaderButton(
                 if (isTtsPlaying) "停止" else "播放",
                 if (isTtsPlaying) Icons.Filled.Stop else Icons.Filled.PlayArrow,
                 barInk, 1f, onTtsToggle,
             )
-            ReaderButton("下一首", Icons.Filled.SkipNext, barInk, 1f, onTtsNext)
+            ReaderButton(if (sentenceMode) "下一句" else "下一首", Icons.Filled.SkipNext, barInk, 1f, onTtsNext)
             ReaderButton("选项", Icons.Filled.Settings, barInk, 1f, onOptions)
         }
     }
@@ -1145,6 +1152,20 @@ private fun EbookOptionsPage(onBack: () -> Unit) {
         }
         ios5Section("听书语音") {
             val engineIdx = if (ttsPrefs.engine == EbookTtsEngine.SYSTEM) 1 else 0
+            Ios5SegmentRow(
+                title = "朗读切片",
+                options = listOf("按段落", "按句子"),
+                selected = if (ttsPrefs.unit == EbookTtsUnit.SENTENCE) 1 else 0,
+                onSelect = {
+                    container.ebookTts.stop()
+                    val u = if (it == 1) EbookTtsUnit.SENTENCE else EbookTtsUnit.PARA
+                    container.ebookPrefs.setTtsUnit(u)
+                    container.ebookTts.setUnit(u)
+                },
+            )
+            Ios5CellDivider()
+            Ios5StaticText("按句子切分时，上一首/下一首即上一句/下一句，高亮只染当前句。中文按。！？；…断句，英文按.!?;断句，小数点不断句。")
+            Ios5CellDivider()
             Ios5SegmentRow(
                 title = "语音引擎",
                 options = listOf("内置微软", "系统TTS"),

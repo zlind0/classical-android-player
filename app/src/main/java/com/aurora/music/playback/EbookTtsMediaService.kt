@@ -48,7 +48,7 @@ import kotlinx.coroutines.launch
  *   与 App 内点播放的语义一致（App 内从当前页顶起读，通知栏/耳机处无页面概念，
  *   故用最近停止的段落，二者都是「从断点继续」，没有暂停态）。
  * - 上一节/下一节直接调 [EbookTtsController.prev]/[EbookTtsController.next]，
- *   未在朗读时与 App 内一样无动作。
+ *   未在朗读时与 App 内一样无动作（句子切片模式下即上一句/下一句）。
  * - 通知栏标题用当前段落预览、作者用书名；本服务不读整书、不做任何 IO，
  *   对合成与播放时序零影响（首声 latency 完全由既有 TTS 逻辑决定）。
  *

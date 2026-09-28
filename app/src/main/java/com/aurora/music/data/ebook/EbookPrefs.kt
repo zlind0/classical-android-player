@@ -36,6 +36,7 @@ class EbookPrefs(context: Context) {
         val TTS_VOICE = stringPreferencesKey("tts_voice")
         val TTS_RATE = floatPreferencesKey("tts_rate")
         val TTS_PITCH = floatPreferencesKey("tts_pitch")
+        val TTS_UNIT = stringPreferencesKey("tts_unit")
     }
 
     private val gson = Gson()
@@ -73,6 +74,8 @@ class EbookPrefs(context: Context) {
                     voice = p[Keys.TTS_VOICE].orEmpty(),
                     rate = (p[Keys.TTS_RATE] ?: 1f).coerceIn(0.5f, 2f),
                     pitch = (p[Keys.TTS_PITCH] ?: 1f).coerceIn(0.5f, 2f),
+                    unit = runCatching { EbookTtsUnit.valueOf(p[Keys.TTS_UNIT] ?: "PARA") }
+                        .getOrDefault(EbookTtsUnit.PARA),
                 )
             }.collect { _tts.value = it }
         }
@@ -141,5 +144,9 @@ class EbookPrefs(context: Context) {
 
     fun setTtsPitch(pitch: Float) {
         scope.launch { appContext.ebookReadDataStore.edit { it[Keys.TTS_PITCH] = pitch.coerceIn(0.5f, 2f) } }
+    }
+
+    fun setTtsUnit(u: EbookTtsUnit) {
+        scope.launch { appContext.ebookReadDataStore.edit { it[Keys.TTS_UNIT] = u.name } }
     }
 }
