@@ -84,6 +84,10 @@ class EbookTtsController(context: Context) {
     private val _position = MutableStateFlow<Para?>(null)
     val position: StateFlow<Para?> = _position.asStateFlow()
 
+    /** 当前朗读位置所在的目录标题（目录页 currentEntry 同口径，供通知栏作者栏；无目录时为空，由调用方回退书名）。 */
+    private val _sectionTitle = MutableStateFlow("")
+    val sectionTitle: StateFlow<String> = _sectionTitle.asStateFlow()
+
     private val _playing = MutableStateFlow(false)
     val playing: StateFlow<Boolean> = _playing.asStateFlow()
 
@@ -156,6 +160,13 @@ class EbookTtsController(context: Context) {
             .takeIf { it >= 0 } ?: paras.indexOfFirst { it.chapter == chapter }
             .takeIf { it >= 0 } ?: paras.indexOfFirst { it.chapter > chapter }
             .takeIf { it >= 0 } ?: (paras.size - 1).coerceAtLeast(0)
+
+    /** 当前朗读位置所在的目录标题（目录页 currentEntry 同口径），见 [TocSection]。 */
+    private fun sectionTitleFor(chapter: Int, block: Int): String {
+        val toc = lastBook?.toc.orEmpty()
+        return TocSection.currentEntry(toc, chapter, block)
+            .takeIf { it >= 0 }?.let { toc[it].title.trim() }.orEmpty()
+    }
 
     // ---- 播放控制 ----
 
@@ -279,6 +290,7 @@ class EbookTtsController(context: Context) {
             } else null
             _position.value = para
             positionIdx = idx
+            _sectionTitle.value = sectionTitleFor(para.chapter, para.block)
             if (first && movePage || !first) _turn.value = Triple(para.chapter, para.block, para.startChar)
             first = false
             // 实测时长（48k 立体声 16bit：192000 字节/秒，去 44 字节头）

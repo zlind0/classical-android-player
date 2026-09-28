@@ -934,14 +934,9 @@ private fun EbookTocPage(
             false
         }
     }
-    // 当前位置对应的条目：同章且块号不超过当前位置的最后一条
+    // 当前位置对应的条目：与听书通知栏作者栏同口径，见 TocSection
     val currentEntry = remember(book, currentSpine, currentBlock) {
-        if (book.toc.isEmpty()) return@remember -1
-        var idx = book.toc.indexOfFirst { it.chapterIndex == currentSpine }
-        book.toc.forEachIndexed { i, e ->
-            if (e.chapterIndex == currentSpine && e.blockIndex <= currentBlock) idx = i
-        }
-        if (idx < 0) 0 else idx
+        com.aurora.music.data.ebook.TocSection.currentEntry(book.toc, currentSpine, currentBlock)
     }
     // 当前条目的祖先 + 自己 + 子孙：打开即展开到最详细
     val forceExpanded = remember(book, currentEntry) {

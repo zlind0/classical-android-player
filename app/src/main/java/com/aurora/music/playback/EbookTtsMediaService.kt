@@ -49,7 +49,8 @@ import kotlinx.coroutines.launch
  *   故用最近停止的段落，二者都是「从断点继续」，没有暂停态）。
  * - 上一节/下一节直接调 [EbookTtsController.prev]/[EbookTtsController.next]，
  *   未在朗读时与 App 内一样无动作（句子切片模式下即上一句/下一句）。
- * - 通知栏标题用当前段落预览、作者用书名；本服务不读整书、不做任何 IO，
+ * - 通知栏标题用当前段落预览、作者用当前所在的目录标题（与目录页高亮同口径，无目录回退书名）；
+ *   本服务不读整书、不做任何 IO（部分标题由控制器从内存书数据推好经 StateFlow 给出），
  *   对合成与播放时序零影响（首声 latency 完全由既有 TTS 逻辑决定）。
  *
  * 前台保活：onCreate 里先用占位通知自己进前台（与 Media3 同 ID，
@@ -180,6 +181,8 @@ private class EbookTtsBridgePlayer(
     private var playing = false
     /** 最近一次非空的朗读位置：stop() 会清掉控制器的 position，这里留着给「继续播放」用。 */
     private var lastPara: EbookTtsController.Para? = null
+    /** 与 lastPara 同期的部分标题（通知栏作者栏用），切书时一起丢掉。 */
+    private var lastSection = ""
     private var lastParaBookPath: String? = null
     private var topPath: String? = null
     private var bookTitle = ""
@@ -205,6 +208,12 @@ private class EbookTtsBridgePlayer(
             }
         }
         scope.launch {
+            tts.sectionTitle.collect { s ->
+                lastSection = s
+                invalidateState()
+            }
+        }
+        scope.launch {
             container.ebookStore.recents.collect { recents ->
                 val top = recents.firstOrNull()
                 topPath = top?.path
@@ -216,6 +225,7 @@ private class EbookTtsBridgePlayer(
                         lastParaBookPath = topPath
                     } else if (topPath != null && topPath != lastParaBookPath) {
                         lastPara = null
+                        lastSection = ""
                         lastParaBookPath = null
                     }
                 }
@@ -232,7 +242,8 @@ private class EbookTtsBridgePlayer(
         lastPara?.readText?.trim().orEmpty().take(80)
             .ifBlank { bookTitle }.ifBlank { "听书" }
 
-    private fun artistText(): String = bookTitle.ifBlank { "听书" }
+    private fun artistText(): String =
+        lastSection.ifBlank { bookTitle }.ifBlank { "听书" }
 
     override fun getState(): State {
         val commands = Player.Commands.Builder()
