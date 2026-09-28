@@ -39,4 +39,19 @@ class TocSectionTest {
     fun emptyToc_returnsMinusOne() {
         assertEquals(-1, TocSection.currentEntry(emptyList(), 0, 0))
     }
+
+    @Test
+    fun orphanChapter_fallsBackToNearestPreceding() {
+        // 部分介绍页进目录、下面第 x 章全是孤儿：孤儿章归到最近的前一条
+        val t = listOf(
+            EbookTocEntry(0, 0, "第一部分", 1),
+            EbookTocEntry(2, 0, "第二部分", 1),
+        )
+        assertEquals(0, TocSection.currentEntry(t, 1, 0))
+        assertEquals(0, TocSection.currentEntry(t, 1, 9))
+        // 尾部孤儿章归到最后一条
+        assertEquals(1, TocSection.currentEntry(t, 5, 0))
+        // 首条之前的孤儿章取首条
+        assertEquals(0, TocSection.currentEntry(listOf(EbookTocEntry(3, 0, "后记", 1)), 0, 0))
+    }
 }
