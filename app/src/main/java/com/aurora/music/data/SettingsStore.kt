@@ -427,6 +427,8 @@ class SettingsStore(private val context: Context) {
         val INTRO_TTS_RATE = floatPreferencesKey("intro_tts_rate")
         val INTRO_TTS_VOICE = stringPreferencesKey("intro_tts_voice")
         val INTRO_TTS_ENGINE = stringPreferencesKey("intro_tts_engine")
+        val INTRO_TTS_PITCH = floatPreferencesKey("intro_tts_pitch")
+        val INTRO_TTS_MIGRATED = booleanPreferencesKey("intro_tts_migrated")
     }
 
     val uiPrefs: Flow<UiPrefs> = context.dataStore.data.map { p ->
@@ -901,8 +903,40 @@ class SettingsStore(private val context: Context) {
             ttsRate = (p[Keys.INTRO_TTS_RATE] ?: 1.0f).coerceIn(0.5f, 2.0f),
             ttsVoice = p[Keys.INTRO_TTS_VOICE].orEmpty(),
             ttsEngine = p[Keys.INTRO_TTS_ENGINE].orEmpty(),
+            ttsPitch = (p[Keys.INTRO_TTS_PITCH] ?: 1.0f).coerceIn(0.5f, 2.0f),
         )
     }.distinctUntilChanged()
+
+    /**
+     * 统一 TTS 设置（电子书听书与歌曲介绍共用，两处设置页都是修改入口）：
+     * 沿用 intro_tts_* 四键；engine 缺省 = 内置（与电子书旧默认一致），
+     * 老用户显式选过系统默认（""）或指定包名不受影响。
+     */
+    val unifiedTts: Flow<UnifiedTtsPrefs> = context.dataStore.data.map { p ->
+        UnifiedTtsPrefs(
+            engine = p[Keys.INTRO_TTS_ENGINE] ?: TTS_ENGINE_INTERNAL,
+            voice = p[Keys.INTRO_TTS_VOICE].orEmpty(),
+            rate = (p[Keys.INTRO_TTS_RATE] ?: 1f).coerceIn(0.5f, 2f),
+            pitch = (p[Keys.INTRO_TTS_PITCH] ?: 1f).coerceIn(0.5f, 2f),
+        )
+    }.distinctUntilChanged()
+
+    /** 电子书旧 TTS 设置一次性迁入统一设置（仅统一侧全新且旧侧改过时搬，之后不再动）。 */
+    suspend fun migrateEbookTts(mapped: UnifiedTtsPrefs, customized: Boolean) {
+        if (context.dataStore.data.first()[Keys.INTRO_TTS_MIGRATED] == true) return
+        val cur = unifiedTts.first()
+        val curDefault = cur.engine == TTS_ENGINE_INTERNAL && cur.voice.isBlank() &&
+            cur.rate == 1f && cur.pitch == 1f
+        if (curDefault && customized) {
+            context.dataStore.edit {
+                it[Keys.INTRO_TTS_ENGINE] = mapped.engine
+                it[Keys.INTRO_TTS_VOICE] = mapped.voice
+                it[Keys.INTRO_TTS_RATE] = mapped.rate
+                it[Keys.INTRO_TTS_PITCH] = mapped.pitch
+            }
+        }
+        context.dataStore.edit { it[Keys.INTRO_TTS_MIGRATED] = true }
+    }
 
     suspend fun setIntroEndpoint(v: String) = context.dataStore.edit { it[Keys.INTRO_ENDPOINT] = v.trim().trimEnd('/') }
     suspend fun setIntroApiKey(v: String) = context.dataStore.edit { it[Keys.INTRO_API_KEY] = v.trim() }
@@ -911,6 +945,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setIntroTtsRate(v: Float) = context.dataStore.edit { it[Keys.INTRO_TTS_RATE] = v.coerceIn(0.5f, 2.0f) }
     suspend fun setIntroTtsVoice(v: String) = context.dataStore.edit { it[Keys.INTRO_TTS_VOICE] = v.trim() }
     suspend fun setIntroTtsEngine(v: String) = context.dataStore.edit { it[Keys.INTRO_TTS_ENGINE] = v.trim() }
+    suspend fun setIntroTtsPitch(v: Float) = context.dataStore.edit { it[Keys.INTRO_TTS_PITCH] = v.coerceIn(0.5f, 2.0f) }
 
     // typed so json round-trips losslessly
     suspend fun exportPrefs(): PrefsBackup {

@@ -125,7 +125,7 @@ fun SongIntroSettingsScreen(
             )
         }
 
-        ios5Section("语音（系统 TTS）") {
+        ios5Section("语音") {
             Ios5SliderRow(
                 title = "语速",
                 valueLabel = String.format("%.2f", prefs.ttsRate) + "x",
@@ -137,7 +137,9 @@ fun SongIntroSettingsScreen(
             Ios5CellDivider()
             Ios5NavRow(
                 title = "语音引擎与音色",
-                subtitle = prefs.ttsVoice.ifBlank { "系统默认" },
+                subtitle = prefs.ttsVoice.ifBlank {
+                    if (prefs.ttsEngine == com.aurora.music.data.TTS_ENGINE_INTERNAL) "内置晓晓（默认）" else "系统默认"
+                },
                 onClick = onOpenVoice,
             )
             Ios5CellDivider()
@@ -157,7 +159,7 @@ fun SongIntroSettingsScreen(
             )
         }
 
-        ios5FootNote("播放页循环与喜欢之间的问号即解说键；播报时变为停止键，点击中断并继续放音乐。朗读用系统语音，首个标点出现即逐句开播。")
+        ios5FootNote("播放页循环与喜欢之间的问号即解说键；播报时变为停止键，点击中断并继续放音乐。朗读可用内置离线或系统语音，首个标点出现即逐句开播。语速音调音色与电子书听书共用同一设置。")
         item { Spacer(Modifier.height(contentPadding.calculateBottomPadding())) }
     }
 }

@@ -5,13 +5,19 @@ import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
+import com.aurora.music.data.SettingsStore
+import com.aurora.music.data.TTS_ENGINE_INTERNAL
+import com.aurora.music.data.UnifiedTtsPrefs
 import com.aurora.music.playback.EbookTtsPlayer
 import com.aurora.music.tts.Chunker
 import com.aurora.music.tts.SentenceSplitter
 import com.aurora.music.tts.MsEmbeddedEngine
-import com.aurora.music.tts.MsVoice
 import com.aurora.music.tts.MsVoices
+import com.aurora.music.tts.TtsEngineInfo
 import com.aurora.music.tts.TtsWav
+import com.aurora.music.tts.listSystemEngines as querySystemEngines
+import com.aurora.music.tts.msInternalAvailable
+import com.aurora.music.tts.systemVoicesOf
 import java.io.File
 import java.util.Calendar
 import java.util.Locale
@@ -24,6 +30,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -69,6 +76,8 @@ class EbookTtsController(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     lateinit var prefs: EbookPrefs
+    /** 统一 TTS 设置（与歌曲介绍共用；引擎/音色/语速/音调由此来，切片单位仍走 prefs）。 */
+    lateinit var settings: SettingsStore
     private var _player: EbookTtsPlayer? = null
     var player: EbookTtsPlayer?
         get() = _player
@@ -173,6 +182,8 @@ class EbookTtsController(context: Context) {
     @Volatile private var pendingStartChar: Int = 0
     @Volatile private var sysTts: TextToSpeech? = null
     @Volatile private var sysTtsReady: Boolean = false
+    /** 当前系统 TTS 实例绑定的引擎（"" = 系统默认引擎）。 */
+    @Volatile private var sysTtsEngine: String? = null
 
     // ---- 书 ----
 
@@ -181,7 +192,7 @@ class EbookTtsController(context: Context) {
         stop()
         bookMd5 = md5
         lastBook = book
-        unit = runCatching { prefs.tts.value.unit }.getOrDefault(EbookTtsUnit.PARA)
+        unit = runCatching { prefs.ttsUnit.value }.getOrDefault(EbookTtsUnit.PARA)
         paras = buildUnits(book, unit)
         _position.value = null
         positionIdx = -1
@@ -303,8 +314,8 @@ class EbookTtsController(context: Context) {
         val job = scope.launch(Dispatchers.IO) {
             try {
                 _playing.value = true
-                // 切片单位以控制器实际建表的为准（设置页先停播再切，DataStore 回写有延迟，这里强制对齐）
-                playLoop(index, movePage, resolveEngineForPlay().copy(unit = unit))
+                // 统一设置播放前现读（设置页先停播再改，无延迟问题）
+                playLoop(index, movePage, resolveEngineForPlay())
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -317,7 +328,7 @@ class EbookTtsController(context: Context) {
 
     // 主循环：合成一段 → 交给 player 播 → 播完下一段。合成与播放流水线化：
     // 第 N+1 段在第 N 段播放时预合成好（lookahead 1）。
-    private suspend fun playLoop(startIndex: Int, movePage: Boolean, tp: EbookTtsPrefs) {
+    private suspend fun playLoop(startIndex: Int, movePage: Boolean, tp: UnifiedTtsPrefs) {
         var idx = startIndex
         var first = true
         // 预取：下一段的文件
@@ -397,17 +408,18 @@ class EbookTtsController(context: Context) {
 
     // ---- 合成 ----
 
-    private fun cacheKey(tp: EbookTtsPrefs, voiceId: String): String {
+    private fun cacheKey(tp: UnifiedTtsPrefs, voiceId: String): String {
+        val e = tp.engine.ifBlank { "sysdef" }.replace(Regex("[^A-Za-z0-9_-]"), "_").take(48)
         val v = voiceId.replace(Regex("[^A-Za-z0-9_-]"), "_").take(48)
         val r = (tp.rate * 100).toInt()
         val p = (tp.pitch * 100).toInt()
-        return "${tp.engine.name}_${v}_r${r}_p${p}_u${tp.unit.name}"
+        return "${e}_${v}_r${r}_p${p}_u${unit.name}"
     }
 
-    private fun paraDir(tp: EbookTtsPrefs, voiceId: String): File =
+    private fun paraDir(tp: UnifiedTtsPrefs, voiceId: String): File =
         File(appContext.filesDir, "ebook_tts/$bookMd5/${cacheKey(tp, voiceId)}")
 
-    private suspend fun synthesizePara(para: Para, tp: EbookTtsPrefs): List<File> {
+    private suspend fun synthesizePara(para: Para, tp: UnifiedTtsPrefs): List<File> {
         val dir = paraDir(tp, tp.voice.ifBlank { "auto" })
         dir.mkdirs()
         val chunks = Chunker.split(para.readText)
@@ -417,7 +429,7 @@ class EbookTtsController(context: Context) {
         chunks.forEachIndexed { i, chunk ->
             val f = File(dir, "c${para.chapter}b${para.block}${offTag}_$i.wav")
             if (!f.exists() || f.length() <= 44) {
-                val wav = if (tp.engine == EbookTtsEngine.INTERNAL) {
+                val wav = if (tp.isInternal) {
                     synthesizeInternal(chunk, tp)
                 } else {
                     synthesizeSystem(chunk, tp)
@@ -431,15 +443,7 @@ class EbookTtsController(context: Context) {
 
     // ---- 内置引擎 ----
 
-    val internalAvailable: Boolean
-        get() = runCatching {
-            // so 缺失直接抛 UnsatisfiedLinkError
-            Class.forName("com.microsoft.cognitiveservices.speech.SpeechSynthesizer")
-            org.nobody.multitts.tts.jni.SpeexBridge.getLicense(0)
-            true
-        }.getOrDefault(false)
-
-    private suspend fun synthesizeInternal(chunk: String, tp: EbookTtsPrefs): ByteArray? {
+    private suspend fun synthesizeInternal(chunk: String, tp: UnifiedTtsPrefs): ByteArray? {
         val voice = MsVoices.byCode(tp.voice.ifBlank { MsVoices.DEFAULT })
             ?: MsVoices.byCode(MsVoices.DEFAULT)!!
         if (!msEngine.isInstalled(voice.code)) {
@@ -462,37 +466,58 @@ class EbookTtsController(context: Context) {
 
     // ---- 系统引擎 ----
 
-    private suspend fun ensureSystemTts(): TextToSpeech? {
-        sysTts?.takeIf { sysTtsReady }?.let { return it }
+    /** 当前统一设置所选系统引擎的实例（"" = 系统默认引擎；换引擎重建）。 */
+    private suspend fun ensureSystemTts(pkg: String?): TextToSpeech? {
+        val key = pkg ?: ""
+        sysTts?.takeIf { sysTtsReady && sysTtsEngine == key }?.let { return it }
         sysTts?.shutdown()
         sysTtsReady = false
+        sysTtsEngine = null
         val tts = suspendCancellableCoroutine<TextToSpeech?> { cont ->
             var t: TextToSpeech? = null
-            t = TextToSpeech(appContext) { status ->
-                if (status == TextToSpeech.SUCCESS && cont.isActive) cont.resume(t)
-                else if (cont.isActive) cont.resume(null)
+            t = if (key.isNotBlank()) {
+                TextToSpeech(appContext, { status ->
+                    if (status == TextToSpeech.SUCCESS && cont.isActive) cont.resume(t)
+                    else if (cont.isActive) cont.resume(null)
+                }, key)
+            } else {
+                TextToSpeech(appContext) { status ->
+                    if (status == TextToSpeech.SUCCESS && cont.isActive) cont.resume(t)
+                    else if (cont.isActive) cont.resume(null)
+                }
             }
             cont.invokeOnCancellation { runCatching { t?.shutdown() } }
         } ?: return null
         sysTts = tts
         sysTtsReady = true
-        runCatching { _systemVoices.value = tts.voices.orEmpty().sortedWith(compareBy({ it.locale.toString() }, { it.name })) }
+        sysTtsEngine = key
         return tts
     }
 
-    fun refreshSystemVoices() {
-        scope.launch(Dispatchers.IO) { ensureSystemTts() }
+    /** 系统引擎列表（内置除外，歌曲介绍同款）；当前引擎音色列表（内置返回空）。 */
+    suspend fun listSystemEngines(): List<TtsEngineInfo> = withContext(Dispatchers.IO) {
+        querySystemEngines(appContext)
     }
 
-    private suspend fun synthesizeSystem(chunk: String, tp: EbookTtsPrefs): ByteArray? {
-        val tts = ensureSystemTts() ?: throw IllegalStateException("系统 TTS 不可用")
+    fun refreshSystemVoices() {
+        scope.launch(Dispatchers.IO) {
+            val tp = settings.unifiedTts.first()
+            _systemVoices.value = if (tp.isInternal) emptyList()
+            else systemVoicesOf(appContext, tp.systemEnginePkg)
+                .sortedWith(compareBy({ it.locale.toString() }, { it.name }))
+        }
+    }
+
+    private suspend fun synthesizeSystem(chunk: String, tp: UnifiedTtsPrefs): ByteArray? {
+        val tts = ensureSystemTts(tp.systemEnginePkg) ?: throw IllegalStateException("系统 TTS 不可用")
         tts.setSpeechRate(tp.rate.coerceIn(0.5f, 2f))
         tts.setPitch(tp.pitch.coerceIn(0.5f, 2f))
-        val wantVoice = tp.voice.ifBlank { null }
-        val voice = wantVoice?.let { n -> tts.voices?.firstOrNull { it.name == n } }
-        if (voice != null) {
-            runCatching { tts.voice = voice }
-            runCatching { tts.language = voice.locale }
+        // 与歌曲介绍同款顺序：显式音色只 setVoice，不随后 setLanguage
+        // （后者在部分引擎上会把音色重置回该语言默认，导致所选音色不生效）
+        val saved: Voice? = tp.voice.takeIf { it.isNotBlank() }
+            ?.let { n -> tts.voices?.firstOrNull { it.name == n } }
+        if (saved != null) {
+            runCatching { tts.voice = saved }
         } else {
             // 自动：优先中文（简中→繁中），都没有就跟随系统
             val vs = tts.voices.orEmpty()
@@ -547,18 +572,14 @@ class EbookTtsController(context: Context) {
 
     // ---- 引擎可用性（UI 用） ----
 
-    suspend fun effectiveEngine(): EbookTtsEngine = withContext(Dispatchers.IO) {
-        val want = prefs.tts.value.engine
-        if (want == EbookTtsEngine.INTERNAL && internalAvailable) return@withContext EbookTtsEngine.INTERNAL
-        if (want == EbookTtsEngine.INTERNAL) {
+    /** 播放前解析一次有效引擎；内置不可用自动降级到系统默认并提示。 */
+    private suspend fun resolveEngineForPlay(): UnifiedTtsPrefs {
+        val tp = settings.unifiedTts.first()
+        if (tp.isInternal && msInternalAvailable()) return tp
+        if (tp.isInternal) {
             withContext(Dispatchers.Main) { _notice.value = "内置语音不可用，已切换到系统 TTS" }
+            return tp.copy(engine = "")
         }
-        EbookTtsEngine.SYSTEM
-    }
-
-    /** 播放前解析一次有效引擎；内置不可用自动降级并提示。 */
-    suspend fun resolveEngineForPlay(): EbookTtsPrefs {
-        val tp = prefs.tts.value
-        return tp.copy(engine = effectiveEngine())
+        return tp
     }
 }

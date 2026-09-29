@@ -17,9 +17,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.SongIntroController
 import com.aurora.music.data.SongIntroPrefs
+import com.aurora.music.data.TTS_ENGINE_INTERNAL
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5CheckRow
 import com.aurora.music.ui.ios5.Ios5SettingsPage
+import com.aurora.music.ui.ios5.Ios5SliderRow
+import com.aurora.music.ui.ios5.Ios5StaticText
 import com.aurora.music.ui.ios5.ios5FootNote
 import com.aurora.music.ui.ios5.ios5Section
 import kotlinx.coroutines.launch
@@ -32,6 +35,7 @@ fun SongIntroVoiceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val intro = container.songIntro
     val prefs by store.songIntroPrefs.collectAsStateWithLifecycle(initialValue = SongIntroPrefs())
     val voices by intro.voices.collectAsStateWithLifecycle()
+    val installing by intro.installing.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     var engines by remember { mutableStateOf<List<SongIntroController.TtsEngineInfo>>(emptyList()) }
@@ -40,11 +44,21 @@ fun SongIntroVoiceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
         intro.refreshVoices()
     }
 
-    fun engineLabel(pkg: String): String =
-        if (pkg.isBlank()) "系统默认" else engines.firstOrNull { it.packageName == pkg }?.label ?: pkg
+    fun engineLabel(pkg: String): String = when {
+        pkg == TTS_ENGINE_INTERNAL -> "内置微软离线"
+        pkg.isBlank() -> "系统默认"
+        else -> engines.firstOrNull { it.packageName == pkg }?.label ?: pkg
+    }
 
     Ios5SettingsPage("语音引擎与音色", onBack) {
         ios5Section("引擎") {
+            Ios5CheckRow(
+                title = "内置微软离线",
+                subtitle = "随 App 打包，无需联网",
+                checked = prefs.ttsEngine == TTS_ENGINE_INTERNAL,
+                onClick = { scope.launch { intro.selectEngine(TTS_ENGINE_INTERNAL) } },
+            )
+            Ios5CellDivider()
             Ios5CheckRow(
                 title = "系统默认",
                 checked = prefs.ttsEngine.isBlank(),
@@ -63,8 +77,8 @@ fun SongIntroVoiceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
 
         ios5Section("音色（${engineLabel(prefs.ttsEngine)}）") {
             Ios5CheckRow(
-                title = "系统默认",
-                subtitle = "中文语音优先",
+                title = "自动",
+                subtitle = if (prefs.ttsEngine == TTS_ENGINE_INTERNAL) "默认晓晓" else "中文语音优先",
                 checked = prefs.ttsVoice.isBlank(),
                 onClick = { scope.launch { store.setIntroTtsVoice("") } },
             )
@@ -75,6 +89,26 @@ fun SongIntroVoiceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                     checked = v.name == prefs.ttsVoice,
                     onClick = { scope.launch { store.setIntroTtsVoice(v.name) } },
                 )
+            }
+        }
+
+        ios5Section("音调") {
+            Ios5SliderRow(
+                title = "音调",
+                valueLabel = String.format("%.2f", prefs.ttsPitch) + "x",
+                value = prefs.ttsPitch,
+                range = 0.5f..2.0f,
+                steps = 15,
+                onValueChange = { scope.launch { store.setIntroTtsPitch(it) } },
+            )
+            Ios5StaticText("语速在上一页调；语速音调音色与电子书听书共用同一设置。")
+        }
+
+        val inst = installing
+        if (inst != null) {
+            val (done, total, name) = inst
+            ios5Section("内置语音") {
+                Ios5StaticText("正在准备内置语音 $name（$done/$total），首次需释放语音数据，之后不再等待。")
             }
         }
 

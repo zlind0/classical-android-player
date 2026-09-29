@@ -88,10 +88,12 @@ import com.aurora.music.AuroraApplication
 import com.aurora.music.data.ebook.EbookReadPrefs
 import com.aurora.music.data.ebook.EbookTheme
 import com.aurora.music.data.ebook.MAX_RECENT_FONTS
-import com.aurora.music.data.ebook.EbookTtsEngine
+import com.aurora.music.data.TTS_ENGINE_INTERNAL
+import com.aurora.music.data.UnifiedTtsPrefs
 import com.aurora.music.data.ebook.EbookTtsUnit
 import com.aurora.music.data.ebook.ParsedEbook
 import com.aurora.music.tts.MsVoices
+import com.aurora.music.tts.TtsEngineInfo
 import com.aurora.music.ui.components.LottieLoader
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5GlossButton
@@ -102,6 +104,7 @@ import com.aurora.music.ui.ios5.Ios5SegmentRow
 import com.aurora.music.ui.ios5.Ios5SettingsPage
 import com.aurora.music.ui.ios5.Ios5SliderRow
 import com.aurora.music.ui.ios5.Ios5StaticText
+import com.aurora.music.ui.ios5.ios5FootNote
 import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.ui.ios5.ios5Section
 import java.io.File
@@ -288,7 +291,7 @@ private fun ReaderBody(
     val store = container.ebookStore
     val tts = container.ebookTts
     val ttsPlaying by tts.playing.collectAsStateWithLifecycle()
-    val ttsPrefs by container.ebookPrefs.tts.collectAsStateWithLifecycle()
+    val ttsUnit by container.ebookPrefs.ttsUnit.collectAsStateWithLifecycle()
     val ttsInstalling by tts.installing.collectAsStateWithLifecycle()
     val ttsNotice by tts.notice.collectAsStateWithLifecycle()
     LaunchedEffect(ttsNotice) {
@@ -571,7 +574,7 @@ private fun ReaderBody(
                 barBrush = th.barBrush,
                 barInk = th.barInk,
                 isTtsPlaying = ttsPlaying,
-                sentenceMode = ttsPrefs.unit == EbookTtsUnit.SENTENCE,
+                sentenceMode = ttsUnit == EbookTtsUnit.SENTENCE,
                 onTtsPrev = { tts.prev() },
                 onTtsToggle = {
                     if (ttsPlaying) {
@@ -1059,11 +1062,30 @@ private fun EbookOptionsPage(onBack: () -> Unit) {
     val context = LocalContext.current
     val container = (context.applicationContext as AuroraApplication).container
     val prefs by container.ebookPrefs.prefs.collectAsStateWithLifecycle()
-    val ttsPrefs by container.ebookPrefs.tts.collectAsStateWithLifecycle()
+    val ttsPrefs by container.settingsStore.unifiedTts.collectAsStateWithLifecycle(initialValue = UnifiedTtsPrefs())
+    val ttsUnit by container.ebookPrefs.ttsUnit.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    // 进设置页即预热系统 TTS（音色列表要用）
-    LaunchedEffect(Unit) { container.ebookTts.refreshSystemVoices() }
-    val systemVoices by container.ebookTts.systemVoices.collectAsStateWithLifecycle()
+    var engines by remember { mutableStateOf<List<TtsEngineInfo>>(emptyList()) }
+    // 进设置页即拉引擎列表并刷新当前引擎的音色列表
+    LaunchedEffect(Unit) {
+        engines = container.ebookTts.listSystemEngines()
+        container.ebookTts.refreshSystemVoices()
+    }
+    fun engineLabel(): String = when {
+        ttsPrefs.isInternal -> "内置微软离线"
+        ttsPrefs.engine.isBlank() -> "系统默认引擎"
+        else -> engines.firstOrNull { it.packageName == ttsPrefs.engine }?.label ?: ttsPrefs.engine
+    }
+    fun voiceLabel(): String = when {
+        ttsPrefs.voice.isBlank() -> if (ttsPrefs.isInternal) "晓晓（默认）" else "自动（中文优先）"
+        ttsPrefs.isInternal -> MsVoices.byCode(ttsPrefs.voice)?.showName ?: ttsPrefs.voice
+        else -> ttsPrefs.voice
+    }
+    var engineOpen by remember { mutableStateOf(false) }
+    var voiceOpen by remember { mutableStateOf(false) }
+    BackHandler(engineOpen || voiceOpen) {
+        if (voiceOpen) voiceOpen = false else engineOpen = false
+    }
     val fontPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
@@ -1149,11 +1171,11 @@ private fun EbookOptionsPage(onBack: () -> Unit) {
             Ios5StaticText("左右滑动翻页时的每页字数会随字号变化，断点会自动重排并记住。")
         }
         ios5Section("听书语音") {
-            val engineIdx = if (ttsPrefs.engine == EbookTtsEngine.SYSTEM) 1 else 0
+            // 朗读切片（电子书独有，仍存阅读设置）
             Ios5SegmentRow(
                 title = "朗读切片",
                 options = listOf("按段落", "按句子"),
-                selected = if (ttsPrefs.unit == EbookTtsUnit.SENTENCE) 1 else 0,
+                selected = if (ttsUnit == EbookTtsUnit.SENTENCE) 1 else 0,
                 onSelect = {
                     container.ebookTts.stop()
                     val u = if (it == 1) EbookTtsUnit.SENTENCE else EbookTtsUnit.PARA
@@ -1164,55 +1186,20 @@ private fun EbookOptionsPage(onBack: () -> Unit) {
             Ios5CellDivider()
             Ios5StaticText("按句子切分时，上一首/下一首即上一句/下一句，高亮只染当前句。中文按。！？；…断句，英文按.!?;断句，小数点不断句。")
             Ios5CellDivider()
-            Ios5SegmentRow(
-                title = "语音引擎",
-                options = listOf("内置微软", "系统TTS"),
-                selected = engineIdx,
-                onSelect = {
-                    container.ebookTts.stop()
-                    container.ebookPrefs.setTtsEngine(
-                        if (it == 1) EbookTtsEngine.SYSTEM else EbookTtsEngine.INTERNAL,
-                    )
-                },
+            // 引擎与音色（统一 TTS 设置，与 设置→歌曲介绍→语音 互通，歌曲介绍同款分级页）
+            Ios5NavRow(
+                title = "引擎",
+                subtitle = engineLabel(),
+                onClick = { engineOpen = true },
             )
             Ios5CellDivider()
-            if (ttsPrefs.engine == EbookTtsEngine.INTERNAL) {
-                com.aurora.music.ui.ios5.Ios5StaticText("内置离线语音（随 App 打包，无需联网）")
-                MsVoices.ALL.forEach { v ->
-                    Ios5CellDivider()
-                    com.aurora.music.ui.ios5.Ios5CheckRow(
-                        title = v.showName,
-                        subtitle = v.code,
-                        checked = (ttsPrefs.voice.ifBlank { MsVoices.DEFAULT }) == v.code,
-                        onClick = {
-                            container.ebookTts.stop()
-                            container.ebookPrefs.setTtsVoice(v.code)
-                        },
-                    )
-                }
-            } else {
-                com.aurora.music.ui.ios5.Ios5CheckRow(
-                    title = "自动",
-                    subtitle = "优先中文语音",
-                    checked = ttsPrefs.voice.isBlank(),
-                    onClick = {
-                        container.ebookTts.stop()
-                        container.ebookPrefs.setTtsVoice("")
-                    },
-                )
-                systemVoices.take(60).forEach { v ->
-                    Ios5CellDivider()
-                    com.aurora.music.ui.ios5.Ios5CheckRow(
-                        title = v.name,
-                        subtitle = v.locale.toString(),
-                        checked = ttsPrefs.voice == v.name,
-                        onClick = {
-                            container.ebookTts.stop()
-                            container.ebookPrefs.setTtsVoice(v.name)
-                        },
-                    )
-                }
-            }
+            Ios5NavRow(
+                title = "音色",
+                subtitle = voiceLabel(),
+                onClick = { voiceOpen = true },
+            )
+            Ios5CellDivider()
+            Ios5StaticText("与 设置 → 歌曲介绍 → 语音 为同一设置，两处互通。切换引擎或音色会停掉当前朗读。")
         }
         ios5Section("听书语速") {
             Ios5SliderRow(
@@ -1221,7 +1208,7 @@ private fun EbookOptionsPage(onBack: () -> Unit) {
                 value = ttsPrefs.rate,
                 range = 0.5f..2f,
                 steps = 29,
-                onValueChange = { container.ebookPrefs.setTtsRate(it) },
+                onValueChange = { scope.launch { container.settingsStore.setIntroTtsRate(it) } },
             )
             Ios5CellDivider()
             Ios5SliderRow(
@@ -1230,9 +1217,9 @@ private fun EbookOptionsPage(onBack: () -> Unit) {
                 value = ttsPrefs.pitch,
                 range = 0.5f..2f,
                 steps = 29,
-                onValueChange = { container.ebookPrefs.setTtsPitch(it) },
+                onValueChange = { scope.launch { container.settingsStore.setIntroTtsPitch(it) } },
             )
-            Ios5StaticText("内置与系统语音都经过均衡器 DSP 链（校正/用户均衡/动态等）。切换引擎或音色会停掉当前朗读。")
+            Ios5StaticText("内置与系统语音都经过均衡器 DSP 链（校正/用户均衡/动态等）。切换引擎或音色会停掉当前朗读。与歌曲介绍的语音为同一设置，两处互通。")
         }
         ios5Section("睡眠定时") {
             val timer by container.ebookTts.sleepTimer.collectAsStateWithLifecycle()
@@ -1273,12 +1260,119 @@ private fun EbookOptionsPage(onBack: () -> Unit) {
                     }
                 }
                 val remainMin = ((cur.deadlineElapsed - nowMs + 59_999) / 60_000).coerceAtLeast(1)
-                val unitName = if (ttsPrefs.unit == EbookTtsUnit.SENTENCE) "句" else "段"
+                val unitName = if (ttsUnit == EbookTtsUnit.SENTENCE) "句" else "段"
                 Ios5StaticText("约 $remainMin 分钟后停止，将读完当前${unitName}再停。手动停止朗读会清除定时。")
             } else {
                 Ios5StaticText("到点后读完当前再停。倒计时与定时二选一，后设的生效；选关闭可清除定时。")
             }
         }
     }
+    if (engineOpen) EbookTtsEnginePage(engines = engines, onBack = { engineOpen = false })
+    if (voiceOpen) EbookTtsVoicePage(engineLabel = engineLabel(), onBack = { voiceOpen = false })
+    }
 }
+
+// ---- 听书引擎子页（歌曲介绍语音屏同款，统一 TTS 设置的修改入口之一） ----
+
+// ---- 听书引擎子页（歌曲介绍语音屏同款，统一 TTS 设置的修改入口之一） ----
+
+@Composable
+private fun EbookTtsEnginePage(engines: List<TtsEngineInfo>, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val container = (context.applicationContext as AuroraApplication).container
+    val prefs by container.ebookPrefs.prefs.collectAsStateWithLifecycle()
+    val unified by container.settingsStore.unifiedTts.collectAsStateWithLifecycle(initialValue = UnifiedTtsPrefs())
+    val scope = rememberCoroutineScope()
+    val th = themeOf(prefs.theme)
+
+    fun select(engine: String) {
+        container.ebookTts.stop()
+        scope.launch {
+            container.settingsStore.setIntroTtsEngine(engine)
+            container.ebookTts.refreshSystemVoices()
+        }
+    }
+
+    Box(Modifier.fillMaxSize().background(th.bg)) {
+        Ios5SettingsPage(title = "引擎", onBack = onBack) {
+            ios5Section("语音引擎") {
+                com.aurora.music.ui.ios5.Ios5CheckRow(
+                    title = "内置微软离线",
+                    subtitle = "随 App 打包，无需联网",
+                    checked = unified.isInternal,
+                    onClick = { select(TTS_ENGINE_INTERNAL) },
+                )
+                Ios5CellDivider()
+                com.aurora.music.ui.ios5.Ios5CheckRow(
+                    title = "系统默认引擎",
+                    subtitle = "跟随系统设置",
+                    checked = unified.engine.isBlank(),
+                    onClick = { select("") },
+                )
+                engines.forEach { e ->
+                    Ios5CellDivider()
+                    com.aurora.music.ui.ios5.Ios5CheckRow(
+                        title = e.label + if (e.isDefault) "（默认）" else "",
+                        subtitle = e.packageName,
+                        checked = e.packageName == unified.engine,
+                        onClick = { select(e.packageName) },
+                    )
+                }
+            }
+            ios5FootNote("与 设置 → 歌曲介绍 → 语音 为同一设置，两处互通。切换引擎会停掉当前朗读。")
+        }
+    }
+}
+
+// ---- 听书音色子页（随当前引擎变化，统一 TTS 设置的修改入口之一） ----
+
+@Composable
+private fun EbookTtsVoicePage(engineLabel: String, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val container = (context.applicationContext as AuroraApplication).container
+    val prefs by container.ebookPrefs.prefs.collectAsStateWithLifecycle()
+    val unified by container.settingsStore.unifiedTts.collectAsStateWithLifecycle(initialValue = UnifiedTtsPrefs())
+    val systemVoices by container.ebookTts.systemVoices.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    val th = themeOf(prefs.theme)
+
+    fun selectVoice(v: String) {
+        container.ebookTts.stop()
+        scope.launch { container.settingsStore.setIntroTtsVoice(v) }
+    }
+
+    Box(Modifier.fillMaxSize().background(th.bg)) {
+        Ios5SettingsPage(title = "音色（$engineLabel）", onBack = onBack) {
+            ios5Section("音色") {
+                if (unified.isInternal) {
+                    com.aurora.music.ui.ios5.Ios5StaticText("内置离线语音（随 App 打包，无需联网）")
+                    MsVoices.ALL.forEach { v ->
+                        Ios5CellDivider()
+                        com.aurora.music.ui.ios5.Ios5CheckRow(
+                            title = v.showName,
+                            subtitle = v.code,
+                            checked = (unified.voice.ifBlank { MsVoices.DEFAULT }) == v.code,
+                            onClick = { selectVoice(v.code) },
+                        )
+                    }
+                } else {
+                    com.aurora.music.ui.ios5.Ios5CheckRow(
+                        title = "自动",
+                        subtitle = "优先中文语音",
+                        checked = unified.voice.isBlank(),
+                        onClick = { selectVoice("") },
+                    )
+                    systemVoices.take(60).forEach { v ->
+                        Ios5CellDivider()
+                        com.aurora.music.ui.ios5.Ios5CheckRow(
+                            title = v.name,
+                            subtitle = v.locale.toString(),
+                            checked = unified.voice == v.name,
+                            onClick = { selectVoice(v.name) },
+                        )
+                    }
+                }
+            }
+        }
+    }
 }

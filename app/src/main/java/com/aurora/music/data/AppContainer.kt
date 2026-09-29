@@ -217,6 +217,7 @@ class AppContainer(context: Context) {
     val ebookTtsPlayer = com.aurora.music.playback.EbookTtsPlayer(appContext, settingsStore, audioSessionId)
     val ebookTts = com.aurora.music.data.ebook.EbookTtsController(appContext).also {
         it.prefs = ebookPrefs
+        it.settings = settingsStore
         it.player = ebookTtsPlayer
     }
 
@@ -332,6 +333,10 @@ class AppContainer(context: Context) {
                     runCatching { com.aurora.music.playback.EbookTtsMediaService.start(appContext) }
                 }
             }
+        }
+        scope.launch {
+            // 电子书旧 TTS 设置一次性迁入统一设置（失败不影响启动）。
+            runCatching { settingsStore.migrateEbookTts(ebookPrefs.snapshotTts(), ebookPrefs.isTtsCustomized()) }
         }
         registerConnectivity()
     }

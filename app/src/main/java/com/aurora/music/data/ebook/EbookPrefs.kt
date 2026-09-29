@@ -32,6 +32,8 @@ class EbookPrefs(context: Context) {
         val FONT_SIZE = floatPreferencesKey("font_size_sp")
         val FONT_PATH = stringPreferencesKey("font_path")
         val FONT_RECENT = stringPreferencesKey("font_recent")
+        // 引擎/音色/语速/音调已统一存到主 DataStore（SettingsStore.unifiedTts），此处只留切片单位；
+        // 旧四键保留仅供一次性迁移读取（migrateEbookTts），不再写入。
         val TTS_ENGINE = stringPreferencesKey("tts_engine")
         val TTS_VOICE = stringPreferencesKey("tts_voice")
         val TTS_RATE = floatPreferencesKey("tts_rate")
@@ -44,8 +46,8 @@ class EbookPrefs(context: Context) {
     private val _prefs = MutableStateFlow(EbookReadPrefs())
     val prefs: StateFlow<EbookReadPrefs> = _prefs.asStateFlow()
 
-    private val _tts = MutableStateFlow(EbookTtsPrefs())
-    val tts: StateFlow<EbookTtsPrefs> = _tts.asStateFlow()
+    private val _ttsUnit = MutableStateFlow(EbookTtsUnit.PARA)
+    val ttsUnit: StateFlow<EbookTtsUnit> = _ttsUnit.asStateFlow()
 
     /** 最近选择过的自定义字体（新→旧，最多 [MAX_RECENT_FONTS] 个，不存在的文件已滤掉）。 */
     private val _recentFonts = MutableStateFlow<List<String>>(emptyList())
@@ -68,18 +70,32 @@ class EbookPrefs(context: Context) {
         }
         scope.launch {
             appContext.ebookReadDataStore.data.map { p ->
-                EbookTtsPrefs(
-                    engine = runCatching { EbookTtsEngine.valueOf(p[Keys.TTS_ENGINE] ?: "INTERNAL") }
-                        .getOrDefault(EbookTtsEngine.INTERNAL),
-                    voice = p[Keys.TTS_VOICE].orEmpty(),
-                    rate = (p[Keys.TTS_RATE] ?: 1f).coerceIn(0.5f, 2f),
-                    pitch = (p[Keys.TTS_PITCH] ?: 1f).coerceIn(0.5f, 2f),
-                    unit = runCatching { EbookTtsUnit.valueOf(p[Keys.TTS_UNIT] ?: "PARA") }
-                        .getOrDefault(EbookTtsUnit.PARA),
-                )
-            }.collect { _tts.value = it }
+                runCatching { EbookTtsUnit.valueOf(p[Keys.TTS_UNIT] ?: "PARA") }
+                    .getOrDefault(EbookTtsUnit.PARA)
+            }.collect { _ttsUnit.value = it }
         }
     }
+
+    /** 旧 TTS 四键快照（仅供统一设置一次性迁移，平时不用）。 */
+    suspend fun snapshotTts(): com.aurora.music.data.UnifiedTtsPrefs =
+        appContext.ebookReadDataStore.data.map { p ->
+            val internal = (p[Keys.TTS_ENGINE] ?: "INTERNAL") != "SYSTEM"
+            com.aurora.music.data.UnifiedTtsPrefs(
+                engine = if (internal) com.aurora.music.data.TTS_ENGINE_INTERNAL else "",
+                voice = p[Keys.TTS_VOICE].orEmpty(),
+                rate = (p[Keys.TTS_RATE] ?: 1f).coerceIn(0.5f, 2f),
+                pitch = (p[Keys.TTS_PITCH] ?: 1f).coerceIn(0.5f, 2f),
+            )
+        }.first()
+
+    /** 旧 TTS 四键是否被用户改过（供迁移判断）。 */
+    suspend fun isTtsCustomized(): Boolean =
+        appContext.ebookReadDataStore.data.map { p ->
+            (p[Keys.TTS_ENGINE] ?: "INTERNAL") != "INTERNAL" ||
+                !p[Keys.TTS_VOICE].isNullOrEmpty() ||
+                (p[Keys.TTS_RATE] ?: 1f) != 1f ||
+                (p[Keys.TTS_PITCH] ?: 1f) != 1f
+        }.first()
 
     suspend fun initial(): EbookReadPrefs = prefs.first()
 
@@ -128,22 +144,6 @@ class EbookPrefs(context: Context) {
             .filter { it.isNotBlank() && File(it).exists() }
             .distinct()
             .take(MAX_RECENT_FONTS)
-    }
-
-    fun setTtsEngine(e: EbookTtsEngine) {
-        scope.launch { appContext.ebookReadDataStore.edit { it[Keys.TTS_ENGINE] = e.name } }
-    }
-
-    fun setTtsVoice(code: String) {
-        scope.launch { appContext.ebookReadDataStore.edit { it[Keys.TTS_VOICE] = code } }
-    }
-
-    fun setTtsRate(rate: Float) {
-        scope.launch { appContext.ebookReadDataStore.edit { it[Keys.TTS_RATE] = rate.coerceIn(0.5f, 2f) } }
-    }
-
-    fun setTtsPitch(pitch: Float) {
-        scope.launch { appContext.ebookReadDataStore.edit { it[Keys.TTS_PITCH] = pitch.coerceIn(0.5f, 2f) } }
     }
 
     fun setTtsUnit(u: EbookTtsUnit) {
