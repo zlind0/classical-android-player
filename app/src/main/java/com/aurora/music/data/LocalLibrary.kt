@@ -348,15 +348,21 @@ class LocalLibrary(
                     val rawAlbum = c.getString(albumCol)?.takeIf { it.isNotBlank() }
                     val albumName = rawAlbum ?: "Unknown album"
                     val durSec = (c.getLong(durCol) / 1000L).toInt()
+                    // 短时长（<10s，含未知时长 0）直接忽略
+                    if (durSec < MIN_TRACK_DURATION_SEC) continue
                     val year = runCatching { c.getInt(yearCol) }.getOrDefault(0)
                     val added = runCatching { c.getLong(addedCol) }.getOrDefault(0L)
                     val display = if (nameCol >= 0) c.getString(nameCol) else null
+                    // 隐藏文件忽略（unix 前缀 `.`）
+                    if (display != null && isHiddenName(display)) continue
                     val mime = if (mimeCol >= 0) c.getString(mimeCol) else null
                     val suffix = suffixFrom(display, mime)
                     val bitrateKbps = if (bitrateCol >= 0) (runCatching { c.getInt(bitrateCol) }.getOrDefault(0) / 1000) else 0
                     val art = albumArtUri(albumId)
                     val uri = ContentUris.withAppendedId(collection, id).toString()
                     val data = if (dataCol >= 0) c.getString(dataCol).orEmpty() else ""
+                    // DATA 路径里任一段以 `.` 开头即隐藏文件/目录，忽略
+                    if (data.isNotBlank() && data.split('/').any { isHiddenName(it) }) continue
                     // 专辑键只看归一化标题：MediaStore 的 album_id 按艺人维度拆分，
                     // 同名专辑跨文件夹/跨艺人会被拆成多个 id，这里直接无视它；
                     // 无专辑标签的每首独立成专（unique key），绝不合并

@@ -61,11 +61,14 @@ class RootScanner(
                 val dir = stack.removeLast()
                 val kids = runCatching { dir.listFiles() }.getOrNull() ?: continue
                 for (f in kids) {
+                    // 隐藏文件/目录一律忽略（unix 前缀 `.` + File.isHidden 双保险）
+                    if (isHiddenName(f.name)) continue
                     if (runCatching { f.isDirectory }.getOrDefault(false)) {
                         // skip unreadable/hidden dirs quietly; never leave the root subtree
                         if (runCatching { f.canRead() && !f.isHidden }.getOrDefault(false)) stack.add(f)
                         continue
                     }
+                    if (runCatching { f.isHidden }.getOrDefault(false)) continue
                     if (isAudioFile(f.name)) files.add(f)
                 }
             }
@@ -89,25 +92,31 @@ class RootScanner(
                             val old = previous[path]
                             // hasEmbedded 未知（老数据迁移而来）也强制重读一次，补上内嵌图标记
                             if (old != null && old.hasEmbedded != null && old.size == size && old.lastModified == mtime && old.available) {
-                                out.add(old)
+                                // 未变更文件直接复用，但短时长（<10s，含老数据里的 0）这次起不再收录
+                                if (old.durationSec >= MIN_TRACK_DURATION_SEC) {
+                                    out.add(old)
+                                }
                             } else {
                                 // 单文件超时即放弃（走文件名兜底），坏文件不阻塞整库。
                                 // 同一次 MMR 会话里顺手把内嵌图存进 track_art 缓存，供单曲/专辑封面用。
                                 val meta = withTimeoutOrNull(META_TIMEOUT_MS) { readMetadata(f) } ?: fallback(f)
-                                val codec = withTimeoutOrNull(CODEC_TIMEOUT_MS) { sniffCodec(f) }.orEmpty()
-                                val songId = "file:$path"
-                                val hasArt = meta.art?.takeIf { it.isNotEmpty() }?.let { bytes ->
-                                    runCatching { TrackArtworkCache.saveEmbedded(context, songId, bytes) }.getOrDefault(false)
-                                } == true
-                                out.add(
-                                    ScannedTrack(
-                                        path = path, size = size, lastModified = mtime,
-                                        title = meta.title, artist = meta.artist, album = meta.album,
-                                        durationSec = meta.durationSec, artworkUrl = folderCover(f),
-                                        codec = codec, hasEmbedded = hasArt,
+                                // 短时长（<10s，含读不到时长的 0）直接忽略，不入库
+                                if (meta.durationSec >= MIN_TRACK_DURATION_SEC) {
+                                    val codec = withTimeoutOrNull(CODEC_TIMEOUT_MS) { sniffCodec(f) }.orEmpty()
+                                    val songId = "file:$path"
+                                    val hasArt = meta.art?.takeIf { it.isNotEmpty() }?.let { bytes ->
+                                        runCatching { TrackArtworkCache.saveEmbedded(context, songId, bytes) }.getOrDefault(false)
+                                    } == true
+                                    out.add(
+                                        ScannedTrack(
+                                            path = path, size = size, lastModified = mtime,
+                                            title = meta.title, artist = meta.artist, album = meta.album,
+                                            durationSec = meta.durationSec, artworkUrl = folderCover(f),
+                                            codec = codec, hasEmbedded = hasArt,
+                                        )
                                     )
-                                )
-                                if (old == null) added.incrementAndGet() else updated.incrementAndGet()
+                                    if (old == null) added.incrementAndGet() else updated.incrementAndGet()
+                                }
                             }
                             val d = done.incrementAndGet()
                             if (d == files.size) emit(f.name) else emitThrottled(f.name)

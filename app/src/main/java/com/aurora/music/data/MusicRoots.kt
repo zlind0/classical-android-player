@@ -46,7 +46,13 @@ data class ScanProgress(
 
 val AUDIO_EXTENSIONS = setOf("flac", "mp3", "m4a", "aac", "alac", "ogg", "oga", "opus", "wav", "aiff", "aif")
 
+// 扫描过滤：时长小于此值（秒）的曲目直接忽略（含读不到时长的 0）
+const val MIN_TRACK_DURATION_SEC = 10
+
 fun isAudioFile(name: String): Boolean {
     val ext = name.substringAfterLast('.', "").lowercase()
     return ext in AUDIO_EXTENSIONS
 }
+
+// unix 隐藏文件/目录：名前缀 `.`（File.isHidden 在 unix 下等价，但显式判断更稳）
+fun isHiddenName(name: String): Boolean = name.startsWith(".")
