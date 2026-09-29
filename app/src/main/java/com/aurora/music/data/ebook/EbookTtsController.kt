@@ -64,6 +64,10 @@ class EbookTtsController(context: Context) {
     lateinit var settings: SettingsStore
     /** 统一合成与播放入口（AppContainer 注入；onQueueEnded 接线由 worker 持有）。 */
     lateinit var tts: TtsWorker
+    /** 进度仓库（AppContainer 注入）：TTS 推进时直存章/块/字，UI 不在前台也丢不了。 */
+    var store: EbookStore? = null
+    /** 当前书的绝对路径（与阅读页 bookPath 同一串，供上面落盘用）。 */
+    @Volatile var bookPath: String = ""
     private var _player: EbookTtsPlayer? = null
     var player: EbookTtsPlayer?
         get() = _player
@@ -168,10 +172,14 @@ class EbookTtsController(context: Context) {
 
     // ---- 书 ----
 
-    fun setBook(md5: String, book: ParsedEbook) {
-        if (bookMd5 == md5 && paras.isNotEmpty()) return
+    fun setBook(md5: String, book: ParsedEbook, path: String = "") {
+        if (bookMd5 == md5 && paras.isNotEmpty()) {
+            if (path.isNotBlank()) bookPath = path
+            return
+        }
         stop()
         bookMd5 = md5
+        if (path.isNotBlank()) bookPath = path
         lastBook = book
         unit = runCatching { prefs.ttsUnit.value }.getOrDefault(EbookTtsUnit.PARA)
         paras = buildUnits(book, unit)
@@ -241,6 +249,13 @@ class EbookTtsController(context: Context) {
 
     /** 停止：什么都不读，高亮清除。没有暂停状态。睡眠定时按会话生效，手动停止即清除。 */
     fun stop() {
+        // 先把停在哪存下来：position 清掉后就没了，通知栏“继续播放”靠 bridge 的 lastPara，
+        // 下次打开靠这里的 DB 行。
+        val cur = _position.value
+        val bp = bookPath
+        if (cur != null && bp.isNotBlank()) {
+            store?.saveTtsPos(bp, cur.chapter, cur.block, cur.startChar)
+        }
         playJob?.cancel()
         playJob = null
         runCatching { tts.stop(TtsOwner.EBOOK) }
@@ -328,6 +343,8 @@ class EbookTtsController(context: Context) {
             _position.value = para
             positionIdx = idx
             _sectionTitle.value = sectionTitleFor(para.chapter, para.block)
+            // 每推进一段/一句就直存章/块/字：锁屏后 UI 没了、pager 动不了时靠这行续命
+            store?.saveTtsPos(bookPath, para.chapter, para.block, para.startChar)
             if (first && movePage || !first) _turn.value = Triple(para.chapter, para.block, para.startChar)
             first = false
             // append 只等合成+入队（首块已开播），返回实测总时长与首播时刻

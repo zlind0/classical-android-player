@@ -78,7 +78,7 @@ class AppContainer(context: Context) {
     // 电子书栈：独立 Room 库 + 仓库 + 扫描器 + 阅读偏好
     private val ebookDb: com.aurora.music.data.ebook.EbookDb = Room.databaseBuilder(
         appContext, com.aurora.music.data.ebook.EbookDb::class.java, "ebook_library.db",
-    ).build()
+    ).fallbackToDestructiveMigration().build()
     val ebookStore = com.aurora.music.data.ebook.EbookStore(appContext, ebookDb.ebookDao())
     val ebookScanner = com.aurora.music.data.ebook.EbookScanner(ebookStore, ebookDb.ebookDao())
     val ebookPrefs = com.aurora.music.data.ebook.EbookPrefs(appContext)
@@ -226,6 +226,7 @@ class AppContainer(context: Context) {
         it.settings = settingsStore
         it.player = ebookTtsPlayer
         it.tts = ttsWorker
+        it.store = ebookStore
         songIntro.tts = ttsWorker
     }
 

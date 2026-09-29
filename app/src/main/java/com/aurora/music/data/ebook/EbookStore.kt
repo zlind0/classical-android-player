@@ -319,10 +319,31 @@ class EbookStore(context: Context, private val dao: EbookDao) {
 
     // ---- 进度 ----
 
-    fun saveProgress(path: String, spine: Int, page: Int, pct: Float) {
-        scope.launch(Dispatchers.IO) {
-            dao.saveProgress(path, spine, page, pct, System.currentTimeMillis())
+    /** 完整保存：页 + 块/字锚点 + 百分比。同步版本供 onPause/onDispose 兜底直写。 */
+    suspend fun saveProgressSync(path: String, spine: Int, page: Int, block: Int, char: Int, pct: Float) =
+        withContext(Dispatchers.IO) {
+            dao.saveProgress(path, spine, page, block, char, pct, System.currentTimeMillis())
             _recents.value = dao.recentBooks(5).map { it.toBook() }
+        }
+
+    fun saveReadingPos(path: String, spine: Int, page: Int, block: Int, char: Int, pct: Float) {
+        scope.launch(Dispatchers.IO) {
+            dao.saveProgress(path, spine, page, block, char, pct, System.currentTimeMillis())
+            _recents.value = dao.recentBooks(5).map { it.toBook() }
+        }
+    }
+
+    /** TTS 推进时的轻量保存：只更新章/块/字偏移。UI 不在前台（锁屏仍在读）时靠它续命。 */
+    suspend fun saveTtsPosSync(path: String, spine: Int, block: Int, char: Int) =
+        withContext(Dispatchers.IO) {
+            if (path.isBlank()) return@withContext
+            dao.saveTtsPos(path, spine, block, char, System.currentTimeMillis())
+        }
+
+    fun saveTtsPos(path: String, spine: Int, block: Int, char: Int) {
+        if (path.isBlank()) return
+        scope.launch(Dispatchers.IO) {
+            dao.saveTtsPos(path, spine, block, char, System.currentTimeMillis())
         }
     }
 
@@ -361,6 +382,7 @@ class EbookStore(context: Context, private val dao: EbookDao) {
         inShelf = inShelf,
         spineIndex = spineIndex, pageIndex = pageIndex,
         progressPct = progressPct, lastReadAt = lastReadAt,
+        blockIndex = blockIndex, charOffset = charOffset,
     )
 
     private fun storageTypeOf(name: String): StorageType = runCatching {

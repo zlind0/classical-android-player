@@ -1,0 +1,3 @@
+- Always write git commit messages in English (imperative mood, no Chinese).
+- Don't commit unless told.
+- Commit to the dev or dev-xxx branch,depending on the current branch, unless told otherwise.

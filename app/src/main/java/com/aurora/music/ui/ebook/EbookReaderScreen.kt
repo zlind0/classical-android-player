@@ -76,7 +76,6 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -147,10 +146,13 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
 
     var parsed by remember(bookPath) { mutableStateOf<ParsedEbook?>(null) }
     var failed by remember(bookPath) { mutableStateOf(false) }
-    var spine by remember(bookPath) { mutableStateOf(0) }
-    var startPage by remember(bookPath) { mutableStateOf(0) }
-    // 每翻一页同步到这里：进设置/目录返回、进程被杀重进都从它恢复，不再用打开时的旧页
-    var resumePos by remember(bookPath) { mutableStateOf<Pair<Int, Int>?>(null) }
+    var initPage by remember(bookPath) { mutableStateOf(GlobalPage(0, 0)) }
+    // DB 里的块/字锚点：恢复时按它推导页（比存的页码更准，TTS 句级推进只动它）
+    var initBlock by remember(bookPath) { mutableStateOf(0) }
+    var initChar by remember(bookPath) { mutableStateOf(0) }
+    // 目录/站内跳转的按块请求（窗口内先 ensure 再定位，不等分页也先落盘块锚点）
+    var pendingJump by remember(bookPath) { mutableStateOf<BlockJump?>(null) }
+    var jumpGen by remember(bookPath) { mutableStateOf(0L) }
     var tocOpen by remember { mutableStateOf(false) }
     var tocAnchor by remember(bookPath) { mutableStateOf(0 to 0) }
     var optionsOpen by remember { mutableStateOf(false) }
@@ -179,16 +181,20 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
     LaunchedEffect(bookPath) {
         parsed = null
         failed = false
-        resumePos = null
+        pendingJump = null
         val row = store.bookByPath(bookPath)
-        spine = row?.spineIndex ?: 0
-        startPage = row?.pageIndex ?: 0
+        initPage = GlobalPage(row?.spineIndex ?: 0, row?.pageIndex ?: 0)
+        initBlock = row?.blockIndex ?: 0
+        initChar = row?.charOffset ?: 0
         val p = store.openBook(bookPath)
         if (p == null || p.chapters.isEmpty()) failed = true
         else {
             parsed = p
-            spine = (row?.spineIndex ?: 0).coerceIn(0, p.chapters.size - 1)
-            container.ebookTts.setBook(store.md5Of(bookPath), p)
+            initPage = GlobalPage(
+                (row?.spineIndex ?: 0).coerceIn(0, p.chapters.size - 1),
+                (row?.pageIndex ?: 0).coerceAtLeast(0),
+            )
+            container.ebookTts.setBook(store.md5Of(bookPath), p, bookPath)
         }
     }
 
@@ -229,19 +235,14 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
         ReaderBody(
             bookPath = bookPath,
             book = book,
-            spine = spine,
-            startPage = startPage,
-            resumePos = resumePos,
+            initial = initPage,
+            initBlock = initBlock,
+            initChar = initChar,
+            pendingJump = pendingJump,
+            onConsumeJump = { pendingJump = null },
             prefs = prefs,
             toast = toast,
             onToast = { toast = it },
-            onSpineChange = { s, p ->
-                spine = s
-                startPage = p
-                // 上一章末页（Int.MAX_VALUE）真实页码未知，等 ReaderBody 回报；其余直接记
-                resumePos = if (p >= 0 && p != Int.MAX_VALUE) s to p else null
-            },
-            onPosition = { c, p -> resumePos = c to p },
             onOpenToc = { c, b ->
                 tocAnchor = c to b
                 tocOpen = true
@@ -257,10 +258,11 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
                 onBack = { tocOpen = false },
                 onJump = { s, b ->
                     scope.launch {
-                        spine = s
-                        startPage = -b - 2 // 标记：按块跳（负数编码块号）
-                        resumePos = null
+                        jumpGen += 1
+                        pendingJump = BlockJump(s, b, 0, jumpGen)
                         tocOpen = false
+                        // 目录跳转不等分页，直接把块锚点落盘
+                        store.saveTtsPos(bookPath, s, b, 0)
                     }
                 },
             )
@@ -275,14 +277,14 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
 private fun ReaderBody(
     bookPath: String,
     book: ParsedEbook,
-    spine: Int,
-    startPage: Int,
-    resumePos: Pair<Int, Int>?,
+    initial: GlobalPage,
+    initBlock: Int,
+    initChar: Int,
+    pendingJump: BlockJump?,
+    onConsumeJump: () -> Unit,
     prefs: EbookReadPrefs,
     toast: String?,
     onToast: (String) -> Unit,
-    onSpineChange: (spine: Int, page: Int) -> Unit,
-    onPosition: (chapter: Int, page: Int) -> Unit,
     onOpenToc: (chapter: Int, block: Int) -> Unit,
     onOpenOptions: () -> Unit,
 ) {
@@ -298,121 +300,33 @@ private fun ReaderBody(
         tts.takeNotice()?.let { onToast(it) }
     }
     val scope = rememberCoroutineScope()
-    val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val th = themeOf(prefs.theme)
     val meta = th.ink.copy(alpha = 0.55f)
     val linkColor = if (prefs.theme == EbookTheme.DARK) Color(0xFF7AB3FF) else Color(0xFF0A60D6)
 
-    /** 超链接点击：i:章:块 = 站内跳转（复用目录跳转编码），e:url = 外部浏览器。 */
-    fun handleLink(tag: String) {
-        if (tag.startsWith("e:")) {
-            val url = tag.removePrefix("e:")
-            val opened = runCatching {
-                if (!url.startsWith("http://") && !url.startsWith("https://")) return@runCatching false
-                context.startActivity(
-                    Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                )
-                true
-            }.getOrDefault(false)
-            if (!opened) onToast("无法打开链接")
-        } else if (tag.startsWith("i:")) {
-            val parts = tag.removePrefix("i:").split(":")
-            val ci = parts.getOrNull(0)?.toIntOrNull() ?: return
-            val bi = parts.getOrNull(1)?.toIntOrNull() ?: 0
-            if (ci in book.chapters.indices) onSpineChange(ci, -bi - 2)
-        }
-    }
-
     val fontFamily = remember(prefs.fontPath) { loadFontFamily(prefs.fontPath) }
 
-    // 分页断点：内存 + 磁盘两级。磁盘命中则整本直接可用（秒开）。
-    var breaks by remember(bookPath) { mutableStateOf<Map<Int, List<List<PageSlice>>>>(emptyMap()) }
-    var cacheBase by remember(bookPath) { mutableStateOf<Map<Int, List<List<PageSlice>>>>(emptyMap()) }
-    var cacheKey by remember(bookPath) { mutableStateOf<String?>(null) }
     var pagerHeightPx by remember { mutableStateOf(0) }
 
     val ttsPos by tts.position.collectAsStateWithLifecycle()
     BoxWithConstraints(Modifier.fillMaxSize().background(th.bg)) {
         val widthPx = with(density) { (maxWidth - 44.dp).toPx().toInt().coerceAtLeast(200) }
-        val key = remember(prefs.fontSizeSp, prefs.fontPath, widthPx, pagerHeightPx) {
-            if (pagerHeightPx > 100) store.pageCacheKey(prefs, widthPx, pagerHeightPx) else null
-        }
-        LaunchedEffect(bookPath, key) {
-            if (key == null) return@LaunchedEffect
-            cacheKey = key
-            val md5 = store.md5Of(bookPath)
-            val cached = store.loadPageBreaks(md5, key)
-            if (!cached.isNullOrEmpty()) {
-                // 脏缓存自愈：空页/空章视为缺失，会重新排出来覆盖掉
-                val m = pagesFromCache(cached).filterValues { ps -> ps.any { it.isNotEmpty() } }
-                cacheBase = m
-                breaks = m
-            } else {
-                cacheBase = emptyMap()
-                breaks = emptyMap()
-            }
-        }
-        // 窗口分页：当前章优先（阻塞首屏），随后把前后各两章排好，
-        // 落到哪一章，相邻章都已就绪，切窗无 loader。
-        // effect 内多次回写用本地累加表，不直接读 breaks（它是启动瞬间快照）。
-        LaunchedEffect(bookPath, spine, key, book, breaks) {
-            if (key == null || pagerHeightPx <= 100) return@LaunchedEffect
-            val need = (-2..2).map { spine + it }
-                .filter { it in book.chapters.indices && !hasPages(breaks, it) }
-                .sortedBy { kotlin.math.abs(it - spine) }
-            if (need.isEmpty()) return@LaunchedEffect
-            val paginator = ChapterPaginator(measurer, density, widthPx, pagerHeightPx, prefs.fontSizeSp, fontFamily)
-            val acc = breaks.toMutableMap()
-            val md5 = store.md5Of(bookPath)
-            for (n in need) {
-                val nb = runCatching { paginator.paginate(book.chapters[n].blocks) }.getOrDefault(emptyList())
-                if (nb.isNotEmpty()) {
-                    acc[n] = nb
-                    breaks = acc.toMap()
-                    // 落盘（与旧缓存合并，避免覆盖别的章）
-                    store.savePageBreaks(md5, key, pagesToCache(cacheBase + acc))
-                }
-                // 每章让出主线程：大书首开不卡手势（TextMeasurer 必须主线程，只能协作式）
-                kotlinx.coroutines.yield()
-            }
-        }
 
-        // ---- 三章窗口：[上一章, 当前章, 下一章]拼成一条连续长卷 ----
-        // 跨章就是 pager 内的普通翻页，手势逻辑里不再有章节概念，
-        // 不会多翻也不会卡死；落到邻章区间才整体换窗（跳变无动画，同一页无闪烁）。
-        // 到达边界页时相邻章已预排好（上面的窗口分页），切窗无 loader。
-        var livePos by remember(bookPath) { mutableStateOf<Pair<Int, Int>?>(null) } // (章, 页)实时位置
-        var lastSettled by remember(bookPath) { mutableStateOf<Pair<Int, Int>?>(null) }
-        // 有效位置：resumePos（每翻一页同步）优先，没有才用打开/跳转时的 spine/startPage
-        val effSpine = resumePos?.first ?: spine
-        val effStartPage = resumePos?.second ?: startPage
-        // startPage 负数 = 按块跳（目录过来）：-b-2 → 块号 b
-        val jumpBlock = if (effStartPage < 0) -effStartPage - 2 else -1
-        val spinePages0 = breaks[effSpine]?.filter { it.isNotEmpty() }.orEmpty()
-        val spineTarget = when {
-            lastSettled?.first == effSpine -> lastSettled!!.second
-            resumePos?.first == effSpine -> resumePos.second
-            jumpBlock >= 0 -> pageForBlock(spinePages0, jumpBlock)
-            else -> effStartPage.coerceIn(0, (spinePages0.size - 1).coerceAtLeast(0))
-        }
-        val windowPages: List<Pair<Int, Int>> = remember(breaks, effSpine, book) {
-            if (!hasPages(breaks, effSpine)) emptyList()
-            else buildList {
-                listOfNotNull(
-                    (effSpine - 1).takeIf { it >= 0 },
-                    effSpine,
-                    (effSpine + 1).takeIf { it < book.chapters.size },
-                ).filter { hasPages(breaks, it) }.forEach { ci ->
-                    breaks[ci]?.filter { it.isNotEmpty() }?.forEachIndexed { pi, _ -> add(ci to pi) }
-                }
-            }
-        }
-        val winSig = remember(windowPages) { windowPages.joinToString(",") { "${it.first}:${it.second}" } }
-        val startIndex = remember(windowPages, effSpine, spineTarget) {
-            windowPages.indexOfFirst { it.first == effSpine && it.second == spineTarget }.takeIf { it >= 0 } ?: 0
-        }
+        // ---- 7 页滑动窗口：唯一真相源（分页/缓存/预排全在 Host 内） ----
+        // pager 固定 7 页、center 恒为 3，落定后窗口平移并回正，下标永不漂移。
+        val win = rememberPageWindow(
+            bookPath = bookPath,
+            book = book,
+            widthPx = widthPx,
+            heightPx = pagerHeightPx,
+            prefs = prefs,
+            fontFamily = fontFamily,
+            initial = initial,
+            anchorBlock = initBlock,
+            anchorChar = initChar,
+        )
+        val breaks: Map<Int, List<List<PageSlice>>> = win.breaks
 
         // 章节字符统计（进度用，不依赖分页）
         val chapterChars = remember(book) {
@@ -421,15 +335,63 @@ private fun ReaderBody(
         val totalChars = remember(chapterChars) { chapterChars.sum().coerceAtLeast(1) }
         fun charsBeforeChapter(ci: Int): Int = chapterChars.take(ci).sum()
 
+        // 每翻一页立刻存档（无防抖）：进设置、进程被杀都不丢。
+        // 块/字取朗读锚点（在读时），否则取页顶首字，下次恢复按锚点推导更准。
+        // 窗口落定只存一次（旧双通道 currentPage + settledPage 已合并）。
+        fun persist(gp: GlobalPage) {
+            val anchor = tts.position.value?.takeIf { it.chapter == gp.chapter }
+            val cps = breaks[gp.chapter]?.filter { it.isNotEmpty() }.orEmpty()
+            val (blk, ch) = if (anchor != null) {
+                anchor.block to anchor.startChar
+            } else {
+                val sl = cps.getOrNull(gp.page)?.firstOrNull()
+                (sl?.block ?: 0) to (sl?.start ?: 0)
+            }
+            val chars = charsBeforeChapter(gp.chapter) + charsOfPage(book, gp.chapter, cps, gp.page)
+            store.saveReadingPos(
+                bookPath, gp.chapter, gp.page, blk, ch,
+                (chars.toFloat() / totalChars).coerceIn(0f, 1f),
+            )
+        }
+
+        // 锁屏/切后台兜底：ON_PAUSE 时把最新位置同步刷盘（fire-and-forget 在被杀时可能来不及）。
+        // 唯一位置源 = 窗口 center + TTS 块锚点。
+        val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+        DisposableEffect(lifecycleOwner, bookPath) {
+            val obs = androidx.lifecycle.LifecycleEventObserver { _, ev ->
+                if (ev == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) {
+                    scope.launch {
+                        val gp = win.center
+                        val pos = tts.position.value
+                        val cps = breaks[gp.chapter]?.filter { it.isNotEmpty() }.orEmpty()
+                        val anchor = pos?.takeIf { it.chapter == gp.chapter }
+                        val (blk, ch) = if (anchor != null) anchor.block to anchor.startChar
+                        else cps.getOrNull(gp.page)?.firstOrNull()
+                            ?.let { it.block to it.start } ?: (0 to 0)
+                        val chars = charsBeforeChapter(gp.chapter) +
+                            charsOfPage(book, gp.chapter, cps, gp.page)
+                        runCatching {
+                            store.saveProgressSync(
+                                bookPath, gp.chapter, gp.page, blk, ch,
+                                (chars.toFloat() / totalChars).coerceIn(0f, 1f),
+                            )
+                        }
+                    }
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(obs)
+            onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+        }
+
         Column(Modifier.fillMaxSize()) {
-            // ---- 顶栏：灰字状态，无按钮 ----
-            val curGP = livePos?.takeIf { gp -> windowPages.any { it == gp } } ?: (effSpine to spineTarget)
-            val curPages = breaks[curGP.first]?.filter { it.isNotEmpty() }.orEmpty()
-            val pageChars = remember(book, curGP, curPages) { charsOfPage(book, curGP.first, curPages, curGP.second) }
-            val pct = ((charsBeforeChapter(curGP.first) + pageChars).toFloat() / totalChars).coerceIn(0f, 1f)
-            val remain = (curPages.size - 1 - curGP.second).coerceAtLeast(0)
+            // ---- 顶栏：灰字状态，无按钮（数据源唯一：窗口 center） ----
+            val curGP = win.center
+            val curPages = breaks[curGP.chapter]?.filter { it.isNotEmpty() }.orEmpty()
+            val pageChars = remember(book, curGP, curPages) { charsOfPage(book, curGP.chapter, curPages, curGP.page) }
+            val pct = ((charsBeforeChapter(curGP.chapter) + pageChars).toFloat() / totalChars).coerceIn(0f, 1f)
+            val remain = (curPages.size - 1 - curGP.page).coerceAtLeast(0)
             ReaderStatusBar(
-                left = if (windowPages.isEmpty()) "" else "本章还剩${remain}页 · ${(pct * 100).toInt()}%",
+                left = if (win.slotAt(PAGE_WINDOW_CENTER) == null) "" else "本章还剩${remain}页 · ${(pct * 100).toInt()}%",
                 right = "${rememberTimeText()} · ${rememberBatteryPct()}%",
                 color = meta,
             )
@@ -440,60 +402,150 @@ private fun ReaderBody(
                     .onSizeChanged { pagerHeightPx = it.height }
                     .padding(horizontal = 22.dp),
             ) {
-                if (windowPages.isEmpty()) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        LottieLoader(modifier = Modifier.size(64.dp))
-                    }
-                } else {
-                    // pager 只在换书时重建；章内/跨章靠 windowPages 窗口滑动，不重建 pager
-                    // 避免 key() 导致 TOC/设置返回时整体重建
-                    val pager = rememberPagerState(initialPage = startIndex) { windowPages.size }
-                    // 窗口变化（邻章页拼到前面/后面）时，把当前逻辑页平移到新下标，无动画，视觉不动。
-                    // 同时处理程序化导航（目录跳转、TTS 跨章）：startIndex 变化时滚动到新位置。
-                    LaunchedEffect(winSig, startIndex) {
-                            val cur = livePos
-                            // 1) 窗口内章未变：同步 livePos 到新下标（防邻章分页导致的下标漂移）
-                            if (cur != null && cur.first == effSpine) {
-                                val wi = windowPages.indexOf(cur)
-                                if (wi >= 0 && wi != pager.currentPage) {
-                                    runCatching { pager.scrollToPage(wi) }
-                                }
-                            }
-                            // 2) 程序化导航（目录跳转等）：startIndex 变化且不在当前页，动画滚动过去
-                            if (startIndex >= 0 && startIndex < windowPages.size && startIndex != pager.currentPage) {
-                                // 仅当非用户拖拽中：currentPage == settledPage 表示空闲
-                                if (pager.currentPage == pager.settledPage) {
-                                    runCatching { pager.animateScrollToPage(startIndex) }
-                                }
+                // pager 只在换书时重建（固定 7 页、center 恒为 3，不跟分页回写走）；
+                // TOC/设置返回是页内覆盖，不重建
+                val pager = key(bookPath) { rememberPagerState(initialPage = PAGE_WINDOW_CENTER) { PAGE_WINDOW_SIZE } }
+
+                /** 超链接点击：e:url = 外部浏览器；i:章:块 = 站内跳转（先落盘块锚点，窗口内 ensure 再定位）。 */
+                fun handleLink(tag: String) {
+                    if (tag.startsWith("e:")) {
+                        val url = tag.removePrefix("e:")
+                        val opened = runCatching {
+                            if (!url.startsWith("http://") && !url.startsWith("https://")) return@runCatching false
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                            true
+                        }.getOrDefault(false)
+                        if (!opened) onToast("无法打开链接")
+                    } else if (tag.startsWith("i:")) {
+                        val parts = tag.removePrefix("i:").split(":")
+                        val ci = parts.getOrNull(0)?.toIntOrNull() ?: return
+                        val bi = parts.getOrNull(1)?.toIntOrNull() ?: 0
+                        if (ci in book.chapters.indices) {
+                            // 站内跳转不等分页，直接把块锚点落盘
+                            store.saveTtsPos(bookPath, ci, bi, 0)
+                            scope.launch {
+                                win.jumpToBlock(ci, bi)
+                                runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
+                                persist(win.center)
                             }
                         }
-                        // 朗读翻页：段落播完/上下段跳转时翻到该字所在页（跨章走换窗）
-                        val turnReq by tts.turnRequest.collectAsStateWithLifecycle()
-                        LaunchedEffect(turnReq) {
-                            val (c, b, ch) = turnReq ?: return@LaunchedEffect
-                            val cps = breaks[c]?.filter { it.isNotEmpty() }.orEmpty()
-                            // 该字所在页（同一块可能跨多页，不能只取块首页）
-                            val p = cps.indexOfFirst { page ->
-                                page.any { s -> s.block == b && s.end > ch }
-                            }.takeIf { it >= 0 } ?: if (cps.isNotEmpty()) pageForBlock(cps, b) else 0
-                            if (c != effSpine) {
-                                onSpineChange(c, p)
+                    }
+                }
+
+                /** 程序化导航（TTS 跟读）：直接换窗 + 无动画回正。
+                 *  动画跟读会和 250ms 跟读循环/落定回正互相 cancel，时序差时永远到不了 settle；
+                 *  直接换窗是纯状态变更 + 同步回正，确定性和目录跳一致。 */
+                suspend fun goToPage(g: GlobalPage) {
+                    if (g == win.center) return
+                    win.jumpTo(g)
+                    runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
+                    persist(win.center)
+                }
+
+                // 目录按块跳：与 TTS/链接同一调用，跨章也是它
+                LaunchedEffect(pendingJump) {
+                    val pj = pendingJump ?: return@LaunchedEffect
+                    win.jumpToBlock(pj.chapter, pj.block)
+                    runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
+                    persist(win.center)
+                    onConsumeJump()
+                }
+                // 手势落定：转环（支持连甩 ±20）并在空闲时无动画回正，视觉不动；落定只存一次。
+                // 手势进行中绝不碰 pager：回正若打断手指下的滑动，就会"翻快了弹回来"。
+                // early-return 只是推迟结算，放手空闲后 effect 重跑，delta 按中心槽算始终自洽。
+                LaunchedEffect(pager.settledPage, pager.isScrollInProgress) {
+                    if (pager.isScrollInProgress) return@LaunchedEffect
+                    val d = pager.settledPage - PAGE_WINDOW_CENTER
+                    if (d != 0) {
+                        when (val r = win.moveBy(d)) {
+                            is MoveResult.Moved -> {
+                                persist(win.center)
+                                runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
+                            }
+                            // 真到书首/书末：弹回 center
+                            is MoveResult.AtEdge -> {
+                                runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
+                            }
+                            // 邻章没排上：urgent 排完重试（槽留白一次），再回正
+                            is MoveResult.NeedChapter -> scope.launch {
+                                var cur: MoveResult = r
+                                var tries = 0
+                                while (cur is MoveResult.NeedChapter && tries < 4) {
+                                    tries++
+                                    if (win.paginateChapter?.invoke(cur.chapter) != true) break
+                                    cur = win.moveBy(d)
+                                }
+                                if (cur is MoveResult.Moved) persist(win.center)
+                                runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
+                            }
+                        }
+                    }
+                }
+                        // 朗读位置直存（只写盘，不碰 pager/内存导航，导航仍走 turnRequest + pager）：
+                        // TTS 每推进一段/一句、点上一首/下一首、通知栏/耳机切段都会走到这里，
+                        // 同页不动 pager 时靠这行把块/字锚点落盘。
+                        LaunchedEffect(ttsPos) {
+                            val pos = ttsPos ?: return@LaunchedEffect
+                            val cps = breaks[pos.chapter]?.filter { it.isNotEmpty() }.orEmpty()
+                            if (cps.isEmpty()) {
+                                store.saveTtsPos(bookPath, pos.chapter, pos.block, pos.startChar)
                             } else {
-                                val wi = windowPages.indexOf(c to p)
-                                if (wi >= 0 && wi != pager.currentPage) pager.animateScrollToPage(wi)
+                                val p = pageForChar(cps, pos.block, pos.startChar)
+                                val chars = charsBeforeChapter(pos.chapter) +
+                                    charsOfPage(book, pos.chapter, cps, p)
+                                store.saveReadingPos(
+                                    bookPath, pos.chapter, p, pos.block, pos.startChar,
+                                    (chars.toFloat() / totalChars).coerceIn(0f, 1f),
+                                )
+                            }
+                        }
+                        // 朗读翻页：段落播完/上下段跳转时翻到该字所在页（跨章同一调用），同时直存。
+                        // 手势中不抢 pager：等放手后 effect 重跑再追（turnReq 是 StateFlow，值还在）。
+                        // turn 是 sticky 的（stop/setBook 不清）：同一值只导航一次，
+                        // 否则每次手势结束的重跑都会把翻页拽回过期位置，停了也翻不动。
+                        val turnReq by tts.turnRequest.collectAsStateWithLifecycle()
+                        var handledTurn by remember(bookPath) { mutableStateOf<Triple<Int, Int, Int>?>(null) }
+                        LaunchedEffect(turnReq, pager.isScrollInProgress) {
+                            if (pager.isScrollInProgress) return@LaunchedEffect
+                            val t = turnReq ?: return@LaunchedEffect
+                            if (t == handledTurn) return@LaunchedEffect
+                            handledTurn = t
+                            val (c, b, ch) = t
+                            val cps = breaks[c]?.filter { it.isNotEmpty() }.orEmpty()
+                            if (cps.isEmpty()) {
+                                // 该章没排好：先把锚点落盘，再 ensure 后精确定位
+                                store.saveTtsPos(bookPath, c, b, ch)
+                                win.jumpToChar(c, b, ch)
+                                runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
+                                persist(win.center)
+                            } else {
+                                // 该字所在页（同一块可能跨多页，不能只取块首页）
+                                val p = cps.indexOfFirst { page ->
+                                    page.any { s -> s.block == b && s.end > ch }
+                                }.takeIf { it >= 0 } ?: pageForBlock(cps, b)
+                                val chars = charsBeforeChapter(c) + charsOfPage(book, c, cps, p)
+                                store.saveReadingPos(
+                                    bookPath, c, p, b, ch,
+                                    (chars.toFloat() / totalChars).coerceIn(0f, 1f),
+                                )
+                                goToPage(GlobalPage(c, p))
                             }
                         }
                         // 段内跟读：段落跨页时按朗读进度自动翻（只往前翻，不把用户拽回来）
                         val paraTiming by tts.paraTiming.collectAsStateWithLifecycle()
-                        LaunchedEffect(paraTiming, ttsPlaying, winSig) {
+                        LaunchedEffect(paraTiming, ttsPlaying) {
                             val t = paraTiming ?: return@LaunchedEffect
-                            if (!ttsPlaying || t.chapter != effSpine) return@LaunchedEffect
+                            if (!ttsPlaying || t.chapter != win.center.chapter) return@LaunchedEffect
                             val cps = breaks[t.chapter]?.filter { it.isNotEmpty() }.orEmpty()
                             if (cps.isEmpty()) return@LaunchedEffect
                             val total = t.totalChars.coerceAtLeast(1)
                             val dur = t.durationMs.coerceAtLeast(1)
                             while (true) {
                                 delay(250)
+                                if (pager.isScrollInProgress) continue // 手势中不跟读，放手再追
                                 if (!tts.playing.value) break
                                 val elapsed = android.os.SystemClock.elapsedRealtime() - t.startedAt
                                 if (elapsed > dur + 2000) break
@@ -511,61 +563,65 @@ private fun ReaderBody(
                                     acc += pc
                                     targetPage = pi
                                 }
-                                val wi = windowPages.indexOf(t.chapter to targetPage)
-                                if (wi >= 0 && wi > pager.currentPage) {
-                                    runCatching { pager.animateScrollToPage(wi) }
+                                val target = GlobalPage(t.chapter, targetPage)
+                                if (target != win.center) {
+                                    // 只跟进下一页（直接换窗回正，不走动画）；用户已翻走更远则不拽回
+                                    val slot = win.adjacentSlotOf(target)
+                                    if (slot != null && slot == PAGE_WINDOW_CENTER + 1) {
+                                        win.jumpTo(target)
+                                        runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
+                                    }
                                 }
                             }
-                        }
-                        // 每翻一页立刻存档（无防抖）：进设置、进程被杀都不丢；同时同步恢复位置
-                        fun persist(gp: Pair<Int, Int>) {
-                            livePos = gp
-                            onPosition(gp.first, gp.second)
-                            val cps = breaks[gp.first]?.filter { it.isNotEmpty() }.orEmpty()
-                            val chars = charsBeforeChapter(gp.first) + charsOfPage(book, gp.first, cps, gp.second)
-                            store.saveProgress(bookPath, gp.first, gp.second, (chars.toFloat() / totalChars).coerceIn(0f, 1f))
-                        }
-                        LaunchedEffect(pager.currentPage) {
-                            windowPages.getOrNull(pager.currentPage)?.let { persist(it) }
-                        }
-                        // 落到邻章区间则整体换窗（同页跳变，无动画无闪烁）
-                        LaunchedEffect(pager.settledPage) {
-                            val gp = windowPages.getOrNull(pager.settledPage) ?: return@LaunchedEffect
-                            lastSettled = gp
-                            persist(gp)
-                            if (gp.first != effSpine) onSpineChange(gp.first, gp.second)
                         }
                         HorizontalPager(
                             state = pager,
                             modifier = Modifier.fillMaxSize()
-                                .pointerInput(spine, winSig) {
+                                .pointerInput(bookPath) {
                                     detectTapGestures { offset ->
                                         val w = size.width
+                                        // 点击翻页：相对当前槽 ±1，有坐标才动（书首/书末点不动）
+                                        val cur = pager.currentPage
                                         when {
-                                            offset.x < w * 0.18f -> winPrevPage(pager, windowPages, onSpineChange, scope)
-                                            offset.x > w * 0.82f -> winNextPage(pager, windowPages, book.chapters.size, onSpineChange, scope)
+                                            offset.x < w * 0.18f -> {
+                                                val t = (cur - 1).coerceAtLeast(0)
+                                                if (win.coordAt(t) != null && t != cur) {
+                                                    scope.launch { runCatching { pager.animateScrollToPage(t) } }
+                                                }
+                                            }
+                                            offset.x > w * 0.82f -> {
+                                                val t = (cur + 1).coerceAtMost(PAGE_WINDOW_SIZE - 1)
+                                                if (win.coordAt(t) != null && t != cur) {
+                                                    scope.launch { runCatching { pager.animateScrollToPage(t) } }
+                                                }
+                                            }
                                         }
                                     }
                                 },
-                            beyondViewportPageCount = 1,
+                            beyondViewportPageCount = 3,
                         ) { pi ->
-                            val (c, p) = windowPages[pi]
-                            val slices = breaks[c]?.filter { it.isNotEmpty() }?.getOrNull(p).orEmpty()
-                            PageView(
-                                book = book,
-                                spine = c,
-                                slices = slices,
-                                prefs = prefs,
-                                fontFamily = fontFamily,
-                                ink = th.ink,
-                                linkColor = linkColor,
-                                onLinkClick = { tag -> handleLink(tag) },
-                                highlightBlock = ttsPos?.takeIf { it.chapter == c }?.block,
-                                highlightFrom = ttsPos?.takeIf { it.chapter == c }?.startChar ?: 0,
-                                highlightTo = ttsPos?.takeIf { it.chapter == c }?.endChar ?: Int.MAX_VALUE,
-                            )
+                            val rendered = win.slotAt(pi)
+                            if (rendered == null) {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    LottieLoader(modifier = Modifier.size(64.dp))
+                                }
+                            } else {
+                                val (c, p) = rendered.id
+                                PageView(
+                                    book = book,
+                                    spine = c,
+                                    slices = rendered.slices,
+                                    prefs = prefs,
+                                    fontFamily = fontFamily,
+                                    ink = th.ink,
+                                    linkColor = linkColor,
+                                    onLinkClick = { tag -> handleLink(tag) },
+                                    highlightBlock = ttsPos?.takeIf { it.chapter == c }?.block,
+                                    highlightFrom = ttsPos?.takeIf { it.chapter == c }?.startChar ?: 0,
+                                    highlightTo = ttsPos?.takeIf { it.chapter == c }?.endChar ?: Int.MAX_VALUE,
+                                )
+                            }
                         }
-                    }
                 }
 
             // ---- 底栏：6 键 space evenly（底条连同导航键一整条渐变） ----
@@ -582,14 +638,14 @@ private fun ReaderBody(
                     } else {
                         // 每次点播放都从当前页最顶上第一个字开始读
                         // （页顶可能是段落中间，带上块内字偏移）
-                        val (c, p) = livePos ?: (effSpine to 0)
+                        val (c, p) = win.center
                         val sl = breaks[c]?.filter { it.isNotEmpty() }?.getOrNull(p)?.firstOrNull()
                         if (sl != null) tts.playFrom(c, sl.block, sl.start)
                     }
                 },
                 onTtsNext = { tts.next() },
                 onToc = {
-                    val (c, p) = livePos ?: (effSpine to 0)
+                    val (c, p) = win.center
                     val blk = breaks[c]?.filter { it.isNotEmpty() }?.getOrNull(p)?.firstOrNull()?.block ?: 0
                     onOpenToc(c, blk)
                 },
@@ -644,51 +700,6 @@ private fun ReaderBody(
         }
     }
 }
-
-private fun winPrevPage(
-    pager: androidx.compose.foundation.pager.PagerState,
-    windowPages: List<Pair<Int, Int>>,
-    onSpineChange: (Int, Int) -> Unit,
-    scope: kotlinx.coroutines.CoroutineScope,
-) {
-    scope.launch {
-        if (pager.currentPage > 0) {
-            pager.animateScrollToPage(pager.currentPage - 1)
-        } else {
-            // 窗口起点：往更早的章跳一章（目标多半已预排好）
-            val (c, _) = windowPages.firstOrNull() ?: return@launch
-            if (c - 1 >= 0) onSpineChange(c - 1, Int.MAX_VALUE)
-        }
-    }
-}
-
-private fun winNextPage(
-    pager: androidx.compose.foundation.pager.PagerState,
-    windowPages: List<Pair<Int, Int>>,
-    chapterCount: Int,
-    onSpineChange: (Int, Int) -> Unit,
-    scope: kotlinx.coroutines.CoroutineScope,
-) {
-    scope.launch {
-        if (pager.currentPage < windowPages.size - 1) {
-            pager.animateScrollToPage(pager.currentPage + 1)
-        } else {
-            val (c, _) = windowPages.lastOrNull() ?: return@launch
-            if (c + 1 < chapterCount) onSpineChange(c + 1, 0)
-        }
-    }
-}
-
-private fun pageForBlock(pages: List<List<PageSlice>>, block: Int): Int {
-    pages.forEachIndexed { i, page ->
-        if (page.any { it.block >= block }) return i
-    }
-    return 0
-}
-
-/** 该章是否有可用页（空页列表视为缺失，触发重排并自愈脏缓存）。 */
-private fun hasPages(m: Map<Int, List<List<PageSlice>>>, ci: Int): Boolean =
-    m[ci]?.any { it.isNotEmpty() } == true
 
 /** 按展开规则数可见条目（目录自适应深度的计数用）。 */
 private fun countVisible(toc: List<com.aurora.music.data.ebook.EbookTocEntry>, expanded: (Int) -> Boolean): Int {

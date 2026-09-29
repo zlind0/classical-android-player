@@ -49,6 +49,9 @@ data class EbookBook(
     val progressPct: Float = 0f,
     /** 0 = 从未读过；最近阅读按它倒序 */
     val lastReadAt: Long = 0L,
+    /** 朗读/阅读锚点：块下标 + 块内字偏移（句子级恢复用） */
+    val blockIndex: Int = 0,
+    val charOffset: Int = 0,
 ) {
     val displayTitle: String get() = title.ifBlank { path.substringAfterLast('/').substringBeforeLast('.') }
 }

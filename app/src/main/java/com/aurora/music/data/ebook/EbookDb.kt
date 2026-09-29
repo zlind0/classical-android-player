@@ -42,6 +42,9 @@ data class EbookRow(
     val pageIndex: Int = 0,
     val progressPct: Float = 0f,
     val lastReadAt: Long = 0L,
+    /** 朗读/阅读锚点：块下标 + 块内字偏移（句子级恢复用；页码由它推导更准） */
+    val blockIndex: Int = 0,
+    val charOffset: Int = 0,
 )
 
 @Dao
@@ -85,8 +88,12 @@ interface EbookDao {
     @Query("SELECT * FROM ebooks")
     suspend fun allBooks(): List<EbookRow>
 
-    @Query("UPDATE ebooks SET spineIndex = :spine, pageIndex = :page, progressPct = :pct, lastReadAt = :at WHERE path = :path")
-    suspend fun saveProgress(path: String, spine: Int, page: Int, pct: Float, at: Long)
+    @Query("UPDATE ebooks SET spineIndex = :spine, pageIndex = :page, blockIndex = :block, charOffset = :charOff, progressPct = :pct, lastReadAt = :at WHERE path = :path")
+    suspend fun saveProgress(path: String, spine: Int, page: Int, block: Int, charOff: Int, pct: Float, at: Long)
+
+    /** TTS 推进时的轻量保存：只更新章/块/字偏移 + 最近阅读，不碰页码与百分比（页由 UI 侧推导回填）。 */
+    @Query("UPDATE ebooks SET spineIndex = :spine, blockIndex = :block, charOffset = :charOff, lastReadAt = :at WHERE path = :path")
+    suspend fun saveTtsPos(path: String, spine: Int, block: Int, charOff: Int, at: Long)
 
     @Query("DELETE FROM ebooks WHERE rootId = :rootId")
     suspend fun deleteBooksOfRoot(rootId: Long)
@@ -101,7 +108,7 @@ interface EbookDao {
     }
 }
 
-@Database(entities = [EbookRootRow::class, EbookRow::class], version = 1, exportSchema = false)
+@Database(entities = [EbookRootRow::class, EbookRow::class], version = 2, exportSchema = false)
 abstract class EbookDb : RoomDatabase() {
     abstract fun ebookDao(): EbookDao
 }
