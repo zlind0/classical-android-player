@@ -1,6 +1,8 @@
 package com.aurora.music.data
 
 import android.content.Context
+import com.aurora.music.model.Album
+import com.aurora.music.model.Artist
 import com.aurora.music.model.Song
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -26,6 +28,39 @@ data class PlayEvent(
 )
 
 data class RankedItem(val id: String, val name: String, val subtitle: String, val artworkUrl: String, val count: Int)
+
+/** 按最后一次播放倒序去重的专辑（空 albumId 丢弃，纯函数，可单测）。 */
+fun recentAlbumsFromHistory(events: List<PlayEvent>, limit: Int = 10): List<Album> =
+    events.asSequence()
+        .filter { it.albumId.isNotBlank() }
+        .groupBy { it.albumId }
+        .entries
+        .sortedByDescending { (_, evs) -> evs.maxOf { it.timestamp } }
+        .take(limit)
+        .map { (_, evs) ->
+            val e = evs.maxBy { it.timestamp }
+            Album(
+                id = e.albumId, title = e.album.ifBlank { "Album" }, artist = e.artist,
+                artworkUrl = e.artworkUrl, year = 0, songCount = evs.size,
+                durationSec = evs.sumOf { it.durationSec },
+            )
+        }
+
+/** 按最后一次播放倒序去重的艺人（空 artistId 丢弃，纯函数，可单测）。 */
+fun recentArtistsFromHistory(events: List<PlayEvent>, limit: Int = 5): List<Artist> =
+    events.asSequence()
+        .filter { it.artistId.isNotBlank() }
+        .groupBy { it.artistId }
+        .entries
+        .sortedByDescending { (_, evs) -> evs.maxOf { it.timestamp } }
+        .take(limit)
+        .map { (_, evs) ->
+            val e = evs.maxBy { it.timestamp }
+            Artist(
+                id = e.artistId, name = e.artist.ifBlank { "未知艺人" },
+                imageUrl = e.artworkUrl, monthlyListeners = 0,
+            )
+        }
 
 class PlayHistoryStore(context: Context) {
 
@@ -59,6 +94,12 @@ class PlayHistoryStore(context: Context) {
 
     fun totalPlays(): Int = _history.value.size
     fun totalMinutes(): Long = _history.value.sumOf { it.durationSec.toLong() } / 60
+
+    /** 按最后一次播放倒序的专辑（首页“最近听过”用）。 */
+    fun recentAlbums(limit: Int = 10): List<Album> = recentAlbumsFromHistory(_history.value, limit)
+
+    /** 按最后一次播放倒序的艺人（首页“推荐艺人”用）。 */
+    fun recentArtists(limit: Int = 5): List<Artist> = recentArtistsFromHistory(_history.value, limit)
 
     fun since(millis: Long): List<PlayEvent> = _history.value.filter { it.timestamp >= millis }
 

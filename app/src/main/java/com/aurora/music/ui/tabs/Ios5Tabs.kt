@@ -60,7 +60,10 @@ fun HomeTab(
     state: HomeUiState,
     onOpenDetail: (kind: String, id: String, title: String) -> Unit,
     onPlaySongs: (songs: List<Song>, index: Int) -> Unit,
+    onOpenBook: (path: String) -> Unit,
 ) {
+    val container = (androidx.compose.ui.platform.LocalContext.current.applicationContext as AuroraApplication).container
+    val ebookRecents by container.ebookStore.recents.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "首页")
         if (state.loading) {
@@ -69,6 +72,44 @@ fun HomeTab(
         }
         val d = state.data
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            // 最近读过的 3 本电子书（电子书 Tab 最近阅读同款行）
+            val recentBooks = ebookRecents.take(3)
+            if (recentBooks.isNotEmpty()) {
+                item { Ios5SectionTitle("最近阅读") }
+                ios5Rows(recentBooks, key = { it.path }) { _, b ->
+                    EbookRow(
+                        title = b.displayTitle,
+                        subtitle = authorAndProgress(b.author, b.progressPct),
+                        coverPath = b.coverPath,
+                        accentKey = b.path,
+                        onClick = { onOpenBook(b.path) },
+                    )
+                }
+            }
+            if (d.recentlyPlayed.isNotEmpty()) {
+                item {
+                    Ios5SectionTitle("最近听过")
+                    ShelfRow(
+                        covers = d.recentlyPlayed.take(10),
+                        onOpen = { onOpenDetail("album", it.id, it.title) },
+                    )
+                }
+            }
+            if (d.artists.isNotEmpty()) {
+                item {
+                    Ios5SectionTitle("推荐艺人")
+                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
+                        d.artists.take(5).forEachIndexed { i, a ->
+                            if (i > 0) Ios5CellDivider()
+                            Ios5Cell(
+                                title = a.name,
+                                onClick = { onOpenDetail("artist", a.id, a.name) },
+                                leading = { Artwork(a.imageUrl, accentFor(a.id), Modifier.size(40.dp), corner = 20.dp) },
+                            )
+                        }
+                    }
+                }
+            }
             if (d.starred.isNotEmpty()) {
                 item {
                     Ios5SectionTitle("我的收藏")
@@ -78,24 +119,6 @@ fun HomeTab(
                             Ios5SongRow(s, false, false) { onPlaySongs(d.starred, d.starred.indexOf(s)) }
                         }
                     }
-                }
-            }
-            if (d.recentlyPlayed.isNotEmpty() || d.newReleases.isNotEmpty()) {
-                item {
-                    Ios5SectionTitle("最近上架")
-                    ShelfRow(
-                        covers = (d.newReleases + d.recentlyPlayed).distinctBy { it.id }.take(10),
-                        onOpen = { onOpenDetail("album", it.id, it.title) },
-                    )
-                }
-            }
-            if (d.mostPlayed.isNotEmpty()) {
-                item {
-                    Ios5SectionTitle("常听专辑")
-                    ShelfRow(
-                        covers = d.mostPlayed.take(10),
-                        onOpen = { onOpenDetail("album", it.id, it.title) },
-                    )
                 }
             }
             if (d.playlists.isNotEmpty()) {
@@ -114,22 +137,16 @@ fun HomeTab(
                     }
                 }
             }
-            if (d.artists.isNotEmpty()) {
+            if (d.newReleases.isNotEmpty()) {
                 item {
-                    Ios5SectionTitle("艺人")
-                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                        d.artists.take(5).forEachIndexed { i, a ->
-                            if (i > 0) Ios5CellDivider()
-                            Ios5Cell(
-                                title = a.name,
-                                onClick = { onOpenDetail("artist", a.id, a.name) },
-                                leading = { Artwork(a.imageUrl, accentFor(a.id), Modifier.size(40.dp), corner = 20.dp) },
-                            )
-                        }
-                    }
+                    Ios5SectionTitle("最新上架")
+                    ShelfRow(
+                        covers = d.newReleases.take(10),
+                        onOpen = { onOpenDetail("album", it.id, it.title) },
+                    )
                 }
             }
-            if (d.newReleases.isEmpty() && d.playlists.isEmpty() && d.artists.isEmpty() && d.starred.isEmpty()) {
+            if (d.newReleases.isEmpty() && d.playlists.isEmpty() && d.artists.isEmpty() && d.starred.isEmpty() && d.recentlyPlayed.isEmpty() && recentBooks.isEmpty()) {
                 item { Ios5Empty("资料库是空的\n请到 设置 → 音乐来源 添加目录并扫描") }
             }
         }
