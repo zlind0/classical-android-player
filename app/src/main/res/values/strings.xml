@@ -384,6 +384,32 @@
     <string name="storage_manage">Manage</string>
     <string name="storage_remove_all">Remove all downloads</string>
     <string name="storage_private_note">Downloads are stored privately inside the app and removed when you uninstall.</string>
+    <string name="storage_breakdown">Storage breakdown</string>
+    <string name="storage_rescan">Rescan</string>
+    <string name="storage_scanning">Scanning…</string>
+    <string name="storage_total_fmt">%1$s total</string>
+    <string name="storage_files_fmt">%1$d files</string>
+    <string name="storage_more_fmt">%1$d more items (showing largest %2$d)</string>
+    <string name="storage_root_files">App data</string>
+    <string name="storage_root_cache">Cache</string>
+    <string name="storage_root_databases">Index databases</string>
+    <string name="storage_root_code_cache">Code cache</string>
+    <string name="storage_root_external">External storage</string>
+    <string name="storage_dir_voice">Offline voices</string>
+    <string name="storage_voice_fmt">Voice %1$s</string>
+    <string name="storage_dir_ebook_cache">Ebook parse cache</string>
+    <string name="storage_ebook_md5_fmt">Book %1$s</string>
+    <string name="storage_dir_covers">Book covers</string>
+    <string name="storage_dir_shelf">Imported ebooks</string>
+    <string name="storage_dir_downloads">Downloaded songs</string>
+    <string name="storage_dir_fonts">Fonts</string>
+    <string name="storage_dir_track_art">Embedded art cache</string>
+    <string name="storage_dir_track_art_images">Deduped images</string>
+    <string name="storage_dir_track_art_index">Song index</string>
+    <string name="storage_dir_image_cache">Image cache</string>
+    <string name="storage_file_parsed">Full-text parse</string>
+    <string name="storage_file_pages">Page breaks</string>
+    <string name="storage_file_installed">Install marker</string>
 
     <!-- Gestures -->
     <string name="gestures_title">Gestures &amp; behaviour</string>

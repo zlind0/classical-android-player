@@ -381,6 +381,32 @@
     <string name="storage_manage">管理</string>
     <string name="storage_remove_all">删除全部下载</string>
     <string name="storage_private_note">下载只存在应用私有空间，卸载即删。</string>
+    <string name="storage_breakdown">存储明细</string>
+    <string name="storage_rescan">重新统计</string>
+    <string name="storage_scanning">正在统计…</string>
+    <string name="storage_total_fmt">共 %1$s</string>
+    <string name="storage_files_fmt">%1$d 个文件</string>
+    <string name="storage_more_fmt">还有 %1$d 项（只显示最大的 %2$d 项）</string>
+    <string name="storage_root_files">应用数据</string>
+    <string name="storage_root_cache">缓存</string>
+    <string name="storage_root_databases">索引数据库</string>
+    <string name="storage_root_code_cache">代码缓存</string>
+    <string name="storage_root_external">外部存储</string>
+    <string name="storage_dir_voice">离线语音</string>
+    <string name="storage_voice_fmt">语音 %1$s</string>
+    <string name="storage_dir_ebook_cache">电子书解析缓存</string>
+    <string name="storage_ebook_md5_fmt">书籍 %1$s</string>
+    <string name="storage_dir_covers">书籍封面</string>
+    <string name="storage_dir_shelf">导入的电子书</string>
+    <string name="storage_dir_downloads">离线歌曲</string>
+    <string name="storage_dir_fonts">字体</string>
+    <string name="storage_dir_track_art">内嵌封面缓存</string>
+    <string name="storage_dir_track_art_images">去重图片</string>
+    <string name="storage_dir_track_art_index">歌曲索引</string>
+    <string name="storage_dir_image_cache">图片缓存</string>
+    <string name="storage_file_parsed">全文解析</string>
+    <string name="storage_file_pages">分页断点</string>
+    <string name="storage_file_installed">安装标记</string>
 
     <!-- Gestures -->
     <string name="gestures_title">手势和行为</string>
