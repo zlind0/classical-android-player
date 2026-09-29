@@ -16,8 +16,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.SongIntroController
-import com.aurora.music.data.SongIntroPrefs
 import com.aurora.music.data.TTS_ENGINE_INTERNAL
+import com.aurora.music.data.UnifiedTtsPrefs
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5CheckRow
 import com.aurora.music.ui.ios5.Ios5SettingsPage
@@ -33,7 +33,7 @@ fun SongIntroVoiceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val container = remember { (context.applicationContext as AuroraApplication).container }
     val store = container.settingsStore
     val intro = container.songIntro
-    val prefs by store.songIntroPrefs.collectAsStateWithLifecycle(initialValue = SongIntroPrefs())
+    val ttsPrefs by store.unifiedTts.collectAsStateWithLifecycle(initialValue = UnifiedTtsPrefs())
     val voices by intro.voices.collectAsStateWithLifecycle()
     val installing by intro.installing.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
@@ -55,13 +55,13 @@ fun SongIntroVoiceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
             Ios5CheckRow(
                 title = "内置微软离线",
                 subtitle = "随 App 打包，无需联网",
-                checked = prefs.ttsEngine == TTS_ENGINE_INTERNAL,
+                checked = ttsPrefs.engine == TTS_ENGINE_INTERNAL,
                 onClick = { scope.launch { intro.selectEngine(TTS_ENGINE_INTERNAL) } },
             )
             Ios5CellDivider()
             Ios5CheckRow(
                 title = "系统默认",
-                checked = prefs.ttsEngine.isBlank(),
+                checked = ttsPrefs.engine.isBlank(),
                 onClick = { scope.launch { intro.selectEngine("") } },
             )
             engines.forEach { e ->
@@ -69,24 +69,24 @@ fun SongIntroVoiceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                 Ios5CheckRow(
                     title = e.label,
                     subtitle = e.packageName,
-                    checked = e.packageName == prefs.ttsEngine,
+                    checked = e.packageName == ttsPrefs.engine,
                     onClick = { scope.launch { intro.selectEngine(e.packageName) } },
                 )
             }
         }
 
-        ios5Section("音色（${engineLabel(prefs.ttsEngine)}）") {
+        ios5Section("音色（${engineLabel(ttsPrefs.engine)}）") {
             Ios5CheckRow(
                 title = "自动",
-                subtitle = if (prefs.ttsEngine == TTS_ENGINE_INTERNAL) "默认晓晓" else "中文语音优先",
-                checked = prefs.ttsVoice.isBlank(),
+                subtitle = if (ttsPrefs.engine == TTS_ENGINE_INTERNAL) "默认晓晓" else "中文语音优先",
+                checked = ttsPrefs.voice.isBlank(),
                 onClick = { scope.launch { store.setIntroTtsVoice("") } },
             )
             voices.forEach { v ->
                 Ios5CellDivider()
                 Ios5CheckRow(
                     title = v.label,
-                    checked = v.name == prefs.ttsVoice,
+                    checked = v.name == ttsPrefs.voice,
                     onClick = { scope.launch { store.setIntroTtsVoice(v.name) } },
                 )
             }
@@ -95,8 +95,8 @@ fun SongIntroVoiceScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
         ios5Section("音调") {
             Ios5SliderRow(
                 title = "音调",
-                valueLabel = String.format("%.2f", prefs.ttsPitch) + "x",
-                value = prefs.ttsPitch,
+                valueLabel = String.format("%.2f", ttsPrefs.pitch) + "x",
+                value = ttsPrefs.pitch,
                 range = 0.5f..2.0f,
                 steps = 15,
                 onValueChange = { scope.launch { store.setIntroTtsPitch(it) } },

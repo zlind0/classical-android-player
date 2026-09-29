@@ -216,12 +216,17 @@ class AppContainer(context: Context) {
 
     val audioEffects = AudioEffectsController(audioSessionId, settingsStore, scope)
 
-    // 听书：独立播放器（与音乐链相同的 DSP 链）+ 控制器（App 作用域）
+    // TTS：两个独立播放器（同 DSP 链，互不抢占）+ 统一 worker（合成/缓存/代际共用）。
+    // 合成产物只留内存，播完即丢；介绍播报也走 DSP 链，不再直驱 AudioTrack。
     val ebookTtsPlayer = com.aurora.music.playback.EbookTtsPlayer(appContext, settingsStore, audioSessionId)
+    val introTtsPlayer = com.aurora.music.playback.EbookTtsPlayer(appContext, settingsStore, audioSessionId)
+    val ttsWorker = com.aurora.music.tts.TtsWorker(appContext, settingsStore, ebookTtsPlayer, introTtsPlayer)
     val ebookTts = com.aurora.music.data.ebook.EbookTtsController(appContext).also {
         it.prefs = ebookPrefs
         it.settings = settingsStore
         it.player = ebookTtsPlayer
+        it.tts = ttsWorker
+        songIntro.tts = ttsWorker
     }
 
     val visualizer = com.aurora.music.playback.VisualizerController(scope)

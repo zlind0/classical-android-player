@@ -7,8 +7,12 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.ByteArrayDataSource
+import androidx.media3.datasource.DataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import com.aurora.music.data.AudioPrefs
 import com.aurora.music.data.CorrectionProfile
 import java.io.File
@@ -170,6 +174,42 @@ class EbookTtsPlayer(
         }
         p.prepare()
         p.play()
+    }
+
+    private var memUriSeq: Long = 0
+
+    private fun memSource(wav: ByteArray): MediaSource {
+        val factory = DataSource.Factory { ByteArrayDataSource(wav) }
+        return ProgressiveMediaSource.Factory(factory)
+            .createMediaSource(MediaItem.fromUri(Uri.parse("tts-mem://${memUriSeq++}")))
+    }
+
+    /**
+     * 内存 WAV 流开播（首块就绪即播）：停掉旧队列并从该块起播。
+     * 输入为完整 WAV 字节（含 44 字节头，48k 立体声 16bit），必须在主线程调。
+     */
+    fun startWavStream(first: ByteArray) {
+        ensurePlayer()
+        val p = player ?: return
+        p.stop()
+        p.clearMediaItems()
+        p.setMediaSource(memSource(first))
+        p.prepare()
+        p.play()
+    }
+
+    /** 内存 WAV 流追块：首块播着时后续块边合边加；代际由调用方（TtsWorker）保证。 */
+    fun appendWav(bytes: ByteArray) {
+        val p = player ?: return
+        p.addMediaSource(memSource(bytes))
+        // 已播到 ENDED 后又追块：回到尾块重备继续（LLM 供句抖动时会出现）
+        if (p.playbackState == Player.STATE_ENDED) {
+            runCatching {
+                p.seekTo(p.mediaItemCount - 1, 0)
+                p.prepare()
+                p.play()
+            }
+        }
     }
 
     fun play() {

@@ -35,21 +35,33 @@ class MsEmbeddedEngine(private val context: Context) {
     val allInstalled: Boolean get() = MsVoices.ALL.all { isInstalled(it.code) }
 
     /**
-     * 首次运行把 assets/msvoice 下 4 个语音拷到应用私有目录。
-     * onProgress(doneVoices, totalVoices, currentVoice)。
+     * 按需单拷：只释放本次要用的语音（默认晓晓），其余语音等用户真选才拷。
+     * assets 仍随 APK 全量带（离线开箱），但 filesDir 里只有在用的一份。
+     * onProgress(doneVoices, totalVoices, currentVoice)，单拷时 total 恒为 1。
+     */
+    suspend fun ensureVoice(code: String, onProgress: (Int, Int, String) -> Unit = { _, _, _ -> }) {
+        if (isInstalled(code)) return
+        withContext(Dispatchers.IO) {
+            onProgress(0, 1, code)
+            copyAssetVoice(code)
+            onProgress(1, 1, code)
+        }
+    }
+
+    /**
+     * 首次运行把 assets/msvoice 下语音拷到应用私有目录（保留兼容：逐个走 [ensureVoice]）。
+     * 新代码优先调 [ensureVoice] 单拷，避免一次释放 4 个语音（~173MB）。
      */
     suspend fun installIfNeeded(onProgress: (Int, Int, String) -> Unit = { _, _, _ -> }) {
-        withContext(Dispatchers.IO) {
-            val total = MsVoices.ALL.size
-            var done = 0
-            for (v in MsVoices.ALL) {
-                if (!isInstalled(v.code)) {
-                    onProgress(done, total, v.code)
-                    copyAssetVoice(v.code)
-                }
-                done++
+        val total = MsVoices.ALL.size
+        var done = 0
+        for (v in MsVoices.ALL) {
+            if (!isInstalled(v.code)) {
                 onProgress(done, total, v.code)
+                ensureVoice(v.code)
             }
+            done++
+            onProgress(done, total, v.code)
         }
     }
 
@@ -91,6 +103,8 @@ class MsEmbeddedEngine(private val context: Context) {
     /**
      * 流式合成一段文本：按句切块，每出一块 PCM 就回调一次（边合边播），
      * 返回的完整 PCM 与回调内容一致。rate/pitch 1.0 = 原速原调。
+     * @param isStopped 按调用域的停止谓词（默认全局 [stopFlag]，兼容老调用方；
+     *   TtsWorker 传入代际 flag，避免并发/切段时互相踩）。
      */
     suspend fun synthesizeStreaming(
         text: String,
@@ -98,6 +112,7 @@ class MsEmbeddedEngine(private val context: Context) {
         rate: Float = 1f,
         pitch: Float = 1f,
         onPcmChunk: ((ByteArray) -> Unit)? = null,
+        isStopped: () -> Boolean = { stopFlag },
     ): ByteArray = withContext(Dispatchers.IO) {
         require(text.isNotBlank()) { "文本为空" }
         require(isInstalled(voice.code)) { "语音 ${voice.code} 尚未安装" }
@@ -114,7 +129,7 @@ class MsEmbeddedEngine(private val context: Context) {
                 val pcm = ByteArrayOutputStream()
                 val buf = ByteArray(4800)
                 for (chunk in chunks) {
-                    if (stopFlag) break
+                    if (isStopped()) break
                     val ssml = SsmlBuilder.build(voice, chunk, rate, pitch)
                     val result = synth.SpeakSsml(ssml)
                     try {
@@ -122,7 +137,7 @@ class MsEmbeddedEngine(private val context: Context) {
                         val stream = AudioDataStream.fromResult(result)
                         try {
                             stream.setPosition(0)
-                            while (!stopFlag) {
+                            while (!isStopped()) {
                                 val n = stream.readData(buf).toInt()
                                 if (n <= 0) break
                                 val piece = buf.copyOf(n)

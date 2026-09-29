@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.SongIntroPrefs
+import com.aurora.music.data.UnifiedTtsPrefs
 import com.aurora.music.ui.ios5.Ios5ActionRow
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5CheckRow
@@ -41,6 +42,7 @@ fun SongIntroSettingsScreen(
     val store = container.settingsStore
     val intro = container.songIntro
     val prefs by store.songIntroPrefs.collectAsStateWithLifecycle(initialValue = SongIntroPrefs())
+    val ttsPrefs by store.unifiedTts.collectAsStateWithLifecycle(initialValue = UnifiedTtsPrefs())
     val logCount by container.songIntroLog.entries.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
@@ -128,8 +130,8 @@ fun SongIntroSettingsScreen(
         ios5Section("语音") {
             Ios5SliderRow(
                 title = "语速",
-                valueLabel = String.format("%.2f", prefs.ttsRate) + "x",
-                value = prefs.ttsRate,
+                valueLabel = String.format("%.2f", ttsPrefs.rate) + "x",
+                value = ttsPrefs.rate,
                 range = 0.5f..2.0f,
                 steps = 15,
                 onValueChange = { scope.launch { store.setIntroTtsRate(it) } },
@@ -137,8 +139,8 @@ fun SongIntroSettingsScreen(
             Ios5CellDivider()
             Ios5NavRow(
                 title = "语音引擎与音色",
-                subtitle = prefs.ttsVoice.ifBlank {
-                    if (prefs.ttsEngine == com.aurora.music.data.TTS_ENGINE_INTERNAL) "内置晓晓（默认）" else "系统默认"
+                subtitle = ttsPrefs.voice.ifBlank {
+                    if (ttsPrefs.engine == com.aurora.music.data.TTS_ENGINE_INTERNAL) "内置晓晓（默认）" else "系统默认"
                 },
                 onClick = onOpenVoice,
             )

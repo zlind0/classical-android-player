@@ -1,16 +1,11 @@
 package com.aurora.music.data
 
 import android.content.Context
-import android.media.AudioAttributes
-import android.media.AudioFormat
-import android.media.AudioTrack
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
-import android.speech.tts.Voice
 import com.aurora.music.data.remote.LlmClient
 import com.aurora.music.model.Song
-import com.aurora.music.tts.MsEmbeddedEngine
 import com.aurora.music.tts.MsVoices
+import com.aurora.music.tts.TtsOwner
+import com.aurora.music.tts.TtsWorker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -28,13 +23,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withContext
 import java.util.Locale
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import kotlin.coroutines.resume
 
 data class SongIntroPrefs(
     val llmEndpoint: String = "",
@@ -83,12 +73,11 @@ class SongIntroController(
     private val _voices = MutableStateFlow<List<VoiceInfo>>(emptyList())
     val voices: StateFlow<List<VoiceInfo>> = _voices.asStateFlow()
 
-    /** 内置语音首次释放进度：null = 不需要显示；(done, total, name)。 */
-    private val _installing = MutableStateFlow<Triple<Int, Int, String>?>(null)
-    val installing: StateFlow<Triple<Int, Int, String>?> = _installing.asStateFlow()
+    /** 内置语音释放进度：委托 worker，两处 UI 共用同一份。 */
+    val installing: StateFlow<Triple<Int, Int, String>?> get() = tts.installing
 
-    private val msEngine = MsEmbeddedEngine(appContext)
-    @Volatile private var internalTrack: AudioTrack? = null
+    /** 统一合成与播放入口（AppContainer 注入）。 */
+    lateinit var tts: TtsWorker
 
     var music: IntroMusicControl? = null
 
@@ -108,7 +97,7 @@ class SongIntroController(
         val prev = job
         job = null
         activeSongId = ""
-        runCatching { ttsRef?.stop() }
+        runCatching { tts.stop(TtsOwner.INTRO) }
         if (_state.value.active) _state.value = SongIntroState()
         job = scope.launch {
             prev?.cancelAndJoin()
@@ -136,9 +125,8 @@ class SongIntroController(
         var lastInput = ""
         var lastPartial = ""
         try {
-            val useInternal = prefs.ttsEngine == TTS_ENGINE_INTERNAL
-            val tts = if (useInternal) null
-            else ensureTts(prefs) ?: throw IllegalStateException("系统语音引擎初始化失败")
+            // TTS 四项走统一设置（降级提示由 worker 经 notice 透出）；LLM 三件套仍走 songIntroPrefs
+            val (ttsPrefs, _) = tts.resolvePrefs()
             val userText = buildUserText(song)
             lastModel = prefs.llmModel
             lastInput = userText
@@ -168,11 +156,14 @@ class SongIntroController(
             }
             var spoken = 0
             val fullText = StringBuilder()
+            // 单流多句：append 只等合成+入队（首句首块即开播），句与句在播放器队列里无缝衔接；
+            // LLM 供句抖动由队列吸收，不再每句重建合成器/AudioTrack
+            val stream = tts.openStream(TtsOwner.INTRO)
             try {
                 for (s in sentences) {
                     ensurePaused()
                     _state.value = SongIntroState(active = true, speaking = true)
-                    if (useInternal) speakInternal(s, prefs) else speakAndWait(tts!!, s)
+                    stream.append(s, ttsPrefs)
                     fullText.append(s)
                     lastPartial = fullText.toString()
                     spoken++
@@ -181,6 +172,8 @@ class SongIntroController(
             } finally {
                 producer.cancel()
             }
+            stream.awaitDone()
+            if (!stream.isAlive()) throw CancellationException()
             streamError.get()?.let { throw it }
             if (spoken == 0 && streamError.get() == null) _events.emit("没能生成介绍，请稍后重试")
             runCatching {
@@ -222,7 +215,6 @@ class SongIntroController(
             }
             _events.emit(if (msg != null) "介绍失败：$msg" else "介绍失败，请检查网络与接口设置")
         } finally {
-            runCatching { ttsRef?.stop() }
             _state.value = SongIntroState()
             // 用户在播报期间手动暂停过就不再抢播；仍在暂停态才恢复
             if (pausedByIntro && wasPlaying && music?.isPlaying() == false) music?.resume()
@@ -234,9 +226,7 @@ class SongIntroController(
         activeSongId = ""
         job?.cancel()
         job = null
-        runCatching { ttsRef?.stop() }
-        msEngine.requestStop()
-        runCatching { internalTrack?.stop() }
+        runCatching { tts.stop(TtsOwner.INTRO) }
         if (_state.value.active) _state.value = SongIntroState()
     }
 
@@ -262,13 +252,12 @@ class SongIntroController(
     }
 
     suspend fun refreshVoices() {
-        val prefs = store.songIntroPrefs.first()
-        if (prefs.ttsEngine == TTS_ENGINE_INTERNAL) {
+        val tp = store.unifiedTts.first()
+        if (tp.isInternal) {
             _voices.value = MsVoices.ALL.map { v -> VoiceInfo(name = v.code, label = v.label()) }
             return
         }
-        val tts = ensureTts(prefs) ?: return
-        _voices.value = tts.voices.orEmpty()
+        _voices.value = tts.systemVoices(tp.systemEnginePkg)
             .map { v ->
                 val loc = v.locale
                 val zh = loc.language == "zh" || loc.language == "cmn" || loc.language == "yue"
@@ -283,10 +272,10 @@ class SongIntroController(
 
     data class TtsEngineInfo(val packageName: String, val label: String)
 
-    /** 系统全部 TTS 引擎（电子书同款查询逻辑，默认排第一）。 */
+    /** 系统全部 TTS 引擎（与电子书同款，默认排第一；worker 单例复用实例）。 */
     suspend fun listEngines(): List<TtsEngineInfo> =
         withContext(Dispatchers.IO) {
-            com.aurora.music.tts.listSystemEngines(appContext)
+            tts.listSystemEngines()
                 .map { TtsEngineInfo(it.packageName, it.label) }
         }
 
@@ -295,11 +284,10 @@ class SongIntroController(
         return listEngines().firstOrNull { it.packageName == packageName }?.label ?: packageName
     }
 
-    /** 切换引擎：存偏好、重建 TTS 实例、刷新该引擎的音色列表。 */
+    /** 切换引擎：存偏好、刷新该引擎的音色列表（实例由 worker 按需重建）。 */
     suspend fun selectEngine(packageName: String): Boolean {
         if (packageName == TTS_ENGINE_INTERNAL) {
             store.setIntroTtsEngine(packageName)
-            dropTts()
             refreshVoices()
             return true
         }
@@ -311,7 +299,6 @@ class SongIntroController(
             }
         }
         store.setIntroTtsEngine(packageName)
-        dropTts()
         refreshVoices()
         return true
     }
@@ -322,186 +309,12 @@ class SongIntroController(
             return
         }
         scope.launch {
-            val prefs = store.songIntroPrefs.first()
-            if (prefs.ttsEngine == TTS_ENGINE_INTERNAL) {
-                runCatching { speakInternal(sample, prefs) }
-                    .onFailure { _events.emit("试听失败：${it.message}") }
-                return@launch
-            }
-            val tts = ensureTts(prefs) ?: run {
-                _events.emit("系统语音引擎初始化失败")
-                return@launch
-            }
-            runCatching { tts.stop() }
-            tts.speak(sample, TextToSpeech.QUEUE_FLUSH, null, UUID.randomUUID().toString())
-        }
-    }
-
-    // ---- TTS ----
-
-    @Volatile private var ttsRef: TextToSpeech? = null
-    @Volatile private var ttsEngineUsed: String? = null
-    private val utteranceConts = ConcurrentHashMap<String, kotlin.coroutines.Continuation<Unit>>()
-
-    private fun dropTts() {
-        runCatching { ttsRef?.stop() }
-        runCatching { ttsRef?.shutdown() }
-        ttsRef = null
-        ttsEngineUsed = null
-    }
-
-    private suspend fun ensureTts(prefs: SongIntroPrefs? = null): TextToSpeech? {
-        val p = prefs ?: store.songIntroPrefs.first()
-        ttsRef?.let {
-            if (ttsEngineUsed == p.ttsEngine) {
-                applyTtsPrefs(it, p)
-                return it
-            }
-            dropTts()
-        }
-        val engine = p.ttsEngine.trim().takeIf { it.isNotEmpty() }
-        val tts = suspendCancellableCoroutine<TextToSpeech?> { cont ->
-            var t: TextToSpeech? = null
-            t = if (engine != null) TextToSpeech(appContext, { status ->
-                if (status == TextToSpeech.SUCCESS && cont.isActive) cont.resume(t)
-                else if (cont.isActive) cont.resume(null)
-            }, engine) else TextToSpeech(appContext) { status ->
-                if (status == TextToSpeech.SUCCESS && cont.isActive) cont.resume(t)
-                else if (cont.isActive) cont.resume(null)
-            }
-            cont.invokeOnCancellation { runCatching { t?.shutdown() } }
-        } ?: return null
-        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) = Unit
-            override fun onDone(utteranceId: String?) {
-                utteranceConts.remove(utteranceId)?.resume(Unit)
-            }
-            @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) {
-                utteranceConts.remove(utteranceId)?.resume(Unit)
-            }
-            override fun onError(utteranceId: String?, errorCode: Int) {
-                utteranceConts.remove(utteranceId)?.resume(Unit)
-            }
-            override fun onStop(utteranceId: String?, interrupted: Boolean) {
-                utteranceConts.remove(utteranceId)?.resume(Unit)
-            }
-        })
-        ttsRef = tts
-        ttsEngineUsed = p.ttsEngine
-        if (!applyTtsPrefs(tts, p)) {
-            // 中文语音缺失不致命：用系统默认语言继续
-        }
-        return tts
-    }
-
-    /** @return 中文语音是否可用 */
-    private fun applyTtsPrefs(tts: TextToSpeech, prefs: SongIntroPrefs): Boolean {
-        tts.setSpeechRate(prefs.ttsRate.coerceIn(0.5f, 2.0f))
-        tts.setPitch(prefs.ttsPitch.coerceIn(0.5f, 2.0f))
-        val saved: Voice? = prefs.ttsVoice.takeIf { it.isNotBlank() }
-            ?.let { name -> tts.voices?.firstOrNull { it.name == name } }
-        if (saved != null) {
-            tts.voice = saved
-            return true
-        }
-        val chinese = tts.voices.orEmpty()
-            .filter { it.locale.language == "zh" || it.locale.language == "cmn" }
-            .sortedWith(compareBy<Voice> { it.isNetworkConnectionRequired }.thenBy { it.name })
-            .firstOrNull()
-        if (chinese != null) tts.voice = chinese
-        val langStatus = tts.setLanguage(chinese?.locale ?: Locale.SIMPLIFIED_CHINESE)
-        if (langStatus == TextToSpeech.LANG_MISSING_DATA || langStatus == TextToSpeech.LANG_NOT_SUPPORTED) {
-            tts.language = Locale.getDefault()
-        }
-        return chinese != null
-    }
-
-    private suspend fun speakAndWait(tts: TextToSpeech, text: String) {
-        suspendCancellableCoroutine<Unit> { cont ->
-            val id = UUID.randomUUID().toString()
-            utteranceConts[id] = cont
-            cont.invokeOnCancellation { utteranceConts.remove(id) }
-            val rc = tts.speak(text, TextToSpeech.QUEUE_ADD, null, id)
-            if (rc != TextToSpeech.SUCCESS) {
-                utteranceConts.remove(id)
-                if (cont.isActive) cont.resume(Unit)
-            }
-        }
-    }
-
-    // ---- 内置引擎（离线合成 PCM 后经 AudioTrack 直播，与听书同一套语音数据） ----
-
-    private suspend fun speakInternal(text: String, prefs: SongIntroPrefs) {
-        val voice = MsVoices.byCode(prefs.ttsVoice.ifBlank { MsVoices.DEFAULT })
-            ?: MsVoices.byCode(MsVoices.DEFAULT)!!
-        if (!msEngine.isInstalled(voice.code)) {
-            _installing.value = Triple(0, MsVoices.ALL.size, voice.code)
-            try {
-                msEngine.installIfNeeded { done, total, name ->
-                    _installing.value = Triple(done, total, name)
-                }
-            } finally {
-                _installing.value = null
-            }
-        }
-        val pcm = msEngine.synthesizeStreaming(
-            text, voice,
-            prefs.ttsRate.coerceIn(0.5f, 2.0f),
-            prefs.ttsPitch.coerceIn(0.5f, 2.0f),
-        )
-        playPcm24kMono(pcm)
-    }
-
-    /** 24k 单声道 16bit PCM 经 AudioTrack 播完（可取消）。 */
-    private suspend fun playPcm24kMono(pcm: ByteArray) = withContext(Dispatchers.IO) {
-        if (pcm.isEmpty()) return@withContext
-        val minBuf = AudioTrack.getMinBufferSize(
-            24000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
-        ).takeIf { it > 0 } ?: pcm.size
-        val track = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build(),
-            )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setSampleRate(24000)
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build(),
-            )
-            .setBufferSizeInBytes(maxOf(minBuf, pcm.size))
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .build()
-        internalTrack = track
-        try {
-            suspendCancellableCoroutine<Unit> { cont ->
-                track.setPlaybackPositionUpdateListener(
-                    object : AudioTrack.OnPlaybackPositionUpdateListener {
-                        override fun onMarkerReached(t: AudioTrack?) {
-                            if (cont.isActive) cont.resume(Unit)
-                        }
-
-                        override fun onPeriodicNotification(t: AudioTrack?) {}
-                    },
-                )
-                track.notificationMarkerPosition = pcm.size / 2
-                track.play()
-                var off = 0
-                while (off < pcm.size && cont.isActive) {
-                    val n = track.write(pcm, off, pcm.size - off)
-                    if (n <= 0) break
-                    off += n
-                }
-                if (off < pcm.size && cont.isActive) cont.resume(Unit)
-                cont.invokeOnCancellation { runCatching { track.stop() } }
-            }
-        } finally {
-            internalTrack = null
-            runCatching { track.release() }
+            runCatching {
+                val (tp, _) = tts.resolvePrefs()
+                val s = tts.openStream(TtsOwner.INTRO)
+                s.append(sample, tp)
+                s.awaitDone()
+            }.onFailure { _events.emit("试听失败：${it.message}") }
         }
     }
 
