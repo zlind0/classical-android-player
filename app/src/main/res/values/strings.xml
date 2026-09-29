@@ -169,6 +169,11 @@
     <string name="msg_found_n_tracks">Found %1$d tracks</string>
     <string name="msg_no_audio_in_folder">No audio files in that folder</string>
     <string name="msg_scan_finished">Scan finished</string>
+    <string name="scan_notif_channel">Library scan</string>
+    <string name="scan_notif_title">Scanning library</string>
+    <string name="scan_notif_listing">Listing files…</string>
+    <string name="scan_notif_text">%1$d / %2$d · %3$s</string>
+    <string name="scan_notif_cancel">Cancel</string>
     <string name="msg_source_removed">Removed</string>
     <string name="msg_cleaned_n">Removed %1$d missing files</string>
     <string name="msg_nothing_missing">Nothing missing</string>

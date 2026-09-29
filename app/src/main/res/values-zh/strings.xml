@@ -166,6 +166,11 @@
     <string name="msg_found_n_tracks">找到 %1$d 首曲目</string>
     <string name="msg_no_audio_in_folder">这个文件夹里没有音频文件</string>
     <string name="msg_scan_finished">扫描完成</string>
+    <string name="scan_notif_channel">曲库扫描</string>
+    <string name="scan_notif_title">正在扫描曲库</string>
+    <string name="scan_notif_listing">正在列文件…</string>
+    <string name="scan_notif_text">%1$d / %2$d·%3$s</string>
+    <string name="scan_notif_cancel">取消</string>
     <string name="msg_source_removed">已删除</string>
     <string name="msg_cleaned_n">清除了 %1$d 个缺失文件</string>
     <string name="msg_nothing_missing">没有缺失文件</string>

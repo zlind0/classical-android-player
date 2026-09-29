@@ -21,6 +21,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -56,7 +57,6 @@ import com.aurora.music.ui.ios5.ios5Section
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 // Classical fork v0.3 (plan §55-56): the user's scan roots. Only these
@@ -75,8 +75,18 @@ fun MusicSourcesScreen(
     val counts by container.musicRoots.trackCounts.collectAsStateWithLifecycle()
     val progress by container.musicRoots.progress.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
     var picking by remember { mutableStateOf(false) }
-    var scanJob by remember { mutableStateOf<Job?>(null) }
+    // 扫描跑在 App 作用域的 LibraryScanManager 里（后台保活 + 断点续扫），
+    // 界面只负责发指令和看进度，切出去不会取消。
+    val scanManager = remember { container.scanManager }
+    var wasRunning by remember { mutableStateOf(false) }
+    LaunchedEffect(progress.running, progress.rootId) {
+        if (wasRunning && !progress.running && progress.total > 0) {
+            confirm(ctx.getString(R.string.msg_scan_finished))
+        }
+        wasRunning = progress.running
+    }
 
     // re-check access when coming back from system settings
     val owner = LocalLifecycleOwner.current
@@ -88,7 +98,6 @@ fun MusicSourcesScreen(
         owner.lifecycle.addObserver(obs)
         onDispose { owner.lifecycle.removeObserver(obs) }
     }
-    val ctx = LocalContext.current
     resumeTick // recompute below on each resume
     val readOk = remember(resumeTick) { com.aurora.music.data.hasStorageRead(ctx) }
     val fullOk = remember(resumeTick) { com.aurora.music.data.canScanStorage(ctx) }
@@ -106,12 +115,8 @@ fun MusicSourcesScreen(
                     } else {
                         picking = false
                         confirm(ctx.getString(R.string.msg_source_added))
-                        scanJob?.cancel()
-                        scanJob = scope.launch {
-                            container.rootScanner.scan(added) { container.musicRoots.progress.value = it }
-                            val n = container.musicRoots.songsOf(added.id).size
-                            confirm(if (n > 0) ctx.getString(R.string.msg_found_n_tracks, n) else ctx.getString(R.string.msg_no_audio_in_folder))
-                        }
+                        // 后台起扫：界面切走照常进行，通知栏看进度，扫完自动落库
+                        scanManager.startScan(added)
                     }
                 }
             },
@@ -198,17 +203,14 @@ fun MusicSourcesScreen(
                         progress = if (active) progress else null,
                         onPlay = { onPlayRoot(root.id) },
                         onScan = {
-                            scanJob?.cancel()
-                            scanJob = scope.launch {
-                                container.rootScanner.scan(root) { container.musicRoots.progress.value = it }
-                                confirm(ctx.getString(R.string.msg_scan_finished))
-                            }
+                            // 后台起扫：切出本界面不中断，进度条/通知栏同步展示
+                            scanManager.startScan(root)
                         },
                         onToggle = { v -> scope.launch { container.musicRoots.setEnabled(root.id, v) } },
                         onMerge = { v -> scope.launch { container.musicRoots.setMergeTitles(root.id, v) } },
                         onRemove = {
-                            scanJob?.cancel()
                             scope.launch {
+                                scanManager.dropRoot(root.id)
                                 container.musicRoots.removeRoot(root.id)
                                 confirm(ctx.getString(R.string.msg_source_removed))
                             }
@@ -234,8 +236,7 @@ fun MusicSourcesScreen(
                 Ios5StaticText(strResyncSub)
                 Ios5CellDivider()
                 Ios5NavRow(title = strResync, subtitle = "", onClick = {
-                    scanJob?.cancel()
-                    scanJob = scope.launch {
+                    scope.launch {
                         container.localLibrary.refresh()
                         confirm(strResyncDone)
                     }

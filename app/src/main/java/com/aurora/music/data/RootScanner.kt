@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class RootScanner(
     private val store: MusicRootsStore,
     private val context: Context,
+    private val checkpoints: ScanCheckpoints = ScanCheckpoints(context),
 ) {
     // Cancellation is cooperative via the caller's coroutine scope.
     suspend fun scan(root: MusicRoot, onProgress: (ScanProgress) -> Unit = {}) =
@@ -49,6 +50,29 @@ class RootScanner(
             if (System.currentTimeMillis() - lastEmitMs >= 200) emit(current)
         }
 
+        // 断点续扫：上次每 200 个落盘的已扫结果。path+size+mtime 三元一致才复用，
+        // 文件变化/删除的条目在循环里自然落选，最终写库时不会残留。
+        var checkpointBase: List<ScannedTrack> = emptyList()
+        var checkByPath: Map<String, ScannedTrack> = emptyMap()
+        // 本次新扫出的结果（参与落盘累积）；checkpointBase 只读不写
+        val fresh = Collections.synchronizedList(ArrayList<ScannedTrack>())
+        val checkpointMutex = kotlinx.coroutines.sync.Mutex()
+        val lastSaved = AtomicInteger(0)
+
+        suspend fun saveCheckpoint() {
+            // 多 worker 并发到达时只有一个真正写盘，抢不到锁的直接跳过
+            if (!checkpointMutex.tryLock()) return
+            try {
+                val snapshot = ArrayList<ScannedTrack>(checkpointBase.size + fresh.size)
+                snapshot.addAll(checkpointBase)
+                snapshot.addAll(fresh)
+                checkpoints.save(ScanCheckpoint(rootId = root.id, rootPath = root.rootPath, completed = snapshot))
+                lastSaved.set(done.get())
+            } finally {
+                checkpointMutex.unlock()
+            }
+        }
+
         try {
             // Stage A：纯文件遍历（快，不读标签），先把音频文件清单收齐
             emit("")
@@ -72,7 +96,18 @@ class RootScanner(
                     if (isAudioFile(f.name)) files.add(f)
                 }
             }
+            // 确定性顺序：断点续扫的进度含义才稳定，多次扫描的 done/total 可比
+            files.sortBy { runCatching { it.canonicalPath }.getOrDefault(it.absolutePath).lowercase() }
             total = files.size
+            // 读断点：root 路径变了（换盘/换目录复用 id 极少见）则丢弃，避免张冠李戴
+            val loaded = checkpoints.load(root.id)?.takeIf { it.rootPath == root.rootPath }
+            checkpointBase = loaded?.completed.orEmpty()
+            checkByPath = checkpointBase.associateBy { it.path }
+            // 断点里短时长（规则后加的）这次起不再收录，直接过滤
+            if (checkByPath.isNotEmpty()) {
+                checkpointBase = checkpointBase.filter { it.durationSec >= MIN_TRACK_DURATION_SEC }
+                checkByPath = checkpointBase.associateBy { it.path }
+            }
             emit("")
 
             // Stage B：多 worker 并行读标签。单个文件 hang 住（坏文件/慢介质上
@@ -97,34 +132,55 @@ class RootScanner(
                                     out.add(old)
                                 }
                             } else {
-                                // 单文件超时即放弃（走文件名兜底），坏文件不阻塞整库。
-                                // 同一次 MMR 会话里顺手把内嵌图存进 track_art 缓存，供单曲/专辑封面用。
-                                val meta = withTimeoutOrNull(META_TIMEOUT_MS) { readMetadata(f) } ?: fallback(f)
-                                // 短时长（<10s，含读不到时长的 0）直接忽略，不入库
-                                if (meta.durationSec >= MIN_TRACK_DURATION_SEC) {
-                                    val codec = withTimeoutOrNull(CODEC_TIMEOUT_MS) { sniffCodec(f) }.orEmpty()
-                                    val songId = "file:$path"
-                                    val hasArt = meta.art?.takeIf { it.isNotEmpty() }?.let { bytes ->
-                                        runCatching { TrackArtworkCache.saveEmbedded(context, songId, bytes) }.getOrDefault(false)
-                                    } == true
-                                    out.add(
-                                        ScannedTrack(
+                                // 断点命中：上次已扫且未变更，直接复用，不再读标签
+                                val ck = checkByPath[path]
+                                if (ck != null && ck.size == size && ck.lastModified == mtime && ck.available &&
+                                    ck.durationSec >= MIN_TRACK_DURATION_SEC
+                                ) {
+                                    out.add(ck)
+                                } else {
+                                    // 单文件超时即放弃（走文件名兜底），坏文件不阻塞整库。
+                                    // 同一次 MMR 会话里顺手把内嵌图存进 track_art 缓存，供单曲/专辑封面用。
+                                    val meta = withTimeoutOrNull(META_TIMEOUT_MS) { readMetadata(f) } ?: fallback(f)
+                                    // 短时长（<10s，含读不到时长的 0）直接忽略，不入库
+                                    if (meta.durationSec >= MIN_TRACK_DURATION_SEC) {
+                                        val codec = withTimeoutOrNull(CODEC_TIMEOUT_MS) { sniffCodec(f) }.orEmpty()
+                                        val songId = "file:$path"
+                                        val hasArt = meta.art?.takeIf { it.isNotEmpty() }?.let { bytes ->
+                                            runCatching { TrackArtworkCache.saveEmbedded(context, songId, bytes) }.getOrDefault(false)
+                                        } == true
+                                        val row = ScannedTrack(
                                             path = path, size = size, lastModified = mtime,
                                             title = meta.title, artist = meta.artist, album = meta.album,
                                             durationSec = meta.durationSec, artworkUrl = folderCover(f),
                                             codec = codec, hasEmbedded = hasArt,
                                         )
-                                    )
-                                    if (old == null) added.incrementAndGet() else updated.incrementAndGet()
+                                        out.add(row)
+                                        fresh.add(row)
+                                        if (old == null) added.incrementAndGet() else updated.incrementAndGet()
+                                    }
                                 }
                             }
                             val d = done.incrementAndGet()
+                            // 每 200 个落一次断点：杀进程/切后台被回收都不丢进度
+                            if (d - lastSaved.get() >= CHECKPOINT_EVERY) saveCheckpoint()
                             if (d == files.size) emit(f.name) else emitThrottled(f.name)
                         }
                     }
                 }
             }
         } catch (e: CancellationException) {
+            // 被取消（用户取消/新扫描顶掉）也先把已扫的落盘，下次接着扫
+            runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    val snapshot = ArrayList<ScannedTrack>(checkpointBase.size + fresh.size)
+                    snapshot.addAll(checkpointBase)
+                    snapshot.addAll(fresh)
+                    if (snapshot.isNotEmpty()) {
+                        checkpoints.save(ScanCheckpoint(rootId = root.id, rootPath = root.rootPath, completed = snapshot))
+                    }
+                }
+            }
             throw e
         } catch (e: Exception) {
             // scan-level failure still persists whatever was indexed so far
@@ -142,6 +198,8 @@ class RootScanner(
         // 深扫落盘进 library_files.db（三表原子替换）；启动时只读 + 存在性检查，不走这里
         store.writeScanResult(root.id, sorted)
         store.stampScan(root.id)
+        // 扫完断点即作废，下次是全新扫描
+        checkpoints.clear(root.id)
         onProgress(ScanProgress(rootId = root.id, running = false, found = done.get(),
             total = sorted.size, added = added.get(), updated = updated.get(), missing = missing))
     }
@@ -152,6 +210,8 @@ class RootScanner(
         // 单文件超时：正常 setDataSource 秒级返回，超时的基本是坏文件/坏介质，直接跳过
         const val META_TIMEOUT_MS = 15_000L
         const val CODEC_TIMEOUT_MS = 10_000L
+        // 断点落盘粒度：每扫完 200 个文件暂存一次，杀进程/回收都不丢进度
+        const val CHECKPOINT_EVERY = 200
     }
 
     private data class Meta(

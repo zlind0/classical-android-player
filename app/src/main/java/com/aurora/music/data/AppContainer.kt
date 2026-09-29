@@ -70,7 +70,10 @@ class AppContainer(context: Context) {
     // FILE 栈专属：roots 定义 + library_files.db 的内存映射，全程不碰 MediaStore。
     val volumeManager = StorageVolumeManager(appContext)
     val musicRoots = MusicRootsStore(appContext, filesDb.filesDao())
-    val rootScanner = RootScanner(musicRoots, appContext)
+    // 后台扫描：断点暂存 + App 作用域编排 + 前台保活，切界面/切后台都不停
+    val scanCheckpoints = ScanCheckpoints(appContext)
+    val rootScanner = RootScanner(musicRoots, appContext, scanCheckpoints)
+    val scanManager = LibraryScanManager(appContext, musicRoots, rootScanner, scanCheckpoints, scope)
 
     // 电子书栈：独立 Room 库 + 仓库 + 扫描器 + 阅读偏好
     private val ebookDb: com.aurora.music.data.ebook.EbookDb = Room.databaseBuilder(
@@ -337,6 +340,12 @@ class AppContainer(context: Context) {
         scope.launch {
             // 电子书旧 TTS 设置一次性迁入统一设置（失败不影响启动）。
             runCatching { settingsStore.migrateEbookTts(ebookPrefs.snapshotTts(), ebookPrefs.isTtsCustomized()) }
+        }
+        scope.launch(Dispatchers.IO) {
+            // 断点续扫：上次没扫完（每 200 个已暂存）的接着扫，已暂存的不重扫。
+            // loadFromDb 之后调用，保证 roots/内存快照就绪；串行逐个续扫。
+            runCatching { musicRoots.ensureLoaded() }
+            runCatching { scanManager.resumePending() }
         }
         registerConnectivity()
     }
