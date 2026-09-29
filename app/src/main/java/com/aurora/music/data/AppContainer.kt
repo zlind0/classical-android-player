@@ -218,7 +218,7 @@ class AppContainer(context: Context) {
 
     // TTS：两个独立播放器（同 DSP 链，互不抢占）+ 统一 worker（合成/缓存/代际共用）。
     // 合成产物只留内存，播完即丢；介绍播报也走 DSP 链，不再直驱 AudioTrack。
-    val ebookTtsPlayer = com.aurora.music.playback.EbookTtsPlayer(appContext, settingsStore, audioSessionId)
+    val ebookTtsPlayer = com.aurora.music.playback.EbookTtsPlayer(appContext, settingsStore, audioSessionId, duckable = true)
     val introTtsPlayer = com.aurora.music.playback.EbookTtsPlayer(appContext, settingsStore, audioSessionId)
     val ttsWorker = com.aurora.music.tts.TtsWorker(appContext, settingsStore, ebookTtsPlayer, introTtsPlayer)
     val ebookTts = com.aurora.music.data.ebook.EbookTtsController(appContext).also {

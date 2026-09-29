@@ -429,6 +429,9 @@ class SettingsStore(private val context: Context) {
         val INTRO_TTS_ENGINE = stringPreferencesKey("intro_tts_engine")
         val INTRO_TTS_PITCH = floatPreferencesKey("intro_tts_pitch")
         val INTRO_TTS_MIGRATED = booleanPreferencesKey("intro_tts_migrated")
+        val INTRO_TTS_VOLUME = floatPreferencesKey("intro_tts_volume")
+        val EBOOK_DUCK_OTHERS = booleanPreferencesKey("ebook_duck_others")
+        val EBOOK_MUSIC_LEVEL = floatPreferencesKey("ebook_music_level")
     }
 
     val uiPrefs: Flow<UiPrefs> = context.dataStore.data.map { p ->
@@ -918,6 +921,9 @@ class SettingsStore(private val context: Context) {
             voice = p[Keys.INTRO_TTS_VOICE].orEmpty(),
             rate = (p[Keys.INTRO_TTS_RATE] ?: 1f).coerceIn(0.5f, 2f),
             pitch = (p[Keys.INTRO_TTS_PITCH] ?: 1f).coerceIn(0.5f, 2f),
+            volume = (p[Keys.INTRO_TTS_VOLUME] ?: 1f).coerceIn(0.2f, 2f),
+            duckOthers = p[Keys.EBOOK_DUCK_OTHERS] ?: false,
+            ownMusicLevel = (p[Keys.EBOOK_MUSIC_LEVEL] ?: 0.2f).coerceIn(0.05f, 1f),
         )
     }.distinctUntilChanged()
 
@@ -926,7 +932,8 @@ class SettingsStore(private val context: Context) {
         if (context.dataStore.data.first()[Keys.INTRO_TTS_MIGRATED] == true) return
         val cur = unifiedTts.first()
         val curDefault = cur.engine == TTS_ENGINE_INTERNAL && cur.voice.isBlank() &&
-            cur.rate == 1f && cur.pitch == 1f
+            cur.rate == 1f && cur.pitch == 1f && cur.volume == 1f &&
+            !cur.duckOthers && cur.ownMusicLevel == 0.2f
         if (curDefault && customized) {
             context.dataStore.edit {
                 it[Keys.INTRO_TTS_ENGINE] = mapped.engine
@@ -946,6 +953,9 @@ class SettingsStore(private val context: Context) {
     suspend fun setIntroTtsVoice(v: String) = context.dataStore.edit { it[Keys.INTRO_TTS_VOICE] = v.trim() }
     suspend fun setIntroTtsEngine(v: String) = context.dataStore.edit { it[Keys.INTRO_TTS_ENGINE] = v.trim() }
     suspend fun setIntroTtsPitch(v: Float) = context.dataStore.edit { it[Keys.INTRO_TTS_PITCH] = v.coerceIn(0.5f, 2.0f) }
+    suspend fun setTtsVolume(v: Float) = context.dataStore.edit { it[Keys.INTRO_TTS_VOLUME] = v.coerceIn(0.2f, 2.0f) }
+    suspend fun setDuckOthers(v: Boolean) = context.dataStore.edit { it[Keys.EBOOK_DUCK_OTHERS] = v }
+    suspend fun setOwnMusicLevel(v: Float) = context.dataStore.edit { it[Keys.EBOOK_MUSIC_LEVEL] = v.coerceIn(0.05f, 1.0f) }
 
     // typed so json round-trips losslessly
     suspend fun exportPrefs(): PrefsBackup {

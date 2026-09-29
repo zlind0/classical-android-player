@@ -31,7 +31,9 @@ import kotlinx.coroutines.launch
  * 同一个 audioSession → 系统 Effect（均衡器/低音/虚拟化/响度）同样生效。
  * 输入永远是 48kHz 立体声 16bit WAV（合成侧归一化好），链路行为与音乐一致。
  *
- * 无 MediaSession、无通知、无音频焦点（不打断音乐；混音由系统叠加）。
+ * 无 MediaSession、无通知。默认无音频焦点（不打断音乐；混音由系统叠加）；
+ * [duckable] 播放器在用户打开 duck 开关后，开播时请求
+ * MAY_DUCK 焦点（导航口径），压低站外音乐，停播即归还。
  * ExoPlayer 必须在主线程创建，调用方（阅读界面）保证主线程调用 [ensurePlayer]。
  */
 @UnstableApi
@@ -39,6 +41,7 @@ class EbookTtsPlayer(
     private val appContext: Context,
     private val settingsStore: com.aurora.music.data.SettingsStore,
     private val sessionId: Int,
+    private val duckable: Boolean = false,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -62,6 +65,57 @@ class EbookTtsPlayer(
     /** 播放队列播完（最后一个 item ENDED）时触发一次。 */
     @Volatile var onQueueEnded: (() -> Unit)? = null
 
+    // ---- MAY_DUCK 焦点（仅 duckable 播放器 + 用户开 duckOthers 时持有） ----
+    private val audioManager =
+        appContext.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+    @Volatile private var duckOthers = false
+    @Volatile private var streamActive = false
+    @Volatile private var focusHeld = false
+    private var focusRequest: android.media.AudioFocusRequest? = null
+    private val focusListener = android.media.AudioManager.OnAudioFocusChangeListener { }
+
+    private fun updateDuckFocus() {
+        if (!duckable) return
+        if (duckOthers && streamActive) requestDuckFocus() else abandonDuckFocus()
+    }
+
+    private fun requestDuckFocus() {
+        if (focusHeld) return
+        val res = if (android.os.Build.VERSION.SDK_INT >= 26) {
+            val attrs = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            val req = android.media.AudioFocusRequest.Builder(
+                android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+            ).setAudioAttributes(attrs)
+                .setOnAudioFocusChangeListener(focusListener)
+                .build()
+            focusRequest = req
+            audioManager.requestAudioFocus(req)
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.requestAudioFocus(
+                focusListener,
+                android.media.AudioManager.STREAM_MUSIC,
+                android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+            )
+        }
+        focusHeld = res == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
+
+    private fun abandonDuckFocus() {
+        if (!focusHeld && focusRequest == null) return
+        focusHeld = false
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            focusRequest?.let { runCatching { audioManager.abandonAudioFocusRequest(it) } }
+        } else {
+            @Suppress("DEPRECATION")
+            runCatching { audioManager.abandonAudioFocus(focusListener) }
+        }
+        focusRequest = null
+    }
+
     init {
         scope.launch {
             settingsStore.playbackPrefs.collect {
@@ -81,6 +135,15 @@ class EbookTtsPlayer(
                 settingsStore.activeCorrectionId,
             ) { profiles, activeId -> profiles.firstOrNull { it.id == activeId } }
                 .collect { applyCorrectionProfile(it) }
+        }
+        if (duckable) {
+            // 开关播中切换也即时生效：开→压站外，关→归还
+            scope.launch {
+                settingsStore.unifiedTts.collect {
+                    duckOthers = it.duckOthers
+                    updateDuckFocus()
+                }
+            }
         }
     }
 
@@ -196,6 +259,8 @@ class EbookTtsPlayer(
         p.setMediaSource(memSource(first))
         p.prepare()
         p.play()
+        streamActive = true
+        updateDuckFocus()
     }
 
     /** 内存 WAV 流追块：首块播着时后续块边合边加；代际由调用方（TtsWorker）保证。 */
@@ -225,9 +290,13 @@ class EbookTtsPlayer(
         player?.stop()
         player?.clearMediaItems()
         _isPlaying.value = false
+        streamActive = false
+        updateDuckFocus()
     }
 
     fun release() {
+        streamActive = false
+        abandonDuckFocus()
         runCatching { player?.release() }
         player = null
     }

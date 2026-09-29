@@ -116,4 +116,23 @@ object TtsWav {
         }
         return out
     }
+
+    /**
+     * 48k 立体声 16bit PCM 数字增益（听书音量 0.2~2.0 用；gain==1 原样返回）。
+     * 超过 0dB 的部分硬钳到 ±32767，后续 DSP 链的 limiter 会再兜一层。
+     */
+    fun applyGainStereo16(pcm: ByteArray, gain: Float): ByteArray {
+        if (gain == 1f || pcm.isEmpty()) return pcm
+        val out = ByteArray(pcm.size)
+        val ib = ByteBuffer.wrap(pcm).order(ByteOrder.LITTLE_ENDIAN)
+        val ob = ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN)
+        var i = 0
+        while (i + 1 < pcm.size) {
+            val s = ib.getShort(i).toInt()
+            ob.putShort(i, (s * gain).toInt().coerceIn(-32768, 32767).toShort())
+            i += 2
+        }
+        if (i < pcm.size) out[i] = pcm[i]
+        return out
+    }
 }

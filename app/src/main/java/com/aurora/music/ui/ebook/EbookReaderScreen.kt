@@ -103,6 +103,7 @@ import com.aurora.music.ui.ios5.Ios5SegmentRow
 import com.aurora.music.ui.ios5.Ios5SettingsPage
 import com.aurora.music.ui.ios5.Ios5SliderRow
 import com.aurora.music.ui.ios5.Ios5StaticText
+import com.aurora.music.ui.ios5.Ios5SwitchRow
 import com.aurora.music.ui.ios5.ios5FootNote
 import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.ui.ios5.ios5Section
@@ -1231,6 +1232,39 @@ private fun EbookOptionsPage(onBack: () -> Unit) {
                 onValueChange = { scope.launch { container.settingsStore.setIntroTtsPitch(it) } },
             )
             Ios5StaticText("内置与系统语音都经过均衡器 DSP 链（校正/用户均衡/动态等）。切换引擎或音色会停掉当前朗读。与歌曲介绍的语音为同一设置，两处互通。")
+        }
+        ios5Section("混音与音量") {
+            Ios5SwitchRow(
+                title = "压低其他音乐",
+                subtitle = "听书时让站外音乐自动降低（导航模式；降多少由对方 App 决定）",
+                checked = ttsPrefs.duckOthers,
+                onCheckedChange = { scope.launch { container.settingsStore.setDuckOthers(it) } },
+            )
+            Ios5CellDivider()
+            Ios5SliderRow(
+                title = "站内音乐音量",
+                valueLabel = "${(ttsPrefs.ownMusicLevel * 100).toInt()}%",
+                value = ttsPrefs.ownMusicLevel,
+                range = 0.05f..1f,
+                steps = 18,
+                onValueChange = { scope.launch { container.settingsStore.setOwnMusicLevel(it) } },
+            )
+            Ios5CellDivider()
+            Ios5StaticText("一边听书一边听本站的歌时，音乐压到该比例，下一首即生效。")
+            Ios5CellDivider()
+            Ios5SliderRow(
+                title = "听书音量",
+                valueLabel = "${(ttsPrefs.volume * 100).toInt()}%",
+                value = ttsPrefs.volume,
+                range = 0.2f..2f,
+                steps = 35,
+                onValueChange = { scope.launch { container.settingsStore.setTtsVolume(it) } },
+            )
+            if (!ttsPrefs.isInternal) {
+                Ios5CellDivider()
+                Ios5StaticText("系统语音超过 100% 的部分无效（设置保留，切回内置离线即生效）。")
+            }
+            Ios5StaticText("与歌曲介绍的语音为同一设置，音量与压低开关两处互通。")
         }
         ios5Section("睡眠定时") {
             val timer by container.ebookTts.sleepTimer.collectAsStateWithLifecycle()

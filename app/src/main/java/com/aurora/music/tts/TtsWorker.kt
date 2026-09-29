@@ -38,12 +38,28 @@ enum class TtsOwner { EBOOK, INTRO }
 /** append 一段文本后返回：播完后的实测总时长 + 首块开播时刻（elapsedRealtime 系，供 UI 计时翻页）。 */
 data class TtsAppendResult(val totalMs: Long, val startedAtElapsed: Long)
 
-/** 内存缓存键：引擎+音色+语速+音调+文本 SHA-256（纯函数，可单测）。 */
-fun ttsChunkKey(engine: String, voice: String, rate100: Int, pitch100: Int, text: String): String {
+/** 内存缓存键：引擎+音色+语速+音调+有效音量+文本 SHA-256（纯函数，可单测）。 */
+fun ttsChunkKey(
+    engine: String,
+    voice: String,
+    rate100: Int,
+    pitch100: Int,
+    text: String,
+    vol100: Int = 100,
+): String {
     val md = MessageDigest.getInstance("SHA-256")
     val body = md.digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
-    return "${engine.ifBlank { "sysdef" }}|${voice.ifBlank { "auto" }}|r${rate100}|p${pitch100}|$body"
+    return "${engine.ifBlank { "sysdef" }}|${voice.ifBlank { "auto" }}|r${rate100}|p${pitch100}|v${vol100}|$body"
 }
+
+/**
+ * 听书音量在合成侧的有效增益（纯函数，可单测）：
+ * 设置保留 0.2~2.0 全量；系统引擎 synthesizeToFile 没有音量参数，
+ * 只能靠 PCM 后增益，且 >100% 部分砍掉（切回内置即生效）。
+ */
+fun ttsEffectiveGain(prefs: UnifiedTtsPrefs): Float =
+    if (prefs.isInternal) prefs.volume.coerceIn(0.2f, 2f)
+    else prefs.volume.coerceIn(0.2f, 2f).coerceAtMost(1f)
 
 /** 系统音色精简描述（脱离 Android Voice 类型，纯函数可单测）。 */
 data class VoiceId(val name: String, val language: String, val country: String)
@@ -298,7 +314,12 @@ class TtsWorker(
 
     internal suspend fun synthChunk(text: String, prefs: UnifiedTtsPrefs, owner: TtsOwner, gen: Long): ByteArray? {
         if (!isCurrent(owner, gen)) return null
-        val key = ttsChunkKey(prefs.engine, prefs.voice, (prefs.rate * 100).toInt(), (prefs.pitch * 100).toInt(), text)
+        val gain = ttsEffectiveGain(prefs)
+        val key = ttsChunkKey(
+            prefs.engine, prefs.voice,
+            (prefs.rate * 100).toInt(), (prefs.pitch * 100).toInt(),
+            text, (gain * 100).toInt(),
+        )
         cache.get(key)?.let { return it }
         val wav = sysLocks[owner]!!.withLock {
             if (!isCurrent(owner, gen)) return@withLock null
@@ -330,8 +351,9 @@ class TtsWorker(
             isStopped = { flag.get() },
         )
         if (mono24k.isEmpty() || flag.get()) return null
-        val stereo48k = TtsWav.mono24kToStereo48k(mono24k)
+        var stereo48k = TtsWav.mono24kToStereo48k(mono24k)
         if (stereo48k.isEmpty()) return null
+        stereo48k = TtsWav.applyGainStereo16(stereo48k, ttsEffectiveGain(prefs))
         return TtsWav.encodeWav(48000, 2, 16, stereo48k)
     }
 
@@ -383,8 +405,10 @@ class TtsWorker(
             val bytes = withContext(Dispatchers.IO) { tmp.readBytes() }
             val pcm = runCatching { TtsWav.decodeWav(bytes) }.getOrNull() ?: return null
             if (pcm.data.isEmpty()) return null
-            val norm = TtsWav.normalize48kStereo16(pcm)
+            var norm = TtsWav.normalize48kStereo16(pcm)
             if (norm.isEmpty()) return null
+            // 系统引擎无音量参数：>100% 部分砍掉（ttsEffectiveGain 已钳位），设置值保留
+            norm = TtsWav.applyGainStereo16(norm, ttsEffectiveGain(prefs))
             return TtsWav.encodeWav(48000, 2, 16, norm)
         } finally {
             withContext(Dispatchers.IO) { runCatching { tmp.delete() } }

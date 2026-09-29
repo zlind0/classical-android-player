@@ -71,6 +71,13 @@ class PlaybackService : MediaLibraryService() {
     @Volatile private var deviceSupportsBitPerfect: Boolean = false
     @Volatile private var preferHighResPref: Boolean = false
     @Volatile private var independentOutput: Boolean = false
+    // 听书混音：站内音乐在听书时的保留音量（用户可调，精确值由本服务手动压）。
+    @Volatile private var ebookPlaying = false
+    @Volatile private var ebookMusicLevel = 0.2f
+    @Volatile private var ebookDuckOthers = false
+    @Volatile private var ebookDuckApplied = 1f
+    @Volatile private var ebookFocusDropped = false
+    private var musicAudioAttrs: AudioAttributes? = null
 
     @Volatile private var sleepFadeActive = false
     private var sleepFadeStartMs = 0L
@@ -120,6 +127,7 @@ class PlaybackService : MediaLibraryService() {
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .setUsage(C.USAGE_MEDIA)
             .build()
+        musicAudioAttrs = audioAttributes
 
         val renderersFactory = object : DefaultRenderersFactory(this) {
             override fun buildAudioSink(
@@ -262,6 +270,16 @@ class PlaybackService : MediaLibraryService() {
         }
         scope.launch {
             container.preferredAudioDeviceId.collect { id -> applyPreferredDevice(id) }
+        }
+        scope.launch {
+            // 听书混音状态：播放态 + 用户设定的站内保留音量 + duck 开关
+            container.ebookTts.playing.collect { ebookPlaying = it }
+        }
+        scope.launch {
+            container.settingsStore.unifiedTts.collect {
+                ebookMusicLevel = it.ownMusicLevel
+                ebookDuckOthers = it.duckOthers
+            }
         }
 
         scope.launch {
@@ -448,6 +466,7 @@ class PlaybackService : MediaLibraryService() {
     private fun tickAudio() {
         // v0.6 GR meters for the Dynamics UI (cheap volatile reads)
         container.dspMeters.value = com.aurora.music.data.DspMeters(auroraDsp.compGrDb, auroraDsp.limGrDb)
+        syncEbookDuck()
         if (sleepFadeActive) { driveSleepFade(); return }
         if (wakeFadeActive) { driveWakeFade(); return }
         if (xfadeActive) {
@@ -455,27 +474,53 @@ class PlaybackService : MediaLibraryService() {
             if (player.currentMediaItem?.mediaId != xfadeExpectedId) { endXfade() } else { driveXfade() }
             return
         }
-        val base = replayGainMultiplier()
+        val base = replayGainMultiplier() * ebookDuckApplied
         if (kotlin.math.abs(player.volume - base) > 0.01f) player.volume = base
         maybeBeginXfade()
+    }
+
+    /**
+     * 听书混音同步（每 tick 跑一次，100ms 常态 / 25ms 淡入淡出中）：
+     * - 音量斜坡：站内音乐向 用户设定的保留音量 / 1.0 平滑过渡；
+     * - 焦点让出：听书播着且 duck 开关开时，音乐主动丢焦点，
+     *   避免 Media3 自动 duck（固定 0.2）与手动比例叠加导致过 quiet；
+     *   听书停后恢复焦点持有。independentOutput 下本来就无焦点，跳过切换。
+     */
+    private fun syncEbookDuck() {
+        val target = if (ebookPlaying) ebookMusicLevel.coerceIn(0.05f, 1f) else 1f
+        val cur = ebookDuckApplied
+        if (cur != target) {
+            val step = 0.08f
+            ebookDuckApplied =
+                if (cur < target) (cur + step).coerceAtMost(target)
+                else (cur - step).coerceAtLeast(target)
+        }
+        if (!independentOutput && !bitPerfect) {
+            val wantDrop = ebookPlaying && ebookDuckOthers
+            if (wantDrop != ebookFocusDropped) {
+                ebookFocusDropped = wantDrop
+                val attrs = musicAudioAttrs ?: return
+                runCatching { player.setAudioAttributes(attrs, !wantDrop) }
+            }
+        }
     }
 
     private fun driveSleepFade() {
         val ms = sleepFadeMs.coerceAtLeast(1)
         val t = ((android.os.SystemClock.elapsedRealtime() - sleepFadeStartMs).toFloat() / ms).coerceIn(0f, 1f)
-        player.volume = ((1f - t) * replayGainMultiplier()).coerceIn(0f, 1f)
+        player.volume = ((1f - t) * replayGainMultiplier() * ebookDuckApplied).coerceIn(0f, 1f)
         if (t >= 1f) {
             sleepFadeActive = false
             player.pause()
-            player.volume = replayGainMultiplier()
+            player.volume = replayGainMultiplier() * ebookDuckApplied
         }
     }
 
     private fun driveWakeFade() {
         val ms = wakeFadeMs.coerceAtLeast(1)
         val t = ((android.os.SystemClock.elapsedRealtime() - wakeFadeStartMs).toFloat() / ms).coerceIn(0f, 1f)
-        player.volume = (t * replayGainMultiplier()).coerceIn(0f, 1f)
-        if (t >= 1f) { wakeFadeActive = false; player.volume = replayGainMultiplier() }
+        player.volume = (t * replayGainMultiplier() * ebookDuckApplied).coerceIn(0f, 1f)
+        if (t >= 1f) { wakeFadeActive = false; player.volume = replayGainMultiplier() * ebookDuckApplied }
     }
 
     private fun maybeBeginXfade() {
@@ -552,7 +597,7 @@ class PlaybackService : MediaLibraryService() {
         xfadeActive = false
         xfadeExpectedId = null
         runCatching { fadePlayer?.run { pause(); clearMediaItems() } }
-        player.volume = replayGainMultiplier()
+        player.volume = replayGainMultiplier() * ebookDuckApplied
     }
 
     private fun ensureFadePlayer(): ExoPlayer {
@@ -617,7 +662,7 @@ class PlaybackService : MediaLibraryService() {
                 CMD_SLEEP_FADE -> {
                     val ms = customCommand.customExtras.getInt("fadeMs", 0)
                     if (ms > 0) { sleepFadeMs = ms; sleepFadeStartMs = android.os.SystemClock.elapsedRealtime(); sleepFadeActive = true }
-                    else { sleepFadeActive = false; player.volume = replayGainMultiplier() }
+                    else { sleepFadeActive = false; player.volume = replayGainMultiplier() * ebookDuckApplied }
                 }
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))

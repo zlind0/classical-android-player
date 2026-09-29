@@ -1,7 +1,10 @@
 package com.aurora.music.tts
 
+import com.aurora.music.data.TTS_ENGINE_INTERNAL
+import com.aurora.music.data.UnifiedTtsPrefs
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -118,5 +121,48 @@ class TtsUnitTest {
         val mono = byteArrayOf(0, 0, 0x10, 0x27) // 0, 10000
         val out = TtsWav.mono24kToStereo48k(mono)
         assertEquals(2 * 2 * 4, out.size)
+    }
+
+    @Test
+    fun gain_passthroughAndScale() {
+        // 1000, -2000（小端 16bit）
+        val pcm = byteArrayOf(0xE8.toByte(), 0x03, 0x30, 0xF8.toByte())
+        assertArrayEquals(pcm, TtsWav.applyGainStereo16(pcm, 1f))
+        // 50% → 500, -1000
+        val half = TtsWav.applyGainStereo16(pcm, 0.5f)
+        assertEquals(500, java.nio.ByteBuffer.wrap(half).order(java.nio.ByteOrder.LITTLE_ENDIAN).getShort(0).toInt())
+        assertEquals(-1000, java.nio.ByteBuffer.wrap(half).order(java.nio.ByteOrder.LITTLE_ENDIAN).getShort(2).toInt())
+        // 空输入不崩
+        assertEquals(0, TtsWav.applyGainStereo16(ByteArray(0), 2f).size)
+    }
+
+    @Test
+    fun gain_clampsAtFullScale() {
+        // 20000 × 2.0 = 40000 → 钳到 32767，不卷绕
+        val pcm = byteArrayOf(0x20, 0x4E, 0x20, 0x4E)
+        val out = TtsWav.applyGainStereo16(pcm, 2f)
+        val s = java.nio.ByteBuffer.wrap(out).order(java.nio.ByteOrder.LITTLE_ENDIAN).getShort(0).toInt()
+        assertEquals(32767, s)
+    }
+
+    @Test
+    fun effectiveGain_systemClampedInternalFull() {
+        val sys = UnifiedTtsPrefs(engine = "", volume = 2f)
+        assertEquals(1f, ttsEffectiveGain(sys))
+        val sysLow = UnifiedTtsPrefs(engine = "", volume = 0.5f)
+        assertEquals(0.5f, ttsEffectiveGain(sysLow))
+        val internal = UnifiedTtsPrefs(engine = TTS_ENGINE_INTERNAL, volume = 2f)
+        assertEquals(2f, ttsEffectiveGain(internal))
+        val internalLow = UnifiedTtsPrefs(engine = TTS_ENGINE_INTERNAL, volume = 0.2f)
+        assertEquals(0.2f, ttsEffectiveGain(internalLow))
+    }
+
+    @Test
+    fun chunkKey_volumeSensitive() {
+        val a = ttsChunkKey("internal", "", 100, 100, "你好世界", 100)
+        assertEquals(a, ttsChunkKey("internal", "", 100, 100, "你好世界", 100))
+        assertFalse(a == ttsChunkKey("internal", "", 100, 100, "你好世界", 200))
+        // 旧 5 参调用默认 100，与显式 100 一致
+        assertEquals(a, ttsChunkKey("internal", "", 100, 100, "你好世界"))
     }
 }

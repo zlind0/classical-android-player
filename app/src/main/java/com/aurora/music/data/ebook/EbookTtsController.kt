@@ -347,8 +347,10 @@ class EbookTtsController(context: Context) {
             store?.saveTtsPos(bookPath, para.chapter, para.block, para.startChar)
             if (first && movePage || !first) _turn.value = Triple(para.chapter, para.block, para.startChar)
             first = false
+            // 每段现读一次设置：音量/语速等滑杆下一段即生效，不用停播重进
+            val segPrefs = runCatching { settings.unifiedTts.first() }.getOrDefault(tp)
             // append 只等合成+入队（首块已开播），返回实测总时长与首播时刻
-            val res = stream.append(para.readText, tp)
+            val res = stream.append(para.readText, segPrefs)
             if (res.totalMs <= 0) {
                 idx++
                 continue
@@ -368,7 +370,7 @@ class EbookTtsController(context: Context) {
                 val gen = stream.generation
                 val nextText = paras[nextIdx].readText
                 scope.launch(Dispatchers.IO) {
-                    runCatching { tts.warmCache(nextText, tp, TtsOwner.EBOOK, gen) }
+                    runCatching { tts.warmCache(nextText, segPrefs, TtsOwner.EBOOK, gen) }
                 }
             }
             stream.awaitDone()
