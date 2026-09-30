@@ -170,12 +170,11 @@ These **81 screenshots** were captured on **6 September 2026** from the release 
 
 <details>
 
-<summary><strong>Equalizer and DSP</strong> (11 screenshots)</summary>
+<summary><strong>Equalizer and DSP</strong> (10 screenshots)</summary>
 
 <table>
   <tr>
-    <td align="center" width="33%"><a href="docs/screenshots/device-presets.webp"><img src="docs/screenshots/thumbnails/device-presets.webp" alt="Headphone and speaker presets" width="240"></a><br><sub>Headphone and speaker presets</sub></td>
-    <td align="center" width="33%"><a href="docs/screenshots/squig-presets.webp"><img src="docs/screenshots/thumbnails/squig-presets.webp" alt="Live squig.link presets" width="240"></a><br><sub>Live squig.link presets</sub></td>
+    <td align="center" width="33%"><a href="docs/screenshots/device-presets.webp"><img src="docs/screenshots/thumbnails/device-presets.webp" alt="Headphone presets" width="240"></a><br><sub>Headphone presets</sub></td>
     <td align="center" width="33%"><a href="docs/screenshots/convolution.webp"><img src="docs/screenshots/thumbnails/convolution.webp" alt="Convolution impulse responses" width="240"></a><br><sub>Convolution impulse responses</sub></td>
   </tr>
   <tr>
@@ -266,7 +265,7 @@ Multiple logins can be saved and switched between, including a jump to the local
 - Gapless, crossfade (a second overlapping player), skip-silence, mono downmix, and varispeed.
 - ReplayGain (off / track / album), plus an **offline EBU R128 loudness scanner** (pure-Kotlin, via MediaCodec) to populate gains for files whose tags lack them.
 - A switchable **software DSP engine**: 10/15/31-band graphic EQ, parametric bands, preamp, balance, stereo width, crossfeed, compressor, brick-wall limiter, harmonic saturation, per-channel delay/trim, and partitioned overlap-save **convolution** for impulse responses.
-- **AutoEQ** headphone correction: a bundled profile database plus live fetch, with per-output-device auto-switching.
+- **AutoEQ** headphone correction: a fully offline preset database (rebuilt from the AutoEq submodule into the APK on every build), with per-output-device auto-switching.
 - **Per-account queue persistence**: swipe the app away or switch servers and it returns to the same state (current track, position, shuffle/repeat mode, and the full queue).
 
 ### Library & metadata

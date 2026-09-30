@@ -15,7 +15,7 @@ object CorrectionCompiler {
     const val FIR_TAPS = 255
     private const val FFT_N = 512
 
-    /** Parametric bands (AutoEQ / squig / manual) evaluated with exact realtime math. */
+    /** Parametric bands (bundled AutoEq presets / manual) evaluated with exact realtime math. */
     fun parametricToGains(bands: List<ParamBand>, fs: Int = 48000): FloatArray {
         val freqs = correctionFreqs()
         val out = FloatArray(CORRECTION_BANDS)

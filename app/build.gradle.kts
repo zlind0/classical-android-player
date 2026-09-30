@@ -65,6 +65,17 @@ android {
         // Classical fork regression baseline (plan §66 v0.1.0): pre-existing findings frozen here.
         baseline = file("lint-baseline.xml")
     }
+    sourceSets {
+        named("main") {
+            // Offline AutoEq database, regenerated from third_party/AutoEq on every build.
+            assets.srcDir(layout.buildDirectory.dir("generated/autoeq"))
+        }
+    }
+    androidResources {
+        // The AutoEq blobs asset is read on demand with positioned reads straight
+        // from the APK, which requires it to be stored uncompressed.
+        noCompress += "aeq"
+    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -124,3 +135,23 @@ dependencies {
     // JVM 单测解析 EPUB 用（XmlPullParser 接口实现；APK 内仍用系统 kxml）
     testImplementation("xpp3:xpp3:1.1.4c")
 }
+
+// Offline AutoEq database: bundles every ParametricEQ preset from the
+// third_party/AutoEq submodule into an index + blobs pair shipped in the APK
+// assets. The task always runs (not incremental) so each APK build re-bundles
+// the current submodule checkout; the script itself takes ~2s for ~9k presets.
+val generatedAutoEqDir = layout.buildDirectory.dir("generated/autoeq")
+val buildAutoEqDb by tasks.registering(Exec::class) {
+    description = "Bundles third_party/AutoEq presets into APK assets."
+    commandLine(
+        "python3",
+        rootProject.file("scripts/build_autoeq_pack.py").absolutePath,
+        "--autoeq-root", rootProject.file("third_party/AutoEq").absolutePath,
+        "--out-dir", generatedAutoEqDir.get().asFile.absolutePath,
+    )
+    outputs.upToDateWhen { false }
+    outputs.dir(generatedAutoEqDir)
+}
+tasks.named("preBuild") { dependsOn(buildAutoEqDb) }
+// The asset round-trip test reads the real generated pack.
+tasks.matching { it.name == "testDebugUnitTest" }.configureEach { dependsOn(buildAutoEqDb) }

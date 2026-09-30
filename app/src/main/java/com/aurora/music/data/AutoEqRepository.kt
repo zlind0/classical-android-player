@@ -1,104 +1,213 @@
 package com.aurora.music.data
 
 import android.content.Context
+import android.content.res.AssetFileDescriptor
+import android.system.Os
 import com.aurora.music.playback.DspCoeffBuilder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import java.net.URLEncoder
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.Locale
 
 enum class EqDeviceKind(val label: String, val description: String, val examples: List<String>) {
-    ALL("All devices", "Measured presets for wired and Bluetooth headphones, earbuds and speakers.", listOf("Sony WH-1000XM5", "AirPods", "HD 600", "SoundLink")),
+    ALL("All devices", "Measured presets for wired and Bluetooth headphones and earbuds.", listOf("Sony WH-1000XM5", "AirPods", "HD 600", "HD 650")),
     HEADPHONES("Headphones / studio", "Over-ear and on-ear headphones, including studio and Bluetooth models.", listOf("HD 600", "ATH-M50x", "DT 770", "WH-1000XM5")),
     IN_EAR("IEMs / wireless buds", "In-ear monitors and sealed wireless earbuds. Match the model and ANC mode.", listOf("AirPods Pro", "Galaxy Buds", "Moondrop", "WF-1000XM5")),
-    EARBUDS("Earbuds / open-ear", "Unsealed earbuds and measured open-ear models, including Shokz.", listOf("OpenFit", "OpenRun", "AirPods 4", "VE Monk")),
-    SPEAKERS("Speakers / Bluetooth", "Measured speaker correction from Spinorama, including Bluetooth models. Placement and room acoustics still affect the result.", listOf("SoundLink", "Sonos Roam", "JBL 305", "Genelec")),
+    EARBUDS("Earbuds / open-ear", "Unsealed earbuds and measured open-ear models.", listOf("OpenFit", "OpenRun", "EarPods", "Yuin PK1")),
 }
 
-enum class EqProvider { AUTOEQ, SQUIG, SPINORAMA }
-
 data class EqProfile(
+    val id: Long,
     val name: String,
     val source: String,
+    /** AutoEq measurement form factor, e.g. "in-ear", "over-ear", "711 in-ear". */
+    val form: String,
+    /** Relative path inside the AutoEq results tree, kept for display/dedupe. */
     val path: String,
-    val provider: EqProvider = EqProvider.AUTOEQ,
 ) {
-    // AutoEQ records the actual measurement form factor in the directory, including the rig name.
+    // AutoEq records the actual measurement form factor, including the rig name.
     val kind: EqDeviceKind get() = when {
-        provider == EqProvider.SPINORAMA -> EqDeviceKind.SPEAKERS
-        provider == EqProvider.SQUIG -> EqDeviceKind.IN_EAR
-        path.split('/').getOrNull(2)?.contains("in-ear") == true -> EqDeviceKind.IN_EAR
-        path.split('/').getOrNull(2)?.contains("earbud") == true -> EqDeviceKind.EARBUDS
+        form.contains("in-ear", ignoreCase = true) -> EqDeviceKind.IN_EAR
+        form.contains("earbud", ignoreCase = true) -> EqDeviceKind.EARBUDS
         else -> EqDeviceKind.HEADPHONES
     }
 }
 
 data class ParsedEq(val preampDb: Float, val bands: List<ParamBand>)
 
+/** One index row: display info plus where its filter text lives in the blobs asset. */
+internal data class EqIndexEntry(val profile: EqProfile, val blobOffset: Long, val blobLen: Int)
+
+/** Index decoder (see scripts/build_autoeq_pack.py). Pure function, unit-tested. */
+internal fun parseAutoEqIndex(bytes: ByteArray): List<EqIndexEntry> {
+    val buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+    require(buf.remaining() >= 8) { "index too short" }
+    val magic = ByteArray(4).also { buf.get(it) }
+    require(magic.contentEquals(INDEX_MAGIC)) { "bad index magic" }
+    val count = buf.int
+    require(count in 1..200_000) { "bad entry count $count" }
+    val out = ArrayList<EqIndexEntry>(count)
+    repeat(count) {
+        val id = buf.int.toLong() and 0xFFFFFFFFL
+        val name = getPackedString(buf)
+        val source = getPackedString(buf)
+        val form = getPackedString(buf)
+        val path = getPackedString(buf)
+        val offset = buf.long
+        val len = buf.int
+        require(offset >= 0 && len in 1..1_000_000) { "bad blob span" }
+        out.add(EqIndexEntry(EqProfile(id, name, source, form, path), offset, len))
+    }
+    return out
+}
+
+private val INDEX_MAGIC = byteArrayOf(0x41, 0x45, 0x51, 0x32) // "AEQ2"
+
+private fun getPackedString(buf: ByteBuffer): String {
+    val len = buf.int
+    require(len in 0..1_000_000 && len <= buf.remaining()) { "bad string length $len" }
+    return ByteArray(len).also { buf.get(it) }.toString(Charsets.UTF_8)
+}
+
+/**
+ * Offline AutoEq preset library. Build-time generated assets
+ * (`autoeq_index.aeq` + `autoeq_blobs.aeq`, see scripts/build_autoeq_pack.py)
+ * ship inside the APK; the blobs file is stored uncompressed so single presets
+ * are read on demand with positioned reads straight from the APK.
+ *
+ * Nothing is held when the browser UI is closed: the caller pairs [acquire]
+ * with [release] (or relies on the one-shot fallback in [search]/[fetch]),
+ * and leaving drops the index, the APK file handle and any fallback bytes.
+ * No network access happens here.
+ */
 class AutoEqRepository(private val context: Context) {
 
-    private val http = OkHttpClient()
-    @Volatile private var index: List<EqProfile>? = null
+    private val appContext = context.applicationContext
+    private val loadMutex = Mutex()
+    private val guard = Any()
+    private var refs = 0
+    private var index: List<EqIndexEntry>? = null
+    private var blobsFd: AssetFileDescriptor? = null
+    private var blobsFallback: ByteArray? = null
 
-    suspend fun ensureIndex(): List<EqProfile> {
-        index?.let { return it }
-        return withContext(Dispatchers.IO) {
-            val list = listOf(INDEX_ASSET to EqProvider.AUTOEQ, SPEAKER_INDEX_ASSET to EqProvider.SPINORAMA).flatMap { (asset, provider) ->
-                runCatching { context.assets.open(asset).bufferedReader().useLines { lines ->
-                    lines.mapNotNull { ln ->
-                        val p = ln.split('\t')
-                        if (!ln.startsWith('#') && p.size >= 3 && p[0].isNotBlank()) EqProfile(p[0], p[1], p[2], provider) else null
-                    }.toList()
-                } }.getOrDefault(emptyList())
-            }
-            index = list
-            list
+    /** Browser session start. Pairs with [release]; safe to nest. */
+    suspend fun acquire(): List<EqProfile> = withContext(Dispatchers.IO) {
+        synchronized(guard) { refs++ }
+        try {
+            loadLocked().map { it.profile }
+        } catch (t: Throwable) {
+            synchronized(guard) { refs = (refs - 1).coerceAtLeast(0) }
+            throw t
         }
     }
 
-    suspend fun search(query: String, kind: EqDeviceKind = EqDeviceKind.ALL, limit: Int = Int.MAX_VALUE): List<EqProfile> = withContext(Dispatchers.IO) {
-        val q = query.trim().lowercase(Locale.ROOT)
-        val terms = q.split(Regex("\\s+")).filter { it.isNotBlank() }
-        val matches = ensureIndex().asSequence()
-            .filter { kind == EqDeviceKind.ALL || it.kind == kind }
-            .filter { p -> terms.all { term -> p.name.lowercase(Locale.ROOT).contains(term) } }
-            .sortedWith(compareByDescending<EqProfile> { p ->
-                if (q.isBlank()) kind.examples.any { p.name.contains(it, ignoreCase = true) }
-                else p.name.startsWith(q, ignoreCase = true)
-            }.thenBy { if (q.isBlank()) it.name.lowercase(Locale.ROOT) else "" }.thenBy { it.name.length })
-            .distinctBy { it.name.lowercase(Locale.ROOT) + "|" + it.source.lowercase(Locale.ROOT) }
-            .toList()
-        // Give each example a visible starting point instead of filling the first page with one model's rigs.
-        val featured = if (q.isBlank()) kind.examples.mapNotNull { example ->
-            matches.filter { it.name.contains(example, ignoreCase = true) }.minByOrNull { it.name.length }
-        } else emptyList()
-        (featured + matches).distinctBy { it.path }.take(limit)
+    /** Browser session end. Drops the index and closes the blobs handle. */
+    fun release() {
+        synchronized(guard) {
+            refs = (refs - 1).coerceAtLeast(0)
+            if (refs == 0) {
+                index = null
+                blobsFallback = null
+                runCatching { blobsFd?.close() }
+                blobsFd = null
+            }
+        }
     }
 
-    suspend fun fetch(profile: EqProfile): ParsedEq? = withContext(Dispatchers.IO) {
-        runCatching {
-            val enc = profile.path.split('/').joinToString("/") {
-                URLEncoder.encode(it, "UTF-8").replace("+", "%20")
-            }
-            val base = if (profile.provider == EqProvider.SPINORAMA) SPEAKER_RAW_BASE else RAW_BASE
-            val req = Request.Builder().url("$base/$enc").build()
-            val body = http.newCall(req).execute().use { if (it.isSuccessful) it.body?.string() else null }
-                ?: return@runCatching null
-            EqTextParser.parse(body)
-        }.getOrNull()
+    suspend fun search(query: String, kind: EqDeviceKind = EqDeviceKind.ALL, limit: Int = Int.MAX_VALUE): List<EqProfile> =
+        withEntries { entries ->
+            val q = query.trim().lowercase(Locale.ROOT)
+            val terms = q.split(Regex("\\s+")).filter { it.isNotBlank() }
+            val matches = entries.asSequence().map { it.profile }
+                .filter { kind == EqDeviceKind.ALL || it.kind == kind }
+                .filter { p -> terms.all { term -> p.name.lowercase(Locale.ROOT).contains(term) } }
+                .sortedWith(compareByDescending<EqProfile> { p ->
+                    if (q.isBlank()) kind.examples.any { p.name.contains(it, ignoreCase = true) }
+                    else p.name.startsWith(q, ignoreCase = true)
+                }.thenBy { if (q.isBlank()) it.name.lowercase(Locale.ROOT) else "" }.thenBy { it.name.length })
+                .distinctBy { it.name.lowercase(Locale.ROOT) + "|" + it.source.lowercase(Locale.ROOT) }
+                .toList()
+            // Give each example a visible starting point instead of filling the first page with one model's rigs.
+            val featured = if (q.isBlank()) kind.examples.mapNotNull { example ->
+                matches.filter { it.name.contains(example, ignoreCase = true) }.minByOrNull { it.name.length }
+            } else emptyList()
+            (featured + matches).distinctBy { it.path }.take(limit)
+        }
+
+    suspend fun fetch(profile: EqProfile): ParsedEq? = withEntries { entries ->
+        val e = entries.firstOrNull { it.profile.id == profile.id } ?: return@withEntries null
+        EqTextParser.parse(readBlob(e.blobOffset, e.blobLen) ?: return@withEntries null)
+    }
+
+    /** Uses the session cache when held, otherwise loads for this call only. */
+    private suspend fun <T> withEntries(block: (List<EqIndexEntry>) -> T): T {
+        if (synchronized(guard) { refs > 0 }) {
+            return block(synchronized(guard) { index } ?: emptyList())
+        }
+        return try {
+            synchronized(guard) { refs++ }
+            block(loadLocked())
+        } finally {
+            release()
+        }
+    }
+
+    private suspend fun loadLocked(): List<EqIndexEntry> = loadMutex.withLock {
+        synchronized(guard) { index }?.let { return it }
+        val loaded = withContext(Dispatchers.IO) {
+            appContext.assets.open(INDEX_ASSET).use { parseAutoEqIndex(it.readBytes()) }
+        }
+        synchronized(guard) { index = loaded }
+        loaded
+    }
+
+    private fun assetBytes(name: String): ByteArray =
+        appContext.assets.open(name).use { it.readBytes() }
+
+    /** Positioned read of one preset straight from the APK; null when out of range. */
+    private fun readBlob(offset: Long, len: Int): String? {
+        if (len <= 0 || len > 1_000_000 || offset < 0) return null
+        blobsAfd()?.let { afd ->
+            return runCatching {
+                val buf = ByteBuffer.allocate(len)
+                var remaining = len
+                var pos = afd.startOffset + offset
+                while (remaining > 0) {
+                    val n = Os.pread(afd.fileDescriptor, buf, pos)
+                    if (n <= 0) return null
+                    remaining -= n
+                    pos += n
+                }
+                buf.flip()
+                ByteArray(len).also { buf.get(it) }.toString(Charsets.UTF_8)
+            }.getOrNull()
+        }
+        // Fallback for a compressed blobs asset: keep the whole file for this session only.
+        val all = synchronized(guard) { blobsFallback } ?: runCatching { assetBytes(BLOBS_ASSET) }.getOrNull()?.also {
+            synchronized(guard) { if (refs > 0) blobsFallback = it }
+        } ?: return null
+        if (offset + len > all.size) return null
+        return all.copyOfRange(offset.toInt(), (offset + len).toInt()).toString(Charsets.UTF_8)
+    }
+
+    private fun blobsAfd(): AssetFileDescriptor? {
+        synchronized(guard) {
+            blobsFd?.let { return it }
+            if (refs == 0) return null
+            return runCatching { appContext.assets.openFd(BLOBS_ASSET) }.getOrNull()?.also { blobsFd = it }
+        }
     }
 
     private companion object {
-        const val INDEX_ASSET = "autoeq_index.tsv"
-        const val SPEAKER_INDEX_ASSET = "spinorama_index.tsv"
-        const val RAW_BASE = "https://raw.githubusercontent.com/jaakkopasanen/AutoEq/master"
-        const val SPEAKER_RAW_BASE = "https://raw.githubusercontent.com/pierreaubert/spinorama/b38d2715441f134a63b737b2fd913d14058a2643"
+        const val INDEX_ASSET = "autoeq_index.aeq"
+        const val BLOBS_ASSET = "autoeq_blobs.aeq"
     }
 }
 
-/** Equalizer APO parametric text used by both AutoEQ and Spinorama. */
+/** Equalizer APO parametric text used by the bundled AutoEq presets. */
 internal object EqTextParser {
     fun parse(text: String): ParsedEq? {
         var preamp = 0f

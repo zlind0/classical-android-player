@@ -245,7 +245,7 @@
     <string name="eq_import">Import correction (.txt)</string>
     <string name="eq_import_failed">Couldn\'t parse that file — need GraphicEQ or APO Filter lines</string>
     <string name="eq_device_presets">Device presets</string>
-    <string name="eq_device_presets_sub">AutoEQ · squig.link</string>
+    <string name="eq_device_presets_sub">Offline AutoEQ database</string>
     <string name="eq_convolution">Convolution (IR)</string>
     <string name="eq_conv_off">Off</string>
     <string name="eq_graphic">Graphic EQ</string>
@@ -332,11 +332,9 @@
     <string name="eq_toast_ir_loaded">Loaded IR: %1$s</string>
     <string name="eq_toast_ir_failed">Couldn\'t load that file</string>
     <string name="eq_toast_applied">Applied %1$s · 128-band correction, %2$.1f dB preamp</string>
-    <string name="eq_toast_apply_failed">Couldn\'t load a supported correction — check your connection or try another measurement</string>
+    <string name="eq_toast_apply_failed">Couldn\'t load a supported correction — try another measurement</string>
     <string name="eq_search_device">Search brand or model</string>
-    <string name="eq_search_squig">Search live IEM measurements</string>
     <string name="eq_no_presets">Could not load presets. Try another search.</string>
-    <string name="eq_squig_min_chars">Enter at least two characters to search squig.link.</string>
     <string name="eq_no_results">No measured presets found. Try another model name or device category.</string>
     <string name="eq_results_fmt">%1$d presets · showing %2$d</string>
     <string name="eq_show_more">Show 20 more</string>
@@ -345,7 +343,6 @@
     <string name="eq_bind_to">Bind “%1$s” to %2$s</string>
     <string name="eq_applied_prefix">Applied: %1$s</string>
     <string name="eq_clear">Clear</string>
-    <string name="eq_squig_hint">Corrections are generated on-device from live squig.link measurements toward the %1$s target.</string>
     <string name="eq_freq_fmt">%1$s</string>
     <string name="eq_band_fmt">%1$+.1f dB · Q%2$.1f</string>
     <string name="eq_freq_label">Freq</string>
@@ -591,9 +588,6 @@
     <string name="eq_profiles_saved_fmt">%1$d saved</string>
     <string name="eq_mode_label">Mode</string>
     <string name="eq_ir_prefix">IR: %1$s</string>
-    <string name="eq_source_device">Device library</string>
-    <string name="eq_source_squig">Live squig.link</string>
-    <string name="eq_harman_fallback">Harman</string>
     <string name="eq_unbind">Unbind</string>
     <string name="eq_bands_label">Bands</string>
     <string name="eq_width_fmt">Width %.2f×</string>
@@ -934,15 +928,13 @@
     <string name="viz_style_harmonograph">Harmonograph</string>
     <string name="viz_style_ink">Ink bloom</string>
     <string name="eq_kind_all">All devices</string>
-    <string name="eq_kind_all_sub">Measured presets for wired and Bluetooth headphones, earbuds and speakers.</string>
+    <string name="eq_kind_all_sub">Measured presets for wired and Bluetooth headphones and earbuds.</string>
     <string name="eq_kind_headphones">Headphones / studio</string>
     <string name="eq_kind_headphones_sub">Over-ear and on-ear headphones, including studio and Bluetooth models.</string>
     <string name="eq_kind_inear">IEMs / wireless buds</string>
     <string name="eq_kind_inear_sub">In-ear monitors and sealed wireless earbuds. Match the model and ANC mode.</string>
     <string name="eq_kind_earbuds">Earbuds / open-ear</string>
     <string name="eq_kind_earbuds_sub">Unsealed earbuds and measured open-ear models, including Shokz.</string>
-    <string name="eq_kind_speakers">Speakers / Bluetooth</string>
-    <string name="eq_kind_speakers_sub">Measured speaker correction from Spinorama, including Bluetooth models. Placement and room acoustics still affect the result.</string>
     <string name="appearance_section_floating">Floating window</string>
     <string name="appearance_floating_enable">Show when in background</string>
     <string name="appearance_floating_enable_sub">Square album window over other apps when Aurora is backgrounded</string>

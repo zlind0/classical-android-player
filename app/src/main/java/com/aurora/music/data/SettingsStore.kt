@@ -350,8 +350,6 @@ class SettingsStore(private val context: Context) {
         val SMART_PLAYLISTS = stringPreferencesKey("smart_playlists")  // not cleared on logout
         val ARTIST_ENRICHMENT = booleanPreferencesKey("artist_enrichment")
         val RECENT_SEARCHES = stringPreferencesKey("recent_searches")
-        val SQUIG_BASE = stringPreferencesKey("squig_base_url")
-        val SQUIG_TARGET = stringPreferencesKey("squig_target")
         val ACOUSTID_KEY = stringPreferencesKey("acoustid_key")           // survives logout
         val CORRECTION_PROFILES = stringPreferencesKey("correction_profiles")
         val ACTIVE_CORRECTION = stringPreferencesKey("active_correction_id")
@@ -723,12 +721,6 @@ class SettingsStore(private val context: Context) {
     }
 
     suspend fun clearRecentSearches() = context.dataStore.edit { it.remove(Keys.RECENT_SEARCHES) }
-
-    val squigBaseUrl: Flow<String> = context.dataStore.data.map { it[Keys.SQUIG_BASE]?.takeIf { u -> u.isNotBlank() } ?: DEFAULT_SQUIG_BASE }
-    suspend fun setSquigBaseUrl(v: String) = context.dataStore.edit { it[Keys.SQUIG_BASE] = v.trim().trimEnd('/') }
-
-    val squigTarget: Flow<String> = context.dataStore.data.map { it[Keys.SQUIG_TARGET]?.takeIf { t -> t.isNotBlank() } ?: DEFAULT_SQUIG_TARGET }
-    suspend fun setSquigTarget(v: String) = context.dataStore.edit { it[Keys.SQUIG_TARGET] = v.trim() }
 
     suspend fun setVisualizer(v: VisualizerPrefs) = context.dataStore.edit { p ->
         p[Keys.VIZ_STYLE] = v.style

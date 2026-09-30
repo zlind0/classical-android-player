@@ -242,7 +242,7 @@
     <string name="eq_import">导入校正（.txt）</string>
     <string name="eq_import_failed">解析不了这个文件——需要 GraphicEQ 或 APO Filter 行</string>
     <string name="eq_device_presets">设备预设</string>
-    <string name="eq_device_presets_sub">AutoEQ · squig.link</string>
+    <string name="eq_device_presets_sub">离线 AutoEq 数据库</string>
     <string name="eq_convolution">卷积（IR）</string>
     <string name="eq_conv_off">关闭</string>
     <string name="eq_graphic">图形 EQ</string>
@@ -329,11 +329,9 @@
     <string name="eq_toast_ir_loaded">已载入 IR：%1$s</string>
     <string name="eq_toast_ir_failed">载入不了这个文件</string>
     <string name="eq_toast_applied">已应用%1$s·128 段校正，%2$.1f dB 前级</string>
-    <string name="eq_toast_apply_failed">载入不了可用的校正——检查网络或换个测量</string>
+    <string name="eq_toast_apply_failed">载入不了可用的校正——换个测量试试</string>
     <string name="eq_search_device">搜索品牌或型号</string>
-    <string name="eq_search_squig">搜索 squig.link 实测</string>
     <string name="eq_no_presets">载入预设失败，换个关键词试试。</string>
-    <string name="eq_squig_min_chars">至少输入两个字符才能搜 squig.link。</string>
     <string name="eq_no_results">没有找到测量预设，换个型号或分类试试。</string>
     <string name="eq_results_fmt">%1$d 个预设·显示 %2$d 个</string>
     <string name="eq_show_more">再显示 20 个</string>
@@ -342,7 +340,6 @@
     <string name="eq_bind_to">把“%1$s”绑定到 %2$s</string>
     <string name="eq_applied_prefix">已应用：%1$s</string>
     <string name="eq_clear">清除</string>
-    <string name="eq_squig_hint">根据 squig.link 实测、朝 %1$s 目标在本机生成校正。</string>
     <string name="eq_freq_fmt">%1$s</string>
     <string name="eq_band_fmt">%1$+.1f dB · Q%2$.1f</string>
     <string name="eq_freq_label">频率</string>
@@ -588,9 +585,6 @@
     <string name="eq_profiles_saved_fmt">已存 %1$d 个</string>
     <string name="eq_mode_label">模式</string>
     <string name="eq_ir_prefix">IR：%1$s</string>
-    <string name="eq_source_device">设备库</string>
-    <string name="eq_source_squig">squig.link 实测</string>
-    <string name="eq_harman_fallback">Harman</string>
     <string name="eq_unbind">解绑</string>
     <string name="eq_bands_label">段数</string>
     <string name="eq_width_fmt">宽度 %.2f×</string>
@@ -931,15 +925,13 @@
     <string name="viz_style_harmonograph">谐波仪</string>
     <string name="viz_style_ink">墨染</string>
     <string name="eq_kind_all">全部设备</string>
-    <string name="eq_kind_all_sub">有线和蓝牙耳机、耳塞、音箱的实测预设。</string>
+    <string name="eq_kind_all_sub">有线和蓝牙耳机、耳塞的实测预设。</string>
     <string name="eq_kind_headphones">头戴 / 监听</string>
     <string name="eq_kind_headphones_sub">包耳压耳耳机，包括监听和蓝牙型号。</string>
     <string name="eq_kind_inear">入耳 / 真无线</string>
     <string name="eq_kind_inear_sub">入耳监听和密封真无线，对上型号和降噪模式。</string>
     <string name="eq_kind_earbuds">平头 / 开放耳</string>
     <string name="eq_kind_earbuds_sub">非密封耳塞和开放耳实测，包括 Shokz。</string>
-    <string name="eq_kind_speakers">音箱 / 蓝牙音箱</string>
-    <string name="eq_kind_speakers_sub">Spinorama 音箱实测校正，包括蓝牙型号，摆位和房间仍有影响。</string>
     <string name="appearance_section_floating">悬浮窗</string>
     <string name="appearance_floating_enable">切后台时显示</string>
     <string name="appearance_floating_enable_sub">切到后台时在其他应用上层显示方形专辑悬浮窗</string>

@@ -3,7 +3,7 @@ package com.aurora.music.data
 // Classical fork v0.5 (plan §25-26, §30): correction + audio profiles.
 //
 // CorrectionProfile is the 128-band device-correction layer. Any source
-// (AutoEQ parametric, squig.link generation, custom measurement) compiles to
+// (bundled AutoEq presets, custom measurement) compiles to
 // the same 128 log-spaced gains, which the Filter Compiler turns into FIR
 // coefficients for the correction convolver (plan §26).
 object CorrectionSource {

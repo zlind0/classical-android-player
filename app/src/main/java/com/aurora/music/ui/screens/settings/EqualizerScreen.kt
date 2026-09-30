@@ -30,6 +30,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,16 +55,11 @@ import com.aurora.music.R
 import com.aurora.music.data.AppContainer
 import com.aurora.music.data.describe
 import com.aurora.music.data.AudioPrefs
-import com.aurora.music.data.DEFAULT_SQUIG_BASE
-import com.aurora.music.data.DEFAULT_SQUIG_TARGET
 import com.aurora.music.data.DspMode
 import com.aurora.music.data.DrivingMode
-import com.aurora.music.data.SQUIG_INSTANCES
-import com.aurora.music.data.SQUIG_TARGETS
 import com.aurora.music.data.EqBinding
 import com.aurora.music.data.EqProfile
 import com.aurora.music.data.EqDeviceKind
-import com.aurora.music.data.EqProvider
 import com.aurora.music.data.ParamBand
 import com.aurora.music.data.SettingsStore
 import com.aurora.music.playback.DspBand
@@ -245,24 +241,31 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
     var searching by remember { mutableStateOf(false) }
     var searchFailed by remember { mutableStateOf(false) }
     var visibleCount by remember { mutableStateOf(20) }
-    var source by rememberSaveable { mutableStateOf(0) }   // 0 measured device library, 1 live squig.link
     var categoryName by rememberSaveable { mutableStateOf(EqDeviceKind.ALL.name) }
     val category = EqDeviceKind.entries.firstOrNull { it.name == categoryName } ?: EqDeviceKind.ALL
-    val squigBase by store.squigBaseUrl.collectAsStateWithLifecycle(initialValue = DEFAULT_SQUIG_BASE)
-    val squigTargetName by store.squigTarget.collectAsStateWithLifecycle(initialValue = DEFAULT_SQUIG_TARGET)
     val outLabel = container.autoEqController.currentOutputLabel()
     val ctx = LocalContext.current
     fun toast(msg: String) = android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
 
-    LaunchedEffect(query, source, category, squigBase, squigTargetName) {
+    // Session scope: the preset index is held only while this browser is open.
+    var sessionReady by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        container.autoEq.acquire()
+        sessionReady = true
+    }
+    DisposableEffect(Unit) {
+        onDispose { container.autoEq.release() }
+    }
+
+    LaunchedEffect(query, category, sessionReady) {
+        if (!sessionReady) return@LaunchedEffect
         results = emptyList()
         visibleCount = 20
         searchFailed = false
         searching = true
         try {
             if (query.isNotBlank()) delay(220)
-            results = if (source == 0) container.autoEq.search(query, category)
-                else if (query.trim().length >= 2) container.squigEq.search(query) else emptyList()
+            results = container.autoEq.search(query, category)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -273,33 +276,19 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
     }
 
     Column(Modifier.fillMaxWidth()) {
-        PillSelector(listOf(stringResource(R.string.eq_source_device), stringResource(R.string.eq_source_squig)), source) { source = it }
-        if (source == 0) {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(vertical = 6.dp, horizontal = 12.dp)) {
-                items(EqDeviceKind.entries.size) { i ->
-                    val kind = EqDeviceKind.entries[i]
-                    PresetChip(eqKindLabel(kind), selected = kind == category) { categoryName = kind.name }
-                }
-            }
-            Text(eqKindDescription(category), color = Ios5Colors.TextSecondary, fontSize = 13.sp,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 8.dp, start = 12.dp, end = 12.dp)) {
-                items(category.examples.size) { i ->
-                    val example = category.examples[i]
-                    PresetChip(example, selected = query == example) { query = example }
-                }
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(vertical = 6.dp, horizontal = 12.dp)) {
+            items(EqDeviceKind.entries.size) { i ->
+                val kind = EqDeviceKind.entries[i]
+                PresetChip(eqKindLabel(kind), selected = kind == category) { categoryName = kind.name }
             }
         }
-        if (source == 1) {
-            val instIdx = SQUIG_INSTANCES.indexOfFirst { it.second == squigBase }.coerceAtLeast(0)
-            PillSelector(SQUIG_INSTANCES.map { it.first }, instIdx) { i -> scope.launch { store.setSquigBaseUrl(SQUIG_INSTANCES[i].second) } }
-            val tgtIdx = SQUIG_TARGETS.indexOfFirst { it.second == squigTargetName }.coerceAtLeast(0)
-            PillSelector(SQUIG_TARGETS.map { it.first }, tgtIdx) { i -> scope.launch { store.setSquigTarget(SQUIG_TARGETS[i].second) } }
-            Text(
-                stringResource(R.string.eq_squig_hint, SQUIG_TARGETS.getOrNull(tgtIdx)?.first ?: "Harman"),
-                color = Ios5Colors.TextSecondary, fontSize = 13.sp,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-            )
+        Text(eqKindDescription(category), color = Ios5Colors.TextSecondary, fontSize = 13.sp,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 8.dp, start = 12.dp, end = 12.dp)) {
+            items(category.examples.size) { i ->
+                val example = category.examples[i]
+                PresetChip(example, selected = query == example) { query = example }
+            }
         }
         Spacer(Modifier.height(4.dp))
         if (active.isNotBlank()) {
@@ -317,7 +306,7 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
             value = query,
             onValueChange = { query = it },
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            placeholder = { Text(if (source == 0) stringResource(R.string.eq_search_device) else stringResource(R.string.eq_search_squig)) },
+            placeholder = { Text(stringResource(R.string.eq_search_device)) },
             leadingIcon = { Icon(Icons.Filled.Search, null, tint = Ios5Colors.TextSecondary) },
             trailingIcon = { if (query.isNotEmpty()) Icon(Icons.Filled.Close, stringResource(R.string.eq_clear), tint = Ios5Colors.TextSecondary, modifier = Modifier.clip(RoundedCornerShape(50)).clickable { query = "" }.padding(4.dp)) },
             singleLine = true,
@@ -338,7 +327,6 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
             Text(
                 when {
                     searchFailed -> stringResource(R.string.eq_no_presets)
-                    source == 1 && query.trim().length < 2 -> stringResource(R.string.eq_squig_min_chars)
                     results.isEmpty() -> stringResource(R.string.eq_no_results)
                     else -> stringResource(R.string.eq_results_fmt, results.size, minOf(visibleCount, results.size))
                 },
@@ -351,7 +339,7 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(enabled = !working) {
                     scope.launch {
                         working = true
-                        val eq = if (p.provider == EqProvider.SQUIG) container.squigEq.generate(p) else container.autoEq.fetch(p)
+                        val eq = container.autoEq.fetch(p)
                         android.util.Log.d("AutoEQ", "apply ${p.name}: ${if (eq == null) "FETCH FAILED" else "preamp=${eq.preampDb} bands=${eq.bands.size}"}")
                         if (eq != null && eq.bands.isNotEmpty()) {
                             // v0.5: parametric result compiles to a 128-band CorrectionProfile (plan §26)
@@ -360,7 +348,7 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
                                 id = "corr_${System.currentTimeMillis()}",
                                 name = p.name,
                                 deviceName = p.name,
-                                source = if (p.provider == EqProvider.SQUIG) com.aurora.music.data.CorrectionSource.SQUIG else com.aurora.music.data.CorrectionSource.AUTOEQ,
+                                source = com.aurora.music.data.CorrectionSource.AUTOEQ,
                                 preampDb = eq.preampDb,
                                 gains = gains.toList(),
                             )
@@ -931,7 +919,6 @@ private fun eqKindLabel(kind: EqDeviceKind): String = stringResource(
         EqDeviceKind.HEADPHONES -> R.string.eq_kind_headphones
         EqDeviceKind.IN_EAR -> R.string.eq_kind_inear
         EqDeviceKind.EARBUDS -> R.string.eq_kind_earbuds
-        EqDeviceKind.SPEAKERS -> R.string.eq_kind_speakers
         else -> R.string.eq_kind_all
     }
 )
@@ -942,7 +929,6 @@ private fun eqKindDescription(kind: EqDeviceKind): String = stringResource(
         EqDeviceKind.HEADPHONES -> R.string.eq_kind_headphones_sub
         EqDeviceKind.IN_EAR -> R.string.eq_kind_inear_sub
         EqDeviceKind.EARBUDS -> R.string.eq_kind_earbuds_sub
-        EqDeviceKind.SPEAKERS -> R.string.eq_kind_speakers_sub
         else -> R.string.eq_kind_all_sub
     }
 )

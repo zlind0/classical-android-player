@@ -1,0 +1,4 @@
+[submodule "third_party/AutoEq"]
+	path = third_party/AutoEq
+	url = https://github.com/jaakkopasanen/AutoEq.git
+	shallow = true

@@ -146,14 +146,6 @@ class AppContainer(context: Context) {
     val autoEq = AutoEqRepository(appContext)
     val autoEqController = AutoEqController(appContext, settingsStore, scope)
 
-    @Volatile private var squigBaseValue: String = DEFAULT_SQUIG_BASE
-    @Volatile private var squigTargetValue: String = DEFAULT_SQUIG_TARGET
-    val squigEq = SquigEqRepository(
-        com.aurora.music.data.remote.SquigClient(),
-        baseProvider = { squigBaseValue },
-        targetProvider = { squigTargetValue },
-    )
-
     private val localSession = Session(server = "On this device", username = "Local Library", salt = "", token = "local", type = ServerType.LOCAL)
 
     @Volatile private var activeSession: Session = localSession
@@ -325,12 +317,6 @@ class AppContainer(context: Context) {
         }
         scope.launch {
             settingsStore.acoustIdKey.collect { acoustIdKeyValue = it }
-        }
-        scope.launch {
-            settingsStore.squigBaseUrl.collect { squigBaseValue = it }
-        }
-        scope.launch {
-            settingsStore.squigTarget.collect { squigTargetValue = it }
         }
         scope.launch {
             settingsStore.alarmPrefs.collect { com.aurora.music.playback.AlarmScheduler.apply(appContext, it) }
