@@ -242,6 +242,9 @@
     <string name="eq_correction_trim">Correction trim</string>
     <string name="eq_strength">Strength</string>
     <string name="eq_strength_hint">100% is the measured correction; lower softens it, up to 120% pushes further. Applied in the log domain so the shape holds.</string>
+    <string name="eq_lowcut">Low cut</string>
+    <string name="eq_highcut">High cut</string>
+    <string name="eq_cutoff_hint">Outside the cutoffs the curve holds the edge value instead of dropping to zero, so the overall level stays continuous.</string>
     <string name="eq_import">Import correction (.txt)</string>
     <string name="eq_import_failed">Couldn\'t parse that file — need GraphicEQ or APO Filter lines</string>
     <string name="eq_device_presets">Device presets</string>

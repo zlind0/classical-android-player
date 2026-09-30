@@ -336,8 +336,10 @@ class PlaybackService : MediaLibraryService() {
         scope.launch {
             kotlinx.coroutines.flow.combine(
                 store.correctionProfiles, store.activeCorrectionId,
-            ) { profiles, activeId -> profiles.firstOrNull { it.id == activeId } }
-                .collect { profile -> applyCorrectionProfile(profile) }
+                store.correctionLowcutHz, store.correctionHighcutHz,
+            ) { profiles, activeId, lowcut, highcut ->
+                Triple(profiles.firstOrNull { it.id == activeId }, lowcut, highcut)
+            }.collect { (profile, lowcut, highcut) -> applyCorrectionProfile(profile, lowcut, highcut) }
         }
         scope.launch {
             container.preferredAudioDeviceId.collect { id -> applyPreferredDevice(id) }
@@ -418,9 +420,10 @@ class PlaybackService : MediaLibraryService() {
 
     // v0.5: compile the active CorrectionProfile to FIR on IO, push to the
     // correction convolver. Runs off the audio thread; setImpulse swaps atomically.
-    private fun applyCorrectionProfile(profile: com.aurora.music.data.CorrectionProfile?) {
+    private fun applyCorrectionProfile(profile: com.aurora.music.data.CorrectionProfile?, lowcutHz: Float = 0f, highcutHz: Float = 0f) {
         val id = profile?.id ?: "flat"
-        val gains = profile?.scaledGains().orEmpty()
+        val gains = com.aurora.music.data.applyCorrectionCutoffs(
+            profile?.scaledGains().orEmpty(), com.aurora.music.data.correctionFreqs(), lowcutHz, highcutHz)
         val on = profile?.enabled == true && !CorrectionCompiler.isFlat(gains) && id != "flat"
         correctionMaxGainDb = if (on) gains.maxOrNull() ?: 0f else 0f
         correctionTrimDb = if (on) profile?.preampDb ?: 0f else 0f

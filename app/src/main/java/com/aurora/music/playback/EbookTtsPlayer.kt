@@ -15,6 +15,8 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import com.aurora.music.data.AudioPrefs
 import com.aurora.music.data.CorrectionProfile
+import com.aurora.music.data.applyCorrectionCutoffs
+import com.aurora.music.data.correctionFreqs
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -140,8 +142,11 @@ class EbookTtsPlayer(
             combine(
                 settingsStore.correctionProfiles,
                 settingsStore.activeCorrectionId,
-            ) { profiles, activeId -> profiles.firstOrNull { it.id == activeId } }
-                .collect { applyCorrectionProfile(it) }
+                settingsStore.correctionLowcutHz,
+                settingsStore.correctionHighcutHz,
+            ) { profiles, activeId, lowcut, highcut ->
+                Triple(profiles.firstOrNull { it.id == activeId }, lowcut, highcut)
+            }.collect { (profile, lowcut, highcut) -> applyCorrectionProfile(profile, lowcut, highcut) }
         }
         if (duckable) {
             // 开关播中切换也即时生效：开→压站外，关→归还
@@ -208,9 +213,9 @@ class EbookTtsPlayer(
         monoProcessor.enabled = monoAudioPref
     }
 
-    private fun applyCorrectionProfile(profile: CorrectionProfile?) {
+    private fun applyCorrectionProfile(profile: CorrectionProfile?, lowcutHz: Float = 0f, highcutHz: Float = 0f) {
         val id = profile?.id ?: "flat"
-        val gains = profile?.scaledGains().orEmpty()
+        val gains = applyCorrectionCutoffs(profile?.scaledGains().orEmpty(), correctionFreqs(), lowcutHz, highcutHz)
         val on = profile?.enabled == true && !CorrectionCompiler.isFlat(gains) && id != "flat"
         correctionMaxGainDb = if (on) gains.maxOrNull() ?: 0f else 0f
         correctionTrimDb = if (on) profile?.preampDb ?: 0f else 0f

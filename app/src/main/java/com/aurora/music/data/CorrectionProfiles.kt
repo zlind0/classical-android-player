@@ -48,17 +48,51 @@ data class CorrectionProfile(
         if (s == 1f) return gains
         return gains.map { it * s }
     }
-    fun gainAt(freqHz: Float, freqs: FloatArray = correctionFreqs()): Float {
-        val g = scaledGains()
-        if (g.isEmpty()) return 0f
-        if (freqHz <= freqs.first()) return g.first()
-        if (freqHz >= freqs.last()) return g.last()
-        var lo = 0
-        while (lo < freqs.size - 2 && freqs[lo + 1] < freqHz) lo++
-        val f0 = freqs[lo]; val f1 = freqs[lo + 1]
-        val t = (Math.log((freqHz / f0).toDouble()) / Math.log((f1 / f0).toDouble())).toFloat()
-        return g[lo] + (g[lo + 1] - g[lo]) * t
+    fun gainAt(freqHz: Float, freqs: FloatArray = correctionFreqs()): Float =
+        interpGains(scaledGains(), freqs, freqHz)
+    /** Same interpolation over externally shaped gains (e.g. cutoff-applied). */
+    fun gainAtCut(freqHz: Float, cutGains: List<Float>, freqs: FloatArray = correctionFreqs()): Float =
+        interpGains(cutGains, freqs, freqHz)
+}
+
+/**
+ * Frequency cutoff for a correction curve (Hz, 0 = off). Outside the
+ * [lowcutHz, highcutHz] window the curve holds the edge value instead of
+ * dropping to zero: a correction usually carries an overall reduction, so
+ * zeroing would tear the curve. Values exactly on the grid are held verbatim;
+ * off-grid edges are log-interpolated.
+ */
+fun applyCorrectionCutoffs(
+    gains: List<Float>,
+    freqs: FloatArray = correctionFreqs(),
+    lowcutHz: Float = 0f,
+    highcutHz: Float = 0f,
+): List<Float> {
+    if (gains.isEmpty() || gains.size != freqs.size) return gains
+    val lo = if (lowcutHz > 0f) lowcutHz else freqs.first()
+    val hi = if (highcutHz > 0f) highcutHz else freqs.last()
+    if (lo <= freqs.first() && hi >= freqs.last()) return gains
+    val loVal = interpGains(gains, freqs, lo.coerceIn(freqs.first(), freqs.last()))
+    val hiVal = interpGains(gains, freqs, hi.coerceIn(freqs.first(), freqs.last()))
+    return gains.mapIndexed { i, g ->
+        when {
+            freqs[i] < lo -> loVal
+            freqs[i] > hi -> hiVal
+            else -> g
+        }
     }
+}
+
+private fun interpGains(gains: List<Float>, freqs: FloatArray, freqHz: Float): Float {
+    val g = gains
+    if (g.isEmpty()) return 0f
+    if (freqHz <= freqs.first()) return g.first()
+    if (freqHz >= freqs.last()) return g.last()
+    var lo = 0
+    while (lo < freqs.size - 2 && freqs[lo + 1] < freqHz) lo++
+    val f0 = freqs[lo]; val f1 = freqs[lo + 1]
+    val t = (Math.log((freqHz / f0).toDouble()) / Math.log((f1 / f0).toDouble())).toFloat()
+    return g[lo] + (g[lo + 1] - g[lo]) * t
 }
 
 // Classical fork v0.5 (plan §30): one named snapshot of the whole DSP chain.

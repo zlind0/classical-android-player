@@ -353,6 +353,8 @@ class SettingsStore(private val context: Context) {
         val ACOUSTID_KEY = stringPreferencesKey("acoustid_key")           // survives logout
         val CORRECTION_PROFILES = stringPreferencesKey("correction_profiles")
         val ACTIVE_CORRECTION = stringPreferencesKey("active_correction_id")
+        val CORRECTION_LOWCUT = floatPreferencesKey("correction_lowcut_hz")
+        val CORRECTION_HIGHCUT = floatPreferencesKey("correction_highcut_hz")
         val AUDIO_PROFILES = stringPreferencesKey("audio_profiles")
         val DEVICE_PROFILES = stringPreferencesKey("device_profiles")   // "deviceKey:profileId;..."
         val EQ_BINDINGS = stringPreferencesKey("eq_bindings")
@@ -545,6 +547,12 @@ class SettingsStore(private val context: Context) {
         parseCorrections(p[Keys.CORRECTION_PROFILES])
     }.distinctUntilChanged()
     val activeCorrectionId: Flow<String> = context.dataStore.data.map { it[Keys.ACTIVE_CORRECTION] ?: "flat" }.distinctUntilChanged()
+    // Correction frequency cutoffs in Hz, 0 = off. Outside the window the curve
+    // holds the edge value (see applyCorrectionCutoffs).
+    val correctionLowcutHz: Flow<Float> = context.dataStore.data.map { it[Keys.CORRECTION_LOWCUT] ?: 0f }.distinctUntilChanged()
+    val correctionHighcutHz: Flow<Float> = context.dataStore.data.map { it[Keys.CORRECTION_HIGHCUT] ?: 0f }.distinctUntilChanged()
+    suspend fun setCorrectionLowcutHz(v: Float) = context.dataStore.edit { it[Keys.CORRECTION_LOWCUT] = v.coerceAtLeast(0f) }
+    suspend fun setCorrectionHighcutHz(v: Float) = context.dataStore.edit { it[Keys.CORRECTION_HIGHCUT] = v.coerceAtLeast(0f) }
 
     private fun parseCorrections(json: String?): List<CorrectionProfile> = runCatching {
         if (json.isNullOrBlank()) emptyList()

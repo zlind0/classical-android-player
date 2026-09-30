@@ -239,6 +239,9 @@
     <string name="eq_correction_trim">校正微调</string>
     <string name="eq_strength">强度</string>
     <string name="eq_strength_hint">100% 即测量值原样；调低变柔和，最高 120%。在对数域应用，曲线形状保持不变。</string>
+    <string name="eq_lowcut">低频截断</string>
+    <string name="eq_highcut">高频截断</string>
+    <string name="eq_cutoff_hint">截断区外曲线保持在边界值而不是归零，整体电平连续。</string>
     <string name="eq_import">导入校正（.txt）</string>
     <string name="eq_import_failed">解析不了这个文件——需要 GraphicEQ 或 APO Filter 行</string>
     <string name="eq_device_presets">设备预设</string>

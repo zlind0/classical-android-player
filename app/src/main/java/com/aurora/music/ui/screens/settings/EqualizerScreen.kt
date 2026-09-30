@@ -55,6 +55,8 @@ import com.aurora.music.R
 import com.aurora.music.data.AppContainer
 import com.aurora.music.data.describe
 import com.aurora.music.data.AudioPrefs
+import com.aurora.music.data.applyCorrectionCutoffs
+import com.aurora.music.data.correctionFreqs
 import com.aurora.music.data.DspMode
 import com.aurora.music.data.DrivingMode
 import com.aurora.music.data.EqBinding
@@ -426,10 +428,13 @@ private fun LazyListScope.correctionTab(
     item {
         val layout = DspCoeffBuilder.GRAPHIC_LAYOUTS.getOrElse(prefs.dspGraphicLayout) { DspCoeffBuilder.GRAPHIC_LAYOUTS[0] }
         val graphic = (0 until layout.freqs.size).map { prefs.dspGraphicBands.getOrElse(it) { 0f } }
+        val lowcut by store.correctionLowcutHz.collectAsStateWithLifecycle(initialValue = 0f)
+        val highcut by store.correctionHighcutHz.collectAsStateWithLifecycle(initialValue = 0f)
         EqCurveChart(
             correction = activeCorrection,
             graphicFreqs = layout.freqs, graphicQ = layout.q, graphicGains = graphic,
             parametric = prefs.dspParametric, preampDb = prefs.dspPreampDb,
+            lowcutHz = lowcut, highcutHz = highcut,
         )
     }
     collapsible("corr_list", ctx.getString(R.string.eq_correction_profile),
@@ -457,10 +462,13 @@ private fun LazyListScope.userEqTab(
     item {
         val layout = DspCoeffBuilder.GRAPHIC_LAYOUTS.getOrElse(prefs.dspGraphicLayout) { DspCoeffBuilder.GRAPHIC_LAYOUTS[0] }
         val graphic = (0 until layout.freqs.size).map { prefs.dspGraphicBands.getOrElse(it) { 0f } }
+        val lowcut by store.correctionLowcutHz.collectAsStateWithLifecycle(initialValue = 0f)
+        val highcut by store.correctionHighcutHz.collectAsStateWithLifecycle(initialValue = 0f)
         EqCurveChart(
             correction = activeCorrection,
             graphicFreqs = layout.freqs, graphicQ = layout.q, graphicGains = graphic,
             parametric = prefs.dspParametric, preampDb = prefs.dspPreampDb,
+            lowcutHz = lowcut, highcutHz = highcut,
         )
     }
     val layout = DspCoeffBuilder.GRAPHIC_LAYOUTS.getOrElse(prefs.dspGraphicLayout) { DspCoeffBuilder.GRAPHIC_LAYOUTS[0] }
@@ -517,9 +525,14 @@ private fun LazyListScope.userEqTab(
         }
         Ios5CellDivider()
         DbSliderRow(stringResource(R.string.eq_preamp_trim), prefs.dspPreampDb, -12f..12f) { v -> scope.launch { store.setDspPreamp(v) } }
-        val peak = androidx.compose.runtime.remember(prefs.dspGraphicBands, prefs.dspParametric, prefs.dspGraphicLayout, activeCorrection) {
+        val lowcutPeak by store.correctionLowcutHz.collectAsStateWithLifecycle(initialValue = 0f)
+        val highcutPeak by store.correctionHighcutHz.collectAsStateWithLifecycle(initialValue = 0f)
+        val peak = androidx.compose.runtime.remember(prefs.dspGraphicBands, prefs.dspParametric, prefs.dspGraphicLayout, activeCorrection, lowcutPeak, highcutPeak) {
             val base = DspCoeffBuilder.eqPeakDb(DspParams(graphic = graphic.toFloatArray(), graphicFreqs = layout.freqs, graphicQ = layout.q, parametric = prefs.dspParametric.map { DspBand(it.freqHz, it.gainDb, it.q, it.type) }))
-            maxOf(base, activeCorrection?.takeIf { it.enabled }?.maxGain ?: 0f)
+            val corrMax = activeCorrection?.takeIf { it.enabled }?.let {
+                applyCorrectionCutoffs(it.scaledGains(), correctionFreqs(), lowcutPeak, highcutPeak).maxOrNull()
+            } ?: 0f
+            maxOf(base, corrMax)
         }
         HeadroomRow(peak = peak, preamp = prefs.dspPreampDb) { scope.launch { store.setDspPreamp((-peak).coerceIn(-12f, 0f)) } }
         Ios5CellDivider()
@@ -812,6 +825,21 @@ private fun CorrectionProfilesPanel(
             Text(stringResource(R.string.eq_strength_hint),
                 color = Ios5Colors.TextSecondary, fontSize = 13.sp,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+            val lowcut by store.correctionLowcutHz.collectAsStateWithLifecycle(initialValue = 0f)
+            val highcut by store.correctionHighcutHz.collectAsStateWithLifecycle(initialValue = 0f)
+            Ios5CellDivider()
+            CutoffRow(stringResource(R.string.eq_lowcut), LOW_CUTS, lowcut) { v ->
+                scope.launch { store.setCorrectionLowcutHz(v) }
+            }
+            Ios5CellDivider()
+            CutoffRow(stringResource(R.string.eq_highcut), HIGH_CUTS, highcut) { v ->
+                scope.launch { store.setCorrectionHighcutHz(v) }
+            }
+            if (lowcut > 0f || highcut > 0f) {
+                Text(stringResource(R.string.eq_cutoff_hint),
+                    color = Ios5Colors.TextSecondary, fontSize = 13.sp,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+            }
         }
         Ios5CellDivider()
         Ios5ActionRow(
@@ -821,6 +849,24 @@ private fun CorrectionProfilesPanel(
         if (importMsg != null) {
             Text(importMsg!!, color = Color(0xFFD63A3A), fontSize = 13.sp,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+        }
+    }
+}
+
+private val LOW_CUTS = listOf(0f, 30f, 50f, 80f, 120f, 200f)
+private val HIGH_CUTS = listOf(0f, 16000f, 14000f, 12000f, 10000f, 8000f)
+
+@Composable
+private fun CutoffRow(title: String, options: List<Float>, selected: Float, onSelect: (Float) -> Unit) {
+    val off = stringResource(R.string.common_off)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Text(title, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(6.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(options.size) { i ->
+                val v = options[i]
+                PresetChip(if (v <= 0f) off else freqLabel(v.toInt()), selected = v == selected) { onSelect(v) }
+            }
         }
     }
 }
