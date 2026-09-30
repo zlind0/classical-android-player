@@ -146,14 +146,15 @@ class RootScanner(
                                     if (meta.durationSec >= MIN_TRACK_DURATION_SEC) {
                                         val codec = withTimeoutOrNull(CODEC_TIMEOUT_MS) { sniffCodec(f) }.orEmpty()
                                         val songId = "file:$path"
-                                        val hasArt = meta.art?.takeIf { it.isNotEmpty() }?.let { bytes ->
-                                            runCatching { TrackArtworkCache.saveEmbedded(context, songId, bytes) }.getOrDefault(false)
-                                        } == true
+                                        val artMd5 = meta.art?.takeIf { it.isNotEmpty() }?.let { bytes ->
+                                            runCatching { TrackArtworkCache.saveEmbedded(context, songId, bytes) }.getOrDefault("")
+                                        }.orEmpty()
                                         val row = ScannedTrack(
                                             path = path, size = size, lastModified = mtime,
                                             title = meta.title, artist = meta.artist, album = meta.album,
                                             durationSec = meta.durationSec, artworkUrl = folderCover(f),
-                                            codec = codec, hasEmbedded = hasArt,
+                                            codec = codec, hasEmbedded = artMd5.isNotBlank(),
+                                            artMd5 = artMd5,
                                         )
                                         out.add(row)
                                         fresh.add(row)

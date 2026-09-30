@@ -271,10 +271,10 @@ class MusicRootsStore(
     private fun albumCovers(rows: List<ScannedTrack>): Map<String, String> =
         rows.groupBy { fileAlbumKey(it.album, "file:${it.path}") }.mapValues { (aid, rs) ->
             val ordered = rs.sortedBy { it.path.lowercase() }
-            val withArt = ordered.filter { it.hasEmbedded == true }
+            val withArt = ordered.filter { it.artMd5.isNotBlank() }
             if (withArt.isNotEmpty()) {
                 val pick = withArt[kotlin.math.abs(aid.hashCode()) % withArt.size]
-                TrackArtworkCache.embeddedCacheUri(context, "file:${pick.path}")
+                TrackArtworkCache.contentUri(context, pick.artMd5)
             } else {
                 // 专辑可能跨文件夹：取曲目最多的那个目录为“专辑目录”
                 val dir = ordered.groupingBy { it.path.substringBeforeLast('/') }
@@ -290,7 +290,7 @@ class MusicRootsStore(
      */
     private fun resolveArtwork(row: ScannedTrack, covers: Map<String, String>): String {
     val id = "file:${row.path}"
-    if (row.hasEmbedded == true) return TrackArtworkCache.embeddedCacheUri(context, id)
+    if (row.artMd5.isNotBlank()) return TrackArtworkCache.contentUri(context, row.artMd5)
         val albumArt = covers[fileAlbumKey(row.album, id)]
         if (!albumArt.isNullOrBlank()) return albumArt
         return row.artworkUrl
@@ -419,14 +419,14 @@ private fun ScannedTrack.toRow(rootId: Long) = FileTrack(
     path = path, rootId = rootId, size = size, lastModified = lastModified,
     title = title, artist = artist, album = album, durationSec = durationSec,
     artworkUrl = artworkUrl, codec = codec, available = available,
-    hasEmbedded = hasEmbedded,
+    hasEmbedded = hasEmbedded, artMd5 = artMd5,
 )
 
 private fun FileTrack.toScanned() = ScannedTrack(
     path = path, size = size, lastModified = lastModified,
     title = title, artist = artist, album = album, durationSec = durationSec,
     artworkUrl = artworkUrl, available = available, codec = codec,
-    hasEmbedded = hasEmbedded,
+    hasEmbedded = hasEmbedded, artMd5 = artMd5,
 )
 
 fun ScannedTrack.toSong(): Song {

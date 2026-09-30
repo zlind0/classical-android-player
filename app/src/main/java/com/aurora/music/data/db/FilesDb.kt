@@ -10,12 +10,10 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
-import androidx.room.migration.Migration
-import androidx.sqlite.db.SupportSQLiteDatabase
 
 // FILE 栈的独立库：library_files.db。主键 path，与 MediaStore 栈物理隔离。
 // 深扫（加库/手动重扫）时写入；启动只读 + File.exists() 存在性检查。
-// v2：补常用查询索引；merges 改全局主键（同名专辑跨文件夹合并展示）。
+// 不做版本迁移：schema 变更直接清库重做（fallbackToDestructiveMigration）。
 
 @Entity(
     tableName = "tracks",
@@ -34,8 +32,10 @@ data class FileTrack(
     val codec: String = "",
     val available: Boolean = true,
     // 自带内嵌图（扫描时已提取进 track_art 缓存）；专辑封面优先从这类歌里抽。
-    // NULL = 未知（老数据），深扫时强制重读一次
+    // artMd5 = 去重内容文件 track_art/c/<md5>.jpg 的 key（"" = 无内嵌图）。
+    // 歌→图的映射直接存行内，不再另建索引文件。
     val hasEmbedded: Boolean? = null,
+    val artMd5: String = "",
 )
 
 @Entity(
@@ -141,27 +141,7 @@ interface FilesDao {
     }
 }
 
-val FilesMigration1_2 = object : Migration(1, 2) {
-    override fun migrate(db: SupportSQLiteDatabase) {
-        db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_rootId_available` ON `tracks` (`rootId`, `available`)")
-        db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_available` ON `tracks` (`available`)")
-        db.execSQL("CREATE INDEX IF NOT EXISTS `index_albums_rootId` ON `albums` (`rootId`)")
-        // merges 改全局主键：旧表（rootId, albumId）直接重建，内容由启动时从 tracks 全量重算
-        db.execSQL("DROP TABLE IF EXISTS `merges`")
-        db.execSQL("CREATE TABLE IF NOT EXISTS `merges` (`albumId` TEXT NOT NULL, `rowsJson` TEXT NOT NULL, PRIMARY KEY(`albumId`))")
-        // 旧专辑 key 是 dir:xxx，新 key 是归一专辑名，历史行删掉等下次深扫重写（展示不读此表）
-        db.execSQL("DELETE FROM `albums` WHERE `albumId` LIKE 'dir:%'")
-    }
-}
-
-val FilesMigration2_3 = object : Migration(2, 3) {
-    override fun migrate(db: SupportSQLiteDatabase) {
-        // 可空列：老数据为 NULL=未知，深扫时强制重读一次补上
-        db.execSQL("ALTER TABLE `tracks` ADD COLUMN `hasEmbedded` INTEGER")
-    }
-}
-
-@Database(entities = [FileTrack::class, FileAlbum::class, FileMerge::class], version = 3, exportSchema = false)
+@Database(entities = [FileTrack::class, FileAlbum::class, FileMerge::class], version = 4, exportSchema = false)
 abstract class FilesDb : RoomDatabase() {
     abstract fun filesDao(): FilesDao
 }

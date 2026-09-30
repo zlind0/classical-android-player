@@ -10,10 +10,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import androidx.room.Room
 import com.aurora.music.data.db.FilesDb
-import com.aurora.music.data.db.FilesMigration1_2
-import com.aurora.music.data.db.FilesMigration2_3
 import com.aurora.music.data.db.MediastoreDb
-import com.aurora.music.data.db.MsMigration1_2
 import com.aurora.music.model.Song
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CoroutineScope
@@ -54,11 +51,12 @@ class AppContainer(context: Context) {
 
     val replayGainStore = ReplayGainStore(appContext)
 
-    // 两套独立 SQLite 库，一源一库，物理隔离、永不串台
+    // 两套独立 SQLite 库，一源一库，物理隔离、永不串台。
+    // 不写迁移：schema 变更即清库重做（深扫/重同步会全量重填）。
     private val filesDb: FilesDb = Room.databaseBuilder(appContext, FilesDb::class.java, "library_files.db")
-        .addMigrations(FilesMigration1_2, FilesMigration2_3).build()
+        .fallbackToDestructiveMigration().build()
     private val mediastoreDb: MediastoreDb = Room.databaseBuilder(appContext, MediastoreDb::class.java, "library_mediastore.db")
-        .addMigrations(MsMigration1_2).build()
+        .fallbackToDestructiveMigration().build()
 
     // MEDIASTORE 栈：DB 快照 → 内存；MediaStore 查询只在首次同步/手动重同步时发生
     val localLibrary = LocalLibrary(appContext, mediastoreDb.mediastoreDao(), gainProvider = { path -> replayGainStore.gainsFor(path) })

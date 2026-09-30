@@ -89,19 +89,20 @@ fun TagEditScreen(
                     val f = java.io.File(state.path)
                     val cur = container.musicRoots.allRows().firstOrNull { it.path == state.path }
                     if (cur != null) {
-                        // 新贴的封面已写进文件标签，同步进内嵌图缓存并标 hasEmbedded，专辑封面候选即时生效
-                        val embeddedNow = if (art != null && art.isNotEmpty()) {
+                        // 新贴的封面已写进文件标签，同步进内嵌图缓存并记 artMd5，专辑封面候选即时生效
+                        val artMd5Now = if (art != null && art.isNotEmpty()) {
                             runCatching {
                                 com.aurora.music.data.TrackArtworkCache.saveEmbedded(
                                     appContext, state.songId, art,
                                 )
-                            }.getOrDefault(false)
-                        } else cur.hasEmbedded
+                            }.getOrDefault("")
+                        } else cur.artMd5
                         container.musicRoots.updateTrackMeta(
                             cur.copy(
                                 size = f.length(), lastModified = f.lastModified(),
                                 title = state.tags.title, artist = state.tags.artist, album = state.tags.album,
-                                hasEmbedded = embeddedNow,
+                                hasEmbedded = artMd5Now.isNotBlank(),
+                                artMd5 = artMd5Now,
                             )
                         )
                     }

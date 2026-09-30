@@ -10,12 +10,10 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
-import androidx.room.migration.Migration
-import androidx.sqlite.db.SupportSQLiteDatabase
 
 // MEDIASTORE 栈的独立库：library_mediastore.db。主键 mediaId，与文件栈物理隔离。
 // 首次进此模式（或手动重同步）时把 MediaStore 全量结果写入；启动只读 + DATA 路径存在性检查。
-// v2：补常用查询索引。
+// 不做版本迁移：schema 变更直接清库重做（fallbackToDestructiveMigration）。
 
 @Entity(
     tableName = "tracks",
@@ -43,6 +41,9 @@ data class MsTrack(
     val streamUrl: String = "",
     val artworkUrl: String = "",
     val available: Boolean = true,
+    // 内嵌图去重 key（track_art/c/<md5>.jpg），"" = 无；与 FILE 栈同含义。
+    // 系统库同步不抽内嵌图，默认空，按需解析时只进内存+内容文件。
+    val artMd5: String = "",
 )
 
 @Entity(tableName = "albums")
@@ -117,14 +118,7 @@ interface MediastoreDao {
     }
 }
 
-val MsMigration1_2 = object : Migration(1, 2) {
-    override fun migrate(db: SupportSQLiteDatabase) {
-        db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_albumKey` ON `tracks` (`albumKey`)")
-        db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_available` ON `tracks` (`available`)")
-    }
-}
-
-@Database(entities = [MsTrack::class, MsAlbum::class, MsMerge::class], version = 2, exportSchema = false)
+@Database(entities = [MsTrack::class, MsAlbum::class, MsMerge::class], version = 3, exportSchema = false)
 abstract class MediastoreDb : RoomDatabase() {
     abstract fun mediastoreDao(): MediastoreDao
 }
