@@ -83,6 +83,7 @@
             <!-- deliberately no USB_DEVICE_ATTACHED filter or android pops a chooser on every DAC plug -->
         </activity>
 
+        <!-- 统一播放服务：音乐 + 听书 single service / single session（会话 player 按模式切换） -->
         <service
             android:name=".playback.PlaybackService"
             android:exported="true"
@@ -91,16 +92,6 @@
                 <action android:name="androidx.media3.session.MediaLibraryService" />
                 <action android:name="androidx.media3.session.MediaSessionService" />
                 <action android:name="android.media.browse.MediaBrowserService" />
-            </intent-filter>
-        </service>
-
-        <!-- 听书媒体会话：通知栏 上一节/播放-停止/下一节 + 耳机等系统媒体控制（只转接 EbookTtsController，不碰 TTS 逻辑） -->
-        <service
-            android:name=".playback.EbookTtsMediaService"
-            android:exported="true"
-            android:foregroundServiceType="mediaPlayback">
-            <intent-filter>
-                <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
 

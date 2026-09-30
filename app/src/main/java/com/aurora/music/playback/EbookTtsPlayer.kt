@@ -72,7 +72,14 @@ class EbookTtsPlayer(
     @Volatile private var streamActive = false
     @Volatile private var focusHeld = false
     private var focusRequest: android.media.AudioFocusRequest? = null
-    private val focusListener = android.media.AudioManager.OnAudioFocusChangeListener { }
+    /**
+     * 系统焦点变化透出（统一会话协调用；不设置时保持原来的空实现行为）。
+     * 注意回调线程不固定，调用方自行切到主线程处理。
+     */
+    @Volatile var onAudioFocusChange: ((Int) -> Unit)? = null
+    private val focusListener = android.media.AudioManager.OnAudioFocusChangeListener { change ->
+        onAudioFocusChange?.invoke(change)
+    }
 
     private fun updateDuckFocus() {
         if (!duckable) return
