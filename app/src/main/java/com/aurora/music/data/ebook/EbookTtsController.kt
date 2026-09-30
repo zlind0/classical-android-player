@@ -9,6 +9,7 @@ import com.aurora.music.tts.SentenceSplitter
 import com.aurora.music.tts.TtsEngineInfo
 import com.aurora.music.tts.TtsOwner
 import com.aurora.music.tts.TtsWorker
+import com.aurora.music.tts.isSpeakable
 import java.util.Calendar
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -344,6 +345,12 @@ class EbookTtsController(context: Context) {
                 base
             }
             pendingStartChar = 0
+            // 纯标点/空白段（如单个 "。"）直接无缝跳过：不开流、不碰播放器、不翻页，
+            // 否则合成侧产不出音频，主循环会被假取消卡死。
+            if (!isSpeakable(para.readText)) {
+                idx++
+                continue
+            }
             val stream = tts.openStream(TtsOwner.EBOOK)
             _position.value = para
             positionIdx = idx

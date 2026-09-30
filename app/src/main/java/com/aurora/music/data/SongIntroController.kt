@@ -6,6 +6,7 @@ import com.aurora.music.model.Song
 import com.aurora.music.tts.MsVoices
 import com.aurora.music.tts.TtsOwner
 import com.aurora.music.tts.TtsWorker
+import com.aurora.music.tts.isSpeakable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -163,10 +164,12 @@ class SongIntroController(
                 for (s in sentences) {
                     ensurePaused()
                     _state.value = SongIntroState(active = true, speaking = true)
-                    stream.append(s, ttsPrefs)
                     fullText.append(s)
                     lastPartial = fullText.toString()
-                    spoken++
+                    // 纯标点句（如单个 "。"）直接跳过，不进合成器（硬合产不出音频）。
+                    if (!isSpeakable(s)) continue
+                    val res = stream.append(s, ttsPrefs)
+                    if (res.totalMs > 0) spoken++
                 }
                 producer.join()
             } finally {

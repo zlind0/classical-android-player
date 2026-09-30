@@ -219,4 +219,23 @@ class TtsUnitTest {
         // 旧 5 参调用默认 100，与显式 100 一致
         assertEquals(a, ttsChunkKey("internal", "", 100, 100, "你好世界"))
     }
+
+    @Test
+    fun speakable_punctOnlySkipped() {
+        // 卡死 bug 回归：纯标点/空白/符号必须不可读，调用方直接跳过
+        assertFalse(isSpeakable(""))
+        assertFalse(isSpeakable("   "))
+        assertFalse(isSpeakable("."))
+        assertFalse(isSpeakable("。"))
+        assertFalse(isSpeakable("？！"))
+        assertFalse(isSpeakable("……"))
+        assertFalse(isSpeakable("——"))
+        assertFalse(isSpeakable("「」"))
+        // 含任一字母/数字（含 CJK）即值得合成
+        assertTrue(isSpeakable("你好"))
+        assertTrue(isSpeakable("a"))
+        assertTrue(isSpeakable("3.14"))
+        assertTrue(isSpeakable("。你好"))
+        assertTrue(isSpeakable("word."))
+    }
 }

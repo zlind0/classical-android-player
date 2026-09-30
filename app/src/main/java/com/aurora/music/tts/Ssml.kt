@@ -28,6 +28,11 @@ object SsmlBuilder {
     }
 }
 
+/** 文本是否值得合成（纯函数，可单测）：只要含任一字母或数字（含 CJK）即 true；
+ * 纯标点/空白/符号（如 "."、"。"、"？！"、"……"、"——"、"♪")一律 false，调用方直接
+ * 跳过、不进合成器（两路引擎对纯标点基本产不出音频，硬合只会空转甚至卡住主循环）。 */
+fun isSpeakable(text: String): Boolean = text.any { it.isLetterOrDigit() }
+
 /** 按句切分：单块不超 maxChars，优先在句末标点断开。长段落流式合成的基本单位。 */
 object Chunker {
     private val BREAKS = setOf('。', '！', '？', '!', '?', '\n', ';', '；')

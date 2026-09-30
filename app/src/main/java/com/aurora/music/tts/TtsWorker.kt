@@ -248,8 +248,10 @@ class TtsWorker(
 
     /** 预热内存缓存（下一段后台合成，只写缓存不进播放器）。 */
     suspend fun warmCache(text: String, prefs: UnifiedTtsPrefs, owner: TtsOwner, gen: Long) {
+        if (!isSpeakable(text)) return
         for (chunk in Chunker.split(text)) {
             if (!isCurrent(owner, gen)) return
+            if (!isSpeakable(chunk)) continue
             runCatching { synthChunk(chunk, prefs, owner, gen) }.getOrNull() ?: return
         }
     }
@@ -263,7 +265,8 @@ class TtsWorker(
         text: String,
         prefs: UnifiedTtsPrefs,
     ): Pair<TtsAppendResult, Boolean> {
-        val chunks = Chunker.split(text)
+        if (!isSpeakable(text)) return (TtsAppendResult(0, SystemClock.elapsedRealtime()) to streamStarted)
+        val chunks = Chunker.split(text).filter { isSpeakable(it) }
         if (chunks.isEmpty()) return (TtsAppendResult(0, SystemClock.elapsedRealtime()) to streamStarted)
         var total = 0L
         var startedAt = 0L
@@ -271,8 +274,14 @@ class TtsWorker(
         chunks.forEachIndexed { i, chunk ->
             coroutineContext.ensureActive()
             if (!isCurrent(owner, gen)) throw CancellationException("tts superseded")
+            // 合成失败（引擎对该块静音/报错）只跳过本块，不按取消处理：
+            // 历史 bug 是这里 throw "tts aborted"，被上层当成切段取消，主循环直接死掉（_playing 永久 true）。
             val wav = synthChunk(chunk, prefs, owner, gen)
-                ?: throw CancellationException("tts aborted")
+            if (wav == null) {
+                coroutineContext.ensureActive()
+                if (!isCurrent(owner, gen)) throw CancellationException("tts superseded")
+                return@forEachIndexed
+            }
             total += (wav.size - 44).coerceAtLeast(0)
             withContext(Dispatchers.Main) {
                 if (!isCurrent(owner, gen)) throw CancellationException("tts superseded")
