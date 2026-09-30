@@ -13,8 +13,11 @@ import kotlinx.coroutines.withContext
 
 /**
  * 微软离线直驱引擎：`EmbeddedSpeechConfig.fromPath(voiceDir)` +
- * `setSpeechSynthesisVoice(展示名, license)` + `Raw24Khz16BitMonoPcm` +
+ * `setSpeechSynthesisVoice(展示名, license)` + `Raw48Khz16BitMonoPcm`（原生 48k，免重采样）+
  * `SpeakSsml` 分块 + `AudioDataStream` 取 PCM。全程不走系统 TTS。
+ *
+ * 部分离线语音模型仅支持 24k 输出：此时自动回落到 24k + 带限内插上采样到 48k，
+ * 对外恒为 48k 单声道 16bit PCM（调用方只做单声道→立体声，不再重采样）。
  *
  * 异常语义（调用方直接透出给 UI）：
  * - UnsatisfiedLinkError/noClassDef = 设备无 arm64 runtime（如 x86_64 模拟器）
@@ -96,6 +99,9 @@ class MsEmbeddedEngine(private val context: Context) {
 
     @Volatile private var stopFlag = false
 
+    /** 各语音原生是否支持 48k 输出（首合探测后缓存，避免不支持时每次都双合）。 */
+    private val native48k = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
     fun requestStop() {
         stopFlag = true
     }
@@ -103,6 +109,10 @@ class MsEmbeddedEngine(private val context: Context) {
     /**
      * 流式合成一段文本：按句切块，每出一块 PCM 就回调一次（边合边播），
      * 返回的完整 PCM 与回调内容一致。rate/pitch 1.0 = 原速原调。
+     *
+     * 返回恒为 48kHz 单声道 16bit PCM：优先原生 48k 输出；离线模型不支持时
+     * 回落 24k + 带限内插到 48k（见 [TtsWav.upsample24kTo48kMono]）。
+     * 注意回落路径下 [onPcmChunk] 不回调（只有完整返回），原生 48k 路径才逐块回调。
      * @param isStopped 按调用域的停止谓词（默认全局 [stopFlag]，兼容老调用方；
      *   TtsWorker 传入代际 flag，避免并发/切段时互相踩）。
      */
@@ -120,14 +130,47 @@ class MsEmbeddedEngine(private val context: Context) {
         require(chunks.isNotEmpty()) { "文本为空" }
 
         stopFlag = false
+        if (native48k[voice.code] != false) {
+            val pcm48 = synthWithFormat(
+                chunks, voice, rate, pitch,
+                SpeechSynthesisOutputFormat.Raw48Khz16BitMonoPcm,
+                onPcmChunk, isStopped,
+            )
+            if (pcm48.isNotEmpty()) {
+                native48k[voice.code] = true
+                return@withContext pcm48
+            }
+            // 用户主动停止：直接返回空，不触发回落（否则一次停止会再全量合一遍 24k）
+            if (isStopped()) return@withContext ByteArray(0)
+            native48k[voice.code] = false
+        }
+        val pcm24 = synthWithFormat(
+            chunks, voice, rate, pitch,
+            SpeechSynthesisOutputFormat.Raw24Khz16BitMonoPcm,
+            null, isStopped,
+        )
+        if (pcm24.isEmpty()) return@withContext ByteArray(0)
+        TtsWav.upsample24kTo48kMono(pcm24)
+    }
+
+    /** 指定输出格式合全部分块，返回该格式下的原始 PCM（空 = 被停止或该格式不支持）。 */
+    private fun synthWithFormat(
+        chunks: List<String>,
+        voice: MsVoice,
+        rate: Float,
+        pitch: Float,
+        format: SpeechSynthesisOutputFormat,
+        onPcmChunk: ((ByteArray) -> Unit)?,
+        isStopped: () -> Boolean,
+    ): ByteArray {
         val cfg = EmbeddedSpeechConfig.fromPath(voiceDirOf(voice.code).absolutePath)
         try {
             cfg.setSpeechSynthesisVoice(voice.displayName, MsVoices.licenseFor(voice))
-            cfg.setSpeechSynthesisOutputFormat(SpeechSynthesisOutputFormat.Raw24Khz16BitMonoPcm)
+            cfg.setSpeechSynthesisOutputFormat(format)
             val synth = SpeechSynthesizer(cfg, null)
             try {
                 val pcm = ByteArrayOutputStream()
-                val buf = ByteArray(4800)
+                val buf = ByteArray(9600)
                 for (chunk in chunks) {
                     if (isStopped()) break
                     val ssml = SsmlBuilder.build(voice, chunk, rate, pitch)
@@ -151,7 +194,7 @@ class MsEmbeddedEngine(private val context: Context) {
                         runCatching { result.close() }
                     }
                 }
-                pcm.toByteArray()
+                return pcm.toByteArray()
             } finally {
                 runCatching { synth.close() }
             }

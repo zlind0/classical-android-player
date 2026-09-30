@@ -124,6 +124,60 @@ class TtsUnitTest {
     }
 
     @Test
+    fun upsample24k_evenPassthroughAndDcGain() {
+        // 偶样点必须原样直通；常数信号直流增益为 1（无响度跳变）
+        val samples = intArrayOf(0, 10000, -10000, 32767, -32768, 1234)
+        val mono = ByteArray(samples.size * 2)
+        val ib = java.nio.ByteBuffer.wrap(mono).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        samples.forEachIndexed { i, s -> ib.putShort(i * 2, s.toShort()) }
+        val out = TtsWav.upsample24kTo48kMono(mono)
+        assertEquals(samples.size * 2 * 2, out.size)
+        val ob = java.nio.ByteBuffer.wrap(out).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        samples.forEachIndexed { i, s -> assertEquals(s, ob.getShort(i * 4).toInt()) }
+        // 常数 1000：奇样点也应 ≈1000（归一化抽头保证直流通过）
+        val flat = ByteArray(64 * 2)
+        val fb = java.nio.ByteBuffer.wrap(flat).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        for (i in 0 until 64) fb.putShort(i * 2, 1000.toShort())
+        val fout = TtsWav.upsample24kTo48kMono(flat)
+        val fob = java.nio.ByteBuffer.wrap(fout).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        for (i in 0 until 64 * 2) assertEquals(1000, fob.getShort(i * 2).toInt())
+    }
+
+    @Test
+    fun upsample24k_sineMidpointBeatsLinear() {
+        // 6kHz 正弦 @24k：线性中点误差 ≈0.207·A；带限内插应远小于它
+        val amp = 10000.0
+        val n = 96
+        val mono = ByteArray(n * 2)
+        val ib = java.nio.ByteBuffer.wrap(mono).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        for (i in 0 until n) {
+            ib.putShort(i * 2, (amp * Math.sin(2 * Math.PI * 6000 * i / 24000)).toInt().toShort())
+        }
+        val out = TtsWav.upsample24kTo48kMono(mono)
+        val ob = java.nio.ByteBuffer.wrap(out).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        var maxErr = 0
+        for (i in 4 until n - 4) { // 掐头去尾，避开边缘钳位
+            val ideal = amp * Math.sin(2 * Math.PI * 6000 * (2 * i + 1) / 48000)
+            val err = Math.abs(ob.getShort((2 * i + 1) * 2).toInt() - ideal).toInt()
+            if (err > maxErr) maxErr = err
+        }
+        assertTrue("midpoint maxErr=$maxErr", maxErr < 800)
+    }
+
+    @Test
+    fun mono48k_stereoDuplicates() {
+        val mono = byteArrayOf(0xE8.toByte(), 0x03, 0x30, 0xF8.toByte()) // 1000, -2000
+        val out = TtsWav.mono48kToStereo48k(mono)
+        assertEquals(2 * 4, out.size)
+        val ob = java.nio.ByteBuffer.wrap(out).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        assertEquals(1000, ob.getShort(0).toInt())
+        assertEquals(1000, ob.getShort(2).toInt())
+        assertEquals(-2000, ob.getShort(4).toInt())
+        assertEquals(-2000, ob.getShort(6).toInt())
+        assertEquals(0, TtsWav.mono48kToStereo48k(ByteArray(0)).size)
+    }
+
+    @Test
     fun gain_passthroughAndScale() {
         // 1000, -2000（小端 16bit）
         val pcm = byteArrayOf(0xE8.toByte(), 0x03, 0x30, 0xF8.toByte())

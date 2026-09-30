@@ -2,6 +2,10 @@ package com.aurora.music.tts
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /** 最小 WAV 编解码 + 归一化：TTS 各路音频统一成 48kHz 立体声 16bit WAV 再进播放链。 */
 object TtsWav {
@@ -96,26 +100,66 @@ object TtsWav {
         return out
     }
 
-    /** 24k 单声道 16bit 直转 48k 立体声（内置引擎主路径，避免走通用浮点）。 */
-    fun mono24kToStereo48k(mono: ByteArray): ByteArray {
-        val frames = mono.size / 2
+    /**
+     * 24k→48k 2 倍上采样内插系数：截断 sinc（截止 12kHz）× Blackman 窗，奇样点用 14 抽头 FIR；
+     * 偶样点直通。直流增益归一到 1（常数信号原样通过）。
+     */
+    private val UPSAMPLE_HALF_TAPS: FloatArray = run {
+        val k = 7
+        val taps = FloatArray(2 * k)
+        for (i in taps.indices) {
+            val d = (2 * (i - k) + 1).toDouble() // ±1, ±3, …, ±13（输出样点单位）
+            val sinc = sin(PI * d / 2.0) / (PI * d / 2.0)
+            val w = 0.42 - 0.5 * cos(2 * PI * i / (2 * k - 1)) + 0.08 * cos(4 * PI * i / (2 * k - 1))
+            taps[i] = (sinc * w).toFloat()
+        }
+        val sum = taps.sum()
+        for (i in taps.indices) taps[i] /= sum
+        taps
+    }
+
+    /** 24k 单声道 16bit → 48k 单声道：带限内插（偶样点直通，奇样点 FIR），抑制 12kHz 以上镜像。 */
+    fun upsample24kTo48kMono(mono24k: ByteArray): ByteArray {
+        val frames = mono24k.size / 2
         if (frames == 0) return ByteArray(0)
-        val ib = ByteBuffer.wrap(mono).order(ByteOrder.LITTLE_ENDIAN)
-        val out = ByteArray(frames * 2 * 4)
+        val taps = UPSAMPLE_HALF_TAPS
+        val k = taps.size / 2
+        val ib = ByteBuffer.wrap(mono24k).order(ByteOrder.LITTLE_ENDIAN)
+        val out = ByteArray(frames * 2 * 2)
         val ob = ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN)
-        var prev = if (frames > 0) ib.getShort(0).toInt() else 0
         for (i in 0 until frames) {
-            val cur = ib.getShort(i * 2).toInt()
-            // ×2 上采样：偶样点=当前，奇样点=线性中点
-            ob.putShort(cur.toShort())
-            ob.putShort(cur.toShort())
-            val mid = (prev + cur) / 2
-            ob.putShort(mid.toShort())
-            ob.putShort(mid.toShort())
-            prev = cur
+            ob.putShort(ib.getShort(i * 2)) // 偶样点：原样直通
+            var acc = 0.0
+            for (j in taps.indices) {
+                val src = (i - (k - 1) + j).coerceIn(0, frames - 1)
+                acc += ib.getShort(src * 2).toInt() * taps[j]
+            }
+            ob.putShort(acc.roundToInt().coerceIn(-32768, 32767).toShort())
         }
         return out
     }
+
+    /** 48k 单声道 16bit → 48k 立体声：左右声道复制，无重采样（内置引擎原生 48k 主路径）。 */
+    fun mono48kToStereo48k(mono: ByteArray): ByteArray {
+        val frames = mono.size / 2
+        if (frames == 0) return ByteArray(0)
+        val ib = ByteBuffer.wrap(mono).order(ByteOrder.LITTLE_ENDIAN)
+        val out = ByteArray(frames * 4)
+        val ob = ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN)
+        for (i in 0 until frames) {
+            val s = ib.getShort(i * 2)
+            ob.putShort(s)
+            ob.putShort(s)
+        }
+        return out
+    }
+
+    /**
+     * 24k 单声道 16bit → 48k 立体声（内置引擎回落路径：离线模型不支持原生 48k 输出时用；
+     * 带限内插，非线性平均，听感明显好于直接 ×2）。
+     */
+    fun mono24kToStereo48k(mono: ByteArray): ByteArray =
+        mono48kToStereo48k(upsample24kTo48kMono(mono))
 
     /**
      * 48k 立体声 16bit PCM 数字增益（听书音量 0.2~2.0 用；gain==1 原样返回）。

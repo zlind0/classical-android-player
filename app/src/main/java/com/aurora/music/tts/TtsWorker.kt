@@ -344,14 +344,15 @@ class TtsWorker(
             }
         }
         val flag = stopFlags[owner] ?: AtomicBoolean(false)
-        val mono24k = msEngine.synthesizeStreaming(
+        // 内置引擎恒返回 48k 单声道（原生 48k；老模型回落 24k+带限内插），此处只做单声道→立体声
+        val mono48k = msEngine.synthesizeStreaming(
             text, voice,
             prefs.rate.coerceIn(0.5f, 2f),
             prefs.pitch.coerceIn(0.5f, 2f),
             isStopped = { flag.get() },
         )
-        if (mono24k.isEmpty() || flag.get()) return null
-        var stereo48k = TtsWav.mono24kToStereo48k(mono24k)
+        if (mono48k.isEmpty() || flag.get()) return null
+        var stereo48k = TtsWav.mono48kToStereo48k(mono48k)
         if (stereo48k.isEmpty()) return null
         stereo48k = TtsWav.applyGainStereo16(stereo48k, ttsEffectiveGain(prefs))
         return TtsWav.encodeWav(48000, 2, 16, stereo48k)
