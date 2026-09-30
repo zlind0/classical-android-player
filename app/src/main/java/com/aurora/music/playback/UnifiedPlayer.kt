@@ -48,6 +48,8 @@ enum class UnifiedSessionMode {
  * - 双播一旦进入（dualArmed）就保持 DUAL，直到用户亲手停掉其中一路；
  *   外部暂停（耳机/来电/系统暂停键）只停播放，不退出 DUAL，这样系统播放键才能双恢复。
  * - 非 DUAL 时谁在播就呈现谁。
+ * - 两路都停且非 DUAL 时返回 MUSIC，但调用方（refreshArbitration）应对此做粘滞处理：
+ *   暂停什么留什么（不切 player），起播时再按播放态强制切换，避免书暂停瞬间翻成旧歌。
  */
 fun computeUnifiedMode(
     musicPlaying: Boolean,
@@ -59,6 +61,21 @@ fun computeUnifiedMode(
     dualArmed -> UnifiedSessionMode.DUAL
     bookPlaying -> UnifiedSessionMode.BOOK
     else -> UnifiedSessionMode.MUSIC
+}
+
+/** 小部件/磁贴单路播放键路由纯函数（可单测）：暂停什么恢复什么。 */
+enum class SinglePlayTarget { BOOK, MUSIC }
+
+fun resolveSinglePlayTarget(
+    musicPlaying: Boolean,
+    bookPlaying: Boolean,
+    sessionIsUnified: Boolean,
+    hasBookmark: Boolean,
+): SinglePlayTarget = when {
+    bookPlaying -> SinglePlayTarget.BOOK
+    musicPlaying -> SinglePlayTarget.MUSIC
+    sessionIsUnified && hasBookmark -> SinglePlayTarget.BOOK
+    else -> SinglePlayTarget.MUSIC
 }
 
 /** 系统上/下曲路由纯函数（可单测）：双播只动书（音乐切换走 [DualMusicControl] 预留口）。 */
@@ -182,6 +199,9 @@ class UnifiedPlayer(
 
     /** 断点是否还在（外部暂停快照/系统播放双恢复用）。 */
     fun hasBookmark(): Boolean = lastPara != null
+
+    /** 最近断点（小部件单书恢复用；切书后已按 recents 丢弃，不会读错书）。 */
+    fun peekPara(): EbookTtsController.Para? = lastPara
 
     private fun hasItem(): Boolean = lastPara != null || bookPlaying
 

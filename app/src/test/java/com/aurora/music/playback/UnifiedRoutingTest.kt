@@ -22,7 +22,21 @@ class UnifiedRoutingTest {
     fun mode_singleFallsBack() {
         assertEquals(UnifiedSessionMode.BOOK, computeUnifiedMode(false, true, false))
         assertEquals(UnifiedSessionMode.MUSIC, computeUnifiedMode(true, false, false))
+        // 两路都停且非 DUAL 时纯函数仍回 MUSIC，粘滞（暂停留当前 player）由 refreshArbitration 负责。
         assertEquals(UnifiedSessionMode.MUSIC, computeUnifiedMode(false, false, false))
+    }
+
+    @Test
+    fun singlePlay_pauseWhatResumeWhat() {
+        // 单书在播 -> 停书；单歌在播 -> 停歌。
+        assertEquals(SinglePlayTarget.BOOK, resolveSinglePlayTarget(false, true, true, true))
+        assertEquals(SinglePlayTarget.MUSIC, resolveSinglePlayTarget(true, false, false, false))
+        // 书暂停（会话仍在书）-> 续书，不碰音乐旧队列。
+        assertEquals(SinglePlayTarget.BOOK, resolveSinglePlayTarget(false, false, true, true))
+        // 歌暂停（会话在音乐，无书断点或不在书会话）-> 动音乐。
+        assertEquals(SinglePlayTarget.MUSIC, resolveSinglePlayTarget(false, false, false, false))
+        assertEquals(SinglePlayTarget.MUSIC, resolveSinglePlayTarget(false, false, false, true))
+        assertEquals(SinglePlayTarget.MUSIC, resolveSinglePlayTarget(false, false, true, false))
     }
 
     @Test

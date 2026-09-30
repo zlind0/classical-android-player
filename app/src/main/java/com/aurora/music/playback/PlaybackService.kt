@@ -609,18 +609,35 @@ class PlaybackService : MediaLibraryService() {
 
     /**
      * 统一会话仲裁：单服务单会话，按模式换会话 player。
-     * - DUAL/BOOK → [UnifiedPlayer]（通知栏显示书的 heading/书名）；
+     * - DUAL/BOOK → [UnifiedPlayer]（通知栏显示书的 heading/书名，双播也显示书）；
      * - MUSIC → 音乐 ExoPlayer（与原来完全一致）。
+     * - 两路都停且非 DUAL 时粘滞：不切 player（暂停什么留什么），起播时再按播放态
+     *   强制切换（App 内另起一路可抢占）。避免书暂停瞬间翻成旧歌。
      * 只在模式或 player 变化时切换，控制器不断连。
      */
     private fun refreshArbitration() {
         val session = mediaSession ?: return
         val up = unifiedPlayer ?: return
-        val mode = computeUnifiedMode(player.isPlaying, ebookPlaying, dualArmed)
+        val musicPlaying = player.isPlaying
+        val bookPlaying = ebookPlaying
+        val current = runCatching { session.player }.getOrNull()
+        if (!musicPlaying && !bookPlaying && !dualArmed) {
+            up.dualControl = null
+            up.setDualMusicPlaying(false)
+            if (current === up) {
+                runCatching { session.setCustomLayout(emptyList()) }
+            } else if (current === player) {
+                updateCustomLayout()
+            } else {
+                runCatching { session.setPlayer(player) }
+                updateCustomLayout()
+            }
+            return
+        }
+        val mode = computeUnifiedMode(musicPlaying, bookPlaying, dualArmed)
         up.dualControl = if (mode == UnifiedSessionMode.DUAL) dualControl else null
         up.setDualMusicPlaying(player.isPlaying)
         val wantUnified = mode != UnifiedSessionMode.MUSIC
-        val current = runCatching { session.player }.getOrNull()
         if (wantUnified && current !== up) {
             runCatching { session.setPlayer(up) }
             runCatching { session.setCustomLayout(emptyList()) }
@@ -1144,6 +1161,7 @@ class PlaybackService : MediaLibraryService() {
             ACTION_PLAY_PAUSE -> {
                 wakeFadeActive = false
                 val up = unifiedPlayer
+                val sessionPlayer = runCatching { mediaSession?.player }.getOrNull()
                 if (dualArmed && up != null) {
                     if (player.isPlaying || ebookPlaying) {
                         noteExternalInterruption(autoResume = false, pauseMusic = true)
@@ -1151,22 +1169,44 @@ class PlaybackService : MediaLibraryService() {
                         val snap = externalSnapshot
                         externalSnapshot = null
                         if (snap?.musicWasPlaying == true) runCatching { player.play() }
-                        val para = snap?.bookPara ?: lastBookPara
+                        val para = snap?.bookPara ?: up.peekPara() ?: lastBookPara
                         if (para != null) runCatching { container.ebookTts.playFrom(para.chapter, para.block, para.startChar) }
                         if (snap?.musicWasPlaying == true && para != null) dualArmed = true
                         refreshArbitration()
+                    }
+                } else if (up != null && resolveSinglePlayTarget(
+                        musicPlaying = player.isPlaying,
+                        bookPlaying = ebookPlaying,
+                        sessionIsUnified = sessionPlayer === up,
+                        hasBookmark = up.hasBookmark(),
+                    ) == SinglePlayTarget.BOOK
+                ) {
+                    // 书单路（播或暂停）：只动书，音乐不受影响，暂停什么恢复什么。
+                    if (ebookPlaying) {
+                        runCatching { container.ebookTts.stop() }
+                    } else {
+                        val snap = externalSnapshot
+                        externalSnapshot = null
+                        val para = snap?.bookPara ?: up.peekPara() ?: lastBookPara
+                        if (para != null) runCatching { container.ebookTts.playFrom(para.chapter, para.block, para.startChar) }
                     }
                 } else {
                     if (player.isPlaying) player.pause() else player.play()
                 }
             }
             ACTION_NEXT -> {
-                if (dualArmed && ebookPlaying) {
+                val up = unifiedPlayer
+                val sessionPlayer = runCatching { mediaSession?.player }.getOrNull()
+                val bookActive = ebookPlaying || (up != null && sessionPlayer === up && up.hasBookmark())
+                if (routeSystemNav(dualArmed, player.isPlaying, bookActive) == SystemNavTarget.BOOK) {
                     if (dualControl.switchMusicFromSystem(+1) != true) container.ebookTts.next()
                 } else player.seekToNextMediaItem()
             }
             ACTION_PREV -> {
-                if (dualArmed && ebookPlaying) {
+                val up = unifiedPlayer
+                val sessionPlayer = runCatching { mediaSession?.player }.getOrNull()
+                val bookActive = ebookPlaying || (up != null && sessionPlayer === up && up.hasBookmark())
+                if (routeSystemNav(dualArmed, player.isPlaying, bookActive) == SystemNavTarget.BOOK) {
                     if (dualControl.switchMusicFromSystem(-1) != true) container.ebookTts.prev()
                 } else if (player.currentPosition > 4000) player.seekTo(0) else player.seekToPreviousMediaItem()
             }
