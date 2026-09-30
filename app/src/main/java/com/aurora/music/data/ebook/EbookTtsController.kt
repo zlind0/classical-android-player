@@ -247,13 +247,15 @@ class EbookTtsController(context: Context) {
         startAt(idx, true)
     }
 
-    /** 停止：什么都不读，高亮清除。没有暂停状态。睡眠定时按会话生效，手动停止即清除。 */
-    fun stop() {
+    /** 停止：什么都不读，高亮清除。没有暂停状态。睡眠定时按会话生效，手动停止即清除。
+     * @param savePos 是否把停在哪写盘。阅读页退出时由 UI 按眼睛位置全量落盘，
+     *   这里传 false 只停音频，避免耳朵位置后写覆盖眼睛位置。 */
+    fun stop(savePos: Boolean = true) {
         // 先把停在哪存下来：position 清掉后就没了，通知栏“继续播放”靠 bridge 的 lastPara，
         // 下次打开靠这里的 DB 行。
         val cur = _position.value
         val bp = bookPath
-        if (cur != null && bp.isNotBlank()) {
+        if (savePos && cur != null && bp.isNotBlank()) {
             store?.saveTtsPos(bp, cur.chapter, cur.block, cur.startChar)
         }
         playJob?.cancel()
@@ -263,6 +265,9 @@ class EbookTtsController(context: Context) {
         _playing.value = false
         _paraTiming.value = null
         _position.value = null
+        // turn 跨书不保留：旧书残留的翻页请求绝不能在新书打开时执行
+        //（新书 handledTurn 会重置为 null，会把旧值当成有效导航）。
+        _turn.value = null
         positionIdx = -1
         _sleepTimer.value = null
     }

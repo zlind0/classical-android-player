@@ -91,8 +91,10 @@ interface EbookDao {
     @Query("UPDATE ebooks SET spineIndex = :spine, pageIndex = :page, blockIndex = :block, charOffset = :charOff, progressPct = :pct, lastReadAt = :at WHERE path = :path")
     suspend fun saveProgress(path: String, spine: Int, page: Int, block: Int, charOff: Int, pct: Float, at: Long)
 
-    /** TTS 推进时的轻量保存：只更新章/块/字偏移 + 最近阅读，不碰页码与百分比（页由 UI 侧推导回填）。 */
-    @Query("UPDATE ebooks SET spineIndex = :spine, blockIndex = :block, charOffset = :charOff, lastReadAt = :at WHERE path = :path")
+    /** TTS 推进时的轻量保存：更新章/块/字偏移 + 最近阅读；页码归零等 UI 侧按块锚点推导回填。
+     * 页码必须一起写（不能留旧章的页），否则 DB 出现“新章 + 旧页”的杂交行，
+     * 下次打开时块锚点为章首（0,0）不触发推导，就会落在错页。 */
+    @Query("UPDATE ebooks SET spineIndex = :spine, pageIndex = 0, blockIndex = :block, charOffset = :charOff, lastReadAt = :at WHERE path = :path")
     suspend fun saveTtsPos(path: String, spine: Int, block: Int, charOff: Int, at: Long)
 
     @Query("DELETE FROM ebooks WHERE rootId = :rootId")

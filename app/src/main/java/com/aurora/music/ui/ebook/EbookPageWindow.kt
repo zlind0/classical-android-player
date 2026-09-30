@@ -53,7 +53,8 @@ fun pageForBlock(pages: List<List<PageSlice>>, block: Int): Int {
     pages.forEachIndexed { i, page ->
         if (page.any { it.block >= block }) return i
     }
-    return 0
+    // 块超出本章所有页：钳到末页（就近），不能回 0（回章首即“另一页”）。
+    return (pages.size - 1).coerceAtLeast(0)
 }
 
 /** 字所在页：同一块可能跨多页，按 (block, char) 精确定位。 */

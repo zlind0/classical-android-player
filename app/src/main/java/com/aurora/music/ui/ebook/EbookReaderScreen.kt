@@ -199,9 +199,11 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
         }
     }
 
-    // 离开阅读页停掉朗读（进目录/设置是页内状态，不经过这里）
+    // 离开阅读页停掉朗读（进目录/设置是页内状态，不经过这里）。
+    // 只停音频不写盘：最终位置由 ReaderBody 按眼睛位置（窗口 center）全量落盘，
+    // 避免 TTS 耳朵位置后写覆盖用户手动翻到的章节。
     DisposableEffect(bookPath) {
-        onDispose { container.ebookTts.stop() }
+        onDispose { container.ebookTts.stop(savePos = false) }
     }
 
     BackHandler {
@@ -384,6 +386,17 @@ private fun ReaderBody(
             onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
         }
 
+        // 应用内退出（返回键/手势返回）时眼睛位置优先：lifecycle 仍 RESUMED，
+        // 把窗口 center 全量落盘。persist 走 store 作用域，不随 composition 取消。
+        // 后台被杀时跳过（此时 center 是冻结的旧值），保留锁屏听书的 TTS 进度。
+        DisposableEffect(bookPath) {
+            onDispose {
+                if (lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                    persist(win.center)
+                }
+            }
+        }
+
         Column(Modifier.fillMaxSize()) {
             // ---- 顶栏：灰字状态，无按钮（数据源唯一：窗口 center） ----
             val curGP = win.center
@@ -488,8 +501,14 @@ private fun ReaderBody(
                         // 朗读位置直存（只写盘，不碰 pager/内存导航，导航仍走 turnRequest + pager）：
                         // TTS 每推进一段/一句、点上一首/下一首、通知栏/耳机切段都会走到这里，
                         // 同页不动 pager 时靠这行把块/字锚点落盘。
+                        // 两道守卫：别书的残留位置不写；前台用户手动翻到别的章节时
+                        // 耳朵不覆盖眼睛（后台/锁屏时 TTS 继续落盘，靠它续命）。
                         LaunchedEffect(ttsPos) {
                             val pos = ttsPos ?: return@LaunchedEffect
+                            if (tts.bookPath != bookPath) return@LaunchedEffect
+                            if (pos.chapter != win.center.chapter &&
+                                lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+                            ) return@LaunchedEffect
                             val cps = breaks[pos.chapter]?.filter { it.isNotEmpty() }.orEmpty()
                             if (cps.isEmpty()) {
                                 store.saveTtsPos(bookPath, pos.chapter, pos.block, pos.startChar)
@@ -505,14 +524,19 @@ private fun ReaderBody(
                         }
                         // 朗读翻页：段落播完/上下段跳转时翻到该字所在页（跨章同一调用），同时直存。
                         // 手势中不抢 pager：等放手后 effect 重跑再追（turnReq 是 StateFlow，值还在）。
-                        // turn 是 sticky 的（stop/setBook 不清）：同一值只导航一次，
-                        // 否则每次手势结束的重跑都会把翻页拽回过期位置，停了也翻不动。
+                        // turn 按书隔离（stop/setBook 清零，同一值只导航一次），
+                        // 否则旧书残留会把新书拽到别的章节，且每次手势结束的重跑都会拽回过期位置。
                         val turnReq by tts.turnRequest.collectAsStateWithLifecycle()
                         var handledTurn by remember(bookPath) { mutableStateOf<Triple<Int, Int, Int>?>(null) }
                         LaunchedEffect(turnReq, pager.isScrollInProgress) {
                             if (pager.isScrollInProgress) return@LaunchedEffect
                             val t = turnReq ?: return@LaunchedEffect
                             if (t == handledTurn) return@LaunchedEffect
+                            // 别书的残留翻页请求直接丢弃（换书时 stop 已清零，这里是竞态兜底）
+                            if (tts.bookPath != bookPath) {
+                                handledTurn = t
+                                return@LaunchedEffect
+                            }
                             handledTurn = t
                             val (c, b, ch) = t
                             val cps = breaks[c]?.filter { it.isNotEmpty() }.orEmpty()
