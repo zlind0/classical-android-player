@@ -135,10 +135,36 @@ class EbookTtsController(context: Context) {
     private val _sleepTimer = MutableStateFlow<SleepTimer?>(null)
     val sleepTimer: StateFlow<SleepTimer?> = _sleepTimer.asStateFlow()
 
+    /**
+     * 睡眠到点回调（AppContainer 注入）：暂停听书之外的媒体（站内音乐 + 站外系统媒体）。
+     * 看门狗在 deadline 到点即调（听书不动，读完当前再停由主循环处理）；
+     * 主循环收尾时再调一次（幂等兜底）。
+     */
+    var onSleepSideMedia: (() -> Unit)? = null
+
+    /** 到点看门狗：定时设置即装，到点只停旁路媒体；手动停/取消/到点收尾时拆除。 */
+    private var sleepWatchJob: kotlinx.coroutines.Job? = null
+
+    private fun armSleepWatchdog() {
+        sleepWatchJob?.cancel()
+        val deadline = _sleepTimer.value?.deadlineElapsed ?: return
+        val waitMs = (deadline - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(0)
+        sleepWatchJob = scope.launch(Dispatchers.IO) {
+            kotlinx.coroutines.delay(waitMs)
+            runCatching { onSleepSideMedia?.invoke() }
+        }
+    }
+
+    private fun disarmSleepWatchdog() {
+        sleepWatchJob?.cancel()
+        sleepWatchJob = null
+    }
+
     /** 倒计时：从现在起 minutes 分钟后到点。 */
     fun setSleepMinutes(minutes: Int) {
         if (minutes <= 0) {
             _sleepTimer.value = null
+            disarmSleepWatchdog()
             return
         }
         _sleepTimer.value = SleepTimer(
@@ -146,6 +172,7 @@ class EbookTtsController(context: Context) {
             totalMinutes = minutes,
             clockLabel = null,
         )
+        armSleepWatchdog()
     }
 
     /** 定时：下一个 HH:mm 到点（已过则明天）。 */
@@ -156,10 +183,12 @@ class EbookTtsController(context: Context) {
             totalMinutes = null,
             clockLabel = "%02d:%02d".format(hour, minute),
         )
+        armSleepWatchdog()
     }
 
     fun cancelSleepTimer() {
         _sleepTimer.value = null
+        disarmSleepWatchdog()
     }
 
     /** 系统 TTS 可选音色（初始化后可用）。 */
@@ -271,6 +300,7 @@ class EbookTtsController(context: Context) {
         _turn.value = null
         positionIdx = -1
         _sleepTimer.value = null
+        disarmSleepWatchdog()
     }
 
     fun prev() {
@@ -314,6 +344,7 @@ class EbookTtsController(context: Context) {
         player?.stop()
         // 已过期的定时直接清除，避免下次起读播一句即停
         _sleepTimer.value?.let { if (android.os.SystemClock.elapsedRealtime() >= it.deadlineElapsed) _sleepTimer.value = null }
+        if (_sleepTimer.value == null) disarmSleepWatchdog()
         val job = scope.launch(Dispatchers.IO) {
             try {
                 _playing.value = true
@@ -387,13 +418,17 @@ class EbookTtsController(context: Context) {
             }
             stream.awaitDone()
             if (!stream.isAlive()) return // 被 stop/切段作废
-            // 睡眠定时：本单位读完后若已到点就停（一次性，读完这段/句再停）
+            // 睡眠定时：本单位读完后若已到点就停（一次性，读完这段/句再停），
+            // 同时停掉旁路媒体（看门狗已在到点执行过，这里幂等兜底）。
             _sleepTimer.value?.let { st ->
                 if (android.os.SystemClock.elapsedRealtime() >= st.deadlineElapsed) {
                     _sleepTimer.value = null
+                    disarmSleepWatchdog()
                     _notice.value = "睡眠定时已到，停止朗读"
                     _paraTiming.value = null
                     _playing.value = false
+                    runCatching { player?.stop() }
+                    runCatching { onSleepSideMedia?.invoke() }
                     return
                 }
             }

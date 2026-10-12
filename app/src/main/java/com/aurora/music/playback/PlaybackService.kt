@@ -1212,6 +1212,14 @@ class PlaybackService : MediaLibraryService() {
             }
             ACTION_ALARM -> startAlarmPlayback()
             ACTION_ALARM_DISMISS -> dismissAlarm()
+            // 睡眠定时到点：只停音乐（听书由 EbookTtsController 读完当前再停，不在这里动）。
+            ACTION_SLEEP_PAUSE -> {
+                runCatching { if (::player.isInitialized && player.isPlaying) player.pause() }
+                val musicActive = runCatching { ::player.isInitialized && player.isPlaying }.getOrDefault(false)
+                val bookActive = ebookPlaying ||
+                    runCatching { container.ebookTts.playing.value }.getOrDefault(false)
+                if (!musicActive && !bookActive) stopSelf()
+            }
         }
         return super.onStartCommand(intent, flags, startId)
     }
@@ -1342,6 +1350,7 @@ class PlaybackService : MediaLibraryService() {
         const val ACTION_PREV = "com.aurora.music.action.PREV"
         const val ACTION_ALARM = "com.aurora.music.action.ALARM"
         const val ACTION_ALARM_DISMISS = "com.aurora.music.action.ALARM_DISMISS"
+        const val ACTION_SLEEP_PAUSE = "com.aurora.music.action.SLEEP_PAUSE"
         private const val ALARM_NOTIF_ID = 0xA1A
 
         // 书单播拉起统一服务的入口（占位前台防超时崩溃，见 startPlaceholderForeground）。
@@ -1359,6 +1368,16 @@ class PlaybackService : MediaLibraryService() {
             } else {
                 context.startService(intent)
             }
+        }
+
+        /**
+         * 睡眠定时到点停音乐：只投递 intent（服务在跑即处理，不在跑则在 handler 里自停，
+         * 不拉前台）。后台投递失败（服务没跑且应用在后台）由 runCatching 吞掉，
+         * 此时站内本就没在播，无需处理。
+         */
+        fun pauseMusicForSleep(context: Context) {
+            val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_SLEEP_PAUSE)
+            runCatching { context.startService(intent) }
         }
     }
 }

@@ -217,10 +217,32 @@ class AppContainer(context: Context) {
         it.player = ebookTtsPlayer
         it.tts = ttsWorker
         it.store = ebookStore
+        it.onSleepSideMedia = { pauseSideMediaForSleep() }
         songIntro.tts = ttsWorker
     }
 
     val visualizer = com.aurora.music.playback.VisualizerController(scope)
+
+    /**
+     * 睡眠定时到点：暂停听书之外的媒体（站内音乐 + 站外系统媒体）。
+     * 听书由 EbookTtsController 读完当前再停，不在这里动。幂等多调无害。
+     */
+    fun pauseSideMediaForSleep() {
+        scope.launch(Dispatchers.IO) {
+            // 站内音乐：经统一服务只停音乐一路
+            runCatching { com.aurora.music.playback.PlaybackService.pauseMusicForSleep(appContext) }
+            // 站外系统媒体：给当前系统媒体会话发暂停键
+            runCatching {
+                val am = appContext.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                am.dispatchMediaKeyEvent(
+                    android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE),
+                )
+                am.dispatchMediaKeyEvent(
+                    android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE),
+                )
+            }
+        }
+    }
 
     @Volatile
     private var lrclibEnabled: Boolean = true

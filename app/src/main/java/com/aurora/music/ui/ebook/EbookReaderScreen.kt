@@ -1213,6 +1213,25 @@ private fun EbookOptionsPage(
         EbookTheme.DARK -> 2
     }
     val th = themeOf(prefs.theme)
+    // 睡眠定时标题倒计时（分:秒）：section 标题在 LazyListScope（非 @Composable）里求值，
+    // 状态收集与秒级 tick 必须提到函数体，标题算好字符串再传进去。
+    val sleepTimerState by container.ebookTts.sleepTimer.collectAsStateWithLifecycle()
+    var sleepNow by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
+    LaunchedEffect(sleepTimerState) {
+        if (sleepTimerState == null) return@LaunchedEffect
+        while (true) {
+            delay(1_000)
+            sleepNow = android.os.SystemClock.elapsedRealtime()
+        }
+    }
+    val sleepTitle = remember(sleepTimerState, sleepNow) {
+        val t = sleepTimerState
+        if (t == null) "睡眠定时"
+        else {
+            val remainMs = (t.deadlineElapsed - sleepNow).coerceAtLeast(0)
+            "睡眠定时 ${remainMs / 60_000}:${"%02d".format((remainMs % 60_000) / 1_000)}"
+        }
+    }
     Box(Modifier.fillMaxSize().background(th.bg)) {
         Ios5SettingsPage(title = "阅读设置", onBack = onBack) {
             ios5Section("进度跳转") {
@@ -1422,15 +1441,22 @@ private fun EbookOptionsPage(
             }
             Ios5StaticText("与歌曲介绍的语音为同一设置，音量与压低开关两处互通。")
         }
-        ios5Section("睡眠定时") {
-            val timer by container.ebookTts.sleepTimer.collectAsStateWithLifecycle()
-            val countMinutes = listOf(0, 15, 30, 45, 60)
-            Ios5SegmentRow(
+        ios5Section(sleepTitle) {
+            val timer = sleepTimerState
+            val countOptions = listOf(0, 5, 10, 20, 30, 45, 60, 90, 120, 240)
+            val selIdx = timer?.totalMinutes?.let { countOptions.indexOf(it) }?.takeIf { it >= 0 } ?: 0
+            // 拖动只改本地预览，抬手才落盘，避免反复重设定时
+            var draftIdx by remember(timer) { mutableFloatStateOf(selIdx.toFloat()) }
+            val draftInt = draftIdx.toInt().coerceIn(countOptions.indices)
+            Ios5SliderRow(
                 title = "倒计时",
-                options = listOf("关闭", "15分钟", "30分钟", "45分钟", "60分钟"),
-                selected = countMinutes.indexOf(timer?.totalMinutes ?: 0).takeIf { it >= 0 } ?: 0,
-                onSelect = {
-                    val m = countMinutes[it]
+                valueLabel = if (draftInt == 0) "关闭" else "${countOptions[draftInt]}分钟",
+                value = draftIdx,
+                range = 0f..(countOptions.size - 1).toFloat(),
+                steps = countOptions.size - 2,
+                onValueChange = { draftIdx = it },
+                onValueChangeFinished = {
+                    val m = countOptions[draftIdx.toInt().coerceIn(countOptions.indices)]
                     if (m == 0) container.ebookTts.cancelSleepTimer()
                     else container.ebookTts.setSleepMinutes(m)
                 },
@@ -1462,9 +1488,9 @@ private fun EbookOptionsPage(
                 }
                 val remainMin = ((cur.deadlineElapsed - nowMs + 59_999) / 60_000).coerceAtLeast(1)
                 val unitName = if (ttsUnit == EbookTtsUnit.SENTENCE) "句" else "段"
-                Ios5StaticText("约 $remainMin 分钟后停止，将读完当前${unitName}再停。手动停止朗读会清除定时。")
+                Ios5StaticText("约 $remainMin 分钟后到点：听书读完当前${unitName}再停，音乐与站外媒体到点即停。手动停止朗读会清除定时。")
             } else {
-                Ios5StaticText("到点后读完当前再停。倒计时与定时二选一，后设的生效；选关闭可清除定时。")
+                Ios5StaticText("到点后听书读完当前再停，音乐与站外媒体到点即停。倒计时与定时二选一，后设的生效；倒计时滑到关闭可清除定时。")
             }
         }
     }
