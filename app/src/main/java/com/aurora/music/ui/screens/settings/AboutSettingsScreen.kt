@@ -1,6 +1,7 @@
 package com.aurora.music.ui.screens.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -24,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
+import com.aurora.music.BuildConfig
 import com.aurora.music.R
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5Colors
@@ -89,6 +91,31 @@ fun AboutSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
             InfoRow(strEngineLabel, strEngineValue)
         }
         ios5FootNote(strFooter)
+        item {
+            val context = LocalContext.current
+            val gitHash = BuildConfig.GIT_HASH
+            Text(
+                stringResource(R.string.about_git_hash, gitHash),
+                color = Ios5Colors.TextSecondary,
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 8.dp)
+                    .clickable {
+                        val clipboard =
+                            context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                as android.content.ClipboardManager
+                        clipboard.setPrimaryClip(
+                            android.content.ClipData.newPlainText("git-hash", gitHash),
+                        )
+                        android.widget.Toast.makeText(
+                            context,
+                            context.getString(R.string.about_git_copied, gitHash),
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    },
+            )
+        }
         item { Spacer(Modifier.height(8.dp)) }
     }
 }

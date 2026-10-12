@@ -471,6 +471,8 @@
     <string name="about_engine">播放引擎</string>
     <string name="about_engine_value">AndroidX Media3 (ExoPlayer)</string>
     <string name="about_footer">Jetpack Compose 和 Material 3 构建。\n只放本机的音乐——不需要账号。</string>
+    <string name="about_git_hash">Git commit：%1$s</string>
+    <string name="about_git_copied">已复制 commit hash：%1$s</string>
     <string name="profile_settings">设置</string>
 
     <!-- Sonic -->

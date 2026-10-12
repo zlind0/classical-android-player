@@ -474,6 +474,8 @@
     <string name="about_engine">Playback engine</string>
     <string name="about_engine_value">AndroidX Media3 (ExoPlayer)</string>
     <string name="about_footer">Built with Jetpack Compose &amp; Material 3.\nPlays music stored on this device — no account needed.</string>
+    <string name="about_git_hash">Git commit: %1$s</string>
+    <string name="about_git_copied">Commit hash copied: %1$s</string>
     <string name="profile_settings">Settings</string>
 
     <!-- Sonic -->

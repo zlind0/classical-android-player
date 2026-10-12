@@ -5,6 +5,26 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// Short commit hash (+ "-dirty" when the worktree has uncommitted changes) so the
+// About page shows exactly which revision is under test. Falls back to "unknown"
+// when git is unavailable (e.g. source archive without .git).
+fun gitHash(): String {
+    fun runGit(vararg args: String): String? = try {
+        val proc = ProcessBuilder("git", *args)
+            .directory(rootDir)
+            .redirectErrorStream(true)
+            .start()
+        val out = proc.inputStream.bufferedReader().readText().trim()
+        val code = proc.waitFor()
+        if (code == 0 && out.isNotEmpty()) out else null
+    } catch (_: Exception) {
+        null
+    }
+    val hash = runGit("rev-parse", "--short", "HEAD") ?: return "unknown"
+    val dirty = runGit("status", "--porcelain")?.isNotEmpty() == true
+    return if (dirty) "$hash-dirty" else hash
+}
+
 android {
     namespace = "com.aurora.music"
     compileSdk = 35
@@ -21,6 +41,8 @@ android {
         vectorDrawables { useSupportLibrary = true }
         // Native AcoustID/Chromaprint fingerprinter (4.4c). arm64 for the phone, x86_64 for emulators.
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        // About page shows which commit is under test; injected at build time.
+        buildConfigField("String", "GIT_HASH", "\"${gitHash()}\"")
     }
 
     externalNativeBuild {
@@ -60,6 +82,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     lint {
         // Classical fork regression baseline (plan §66 v0.1.0): pre-existing findings frozen here.
