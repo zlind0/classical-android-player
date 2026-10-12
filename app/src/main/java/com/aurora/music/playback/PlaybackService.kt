@@ -1212,9 +1212,13 @@ class PlaybackService : MediaLibraryService() {
             }
             ACTION_ALARM -> startAlarmPlayback()
             ACTION_ALARM_DISMISS -> dismissAlarm()
-            // 睡眠定时到点：只停音乐（听书由 EbookTtsController 读完当前再停，不在这里动）。
+            // 睡眠定时到点：音乐走淡出通道（渐弱后停），听书由 EbookTtsController 读完当前再停，不在这里动。
             ACTION_SLEEP_PAUSE -> {
-                runCatching { if (::player.isInitialized && player.isPlaying) player.pause() }
+                if (runCatching { ::player.isInitialized && player.isPlaying }.getOrDefault(false)) {
+                    sleepFadeMs = 6_000
+                    sleepFadeStartMs = android.os.SystemClock.elapsedRealtime()
+                    sleepFadeActive = true
+                }
                 val musicActive = runCatching { ::player.isInitialized && player.isPlaying }.getOrDefault(false)
                 val bookActive = ebookPlaying ||
                     runCatching { container.ebookTts.playing.value }.getOrDefault(false)

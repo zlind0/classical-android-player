@@ -50,8 +50,6 @@ data class PlayerUiState(
     val matchPitch: Boolean = true,
     val likedIds: Set<String> = emptySet(),
     val currentIndex: Int = 0,
-    val sleepTimerMinutes: Int = 0,
-    val sleepEndOfTrack: Boolean = false,
     val bpm: Int = 0,
     val camelot: String = "",
     val keyName: String = "",
@@ -74,7 +72,6 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private var controller: MediaController? = null
     private var ticker: Job? = null
-    private var sleepJob: Job? = null
     private var queueFillJob: Job? = null
     private var songById: Map<String, Song> = emptyMap()
 
@@ -105,18 +102,12 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             syncFromController()
             if (events.contains(Player.EVENT_PLAYBACK_STATE_CHANGED) && player.playbackState == Player.STATE_ENDED) {
                 maybeAutoplay()
-                // last track has no transition to honour the end-of-track sleep so do it here
-                if (_state.value.sleepEndOfTrack) { controller?.pause(); _state.update { it.copy(sleepEndOfTrack = false) } }
             }
         }
 
         override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
             // reset position so the bar doesn't show the previous track during the gap usb sink lags across a skip
             _state.update { it.copy(positionSec = 0f) }
-            if (_state.value.sleepEndOfTrack && reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
-                controller?.pause()
-                _state.update { it.copy(sleepEndOfTrack = false) }
-            }
             item?.mediaId?.let { maybeRevive(it) }
         }
 
@@ -325,34 +316,6 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             )
         }
         songById = songs.associateBy { it.id }
-    }
-
-    fun setSleepTimer(minutes: Int) {
-        sleepJob?.cancel()
-        sendSleepFade(start = false)
-        _state.update { it.copy(sleepTimerMinutes = minutes, sleepEndOfTrack = false) }
-        if (minutes <= 0) return
-        sleepJob = viewModelScope.launch {
-            val total = minutes * 60_000L
-            delay((total - SLEEP_FADE_MS).coerceAtLeast(0L))
-            sendSleepFade(start = true)
-            _state.update { it.copy(sleepTimerMinutes = 0) }
-        }
-    }
-
-    fun setSleepEndOfTrack() {
-        sleepJob?.cancel()
-        sendSleepFade(start = false)
-        _state.update { it.copy(sleepTimerMinutes = 0, sleepEndOfTrack = true) }
-    }
-
-    private fun sendSleepFade(start: Boolean) {
-        controller?.sendCustomCommand(
-            SessionCommand(PlaybackService.CMD_SLEEP_FADE, android.os.Bundle().apply {
-                putInt("fadeMs", if (start) SLEEP_FADE_MS.toInt() else 0)
-            }),
-            android.os.Bundle.EMPTY,
-        )
     }
 
     fun setPreferredDevice(deviceId: Int) {
@@ -838,7 +801,6 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     private companion object {
-        const val SLEEP_FADE_MS = 6_000L
         // each MediaItem's parcelled metadata (artwork uri, title/artist/album, extras) is a few KB;
         // a binder transaction caps near 1mb, so a few hundred full items can silently get truncated
         // by the session. deliverQueue keeps the initial setMediaItems call well under that.

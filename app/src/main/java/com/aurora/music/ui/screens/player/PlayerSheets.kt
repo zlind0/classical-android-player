@@ -4,10 +4,8 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -78,56 +76,6 @@ fun OutputDeviceSheet(currentId: Int, onSelect: (Int) -> Unit, onDismiss: () -> 
                     Spacer(Modifier.width(14.dp))
                     Text(d.label, style = MaterialTheme.typography.titleSmall, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium, color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                     if (selected) Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary)
-                }
-            }
-        }
-    }
-}
-
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-@Composable
-fun SleepTimerSheet(
-    currentMinutes: Int,
-    endOfTrack: Boolean,
-    onSelect: (Int) -> Unit,
-    onEndOfTrack: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val options = listOf(
-        0 to stringResource(R.string.sheet_sleep_off),
-        5 to stringResource(R.string.sheet_sleep_5),
-        15 to stringResource(R.string.sheet_sleep_15),
-        30 to stringResource(R.string.sheet_sleep_30),
-        45 to stringResource(R.string.sheet_sleep_45),
-        60 to stringResource(R.string.sheet_sleep_60),
-    )
-    val status = when {
-        endOfTrack -> stringResource(R.string.sheet_sleep_end_of_track)
-        currentMinutes > 0 -> stringResource(R.string.sheet_sleep_in, currentMinutes)
-        else -> stringResource(R.string.sheet_sleep_hint)
-    }
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp)) {
-            Text(stringResource(R.string.sheet_sleep_timer), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, modifier = Modifier.padding(bottom = 4.dp))
-            Text(status, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(16.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                options.forEach { (min, label) ->
-                    val selected = !endOfTrack && min == currentMinutes
-                    Box(
-                        Modifier.clip(RoundedCornerShape(50))
-                            .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
-                            .clickable { onSelect(min); onDismiss() }.padding(horizontal = 20.dp, vertical = 12.dp),
-                    ) {
-                        Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
-                    }
-                }
-                Box(
-                    Modifier.clip(RoundedCornerShape(50))
-                        .background(if (endOfTrack) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
-                        .clickable { onEndOfTrack(); onDismiss() }.padding(horizontal = 20.dp, vertical = 12.dp),
-                ) {
-                    Text(stringResource(R.string.sheet_end_of_track), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = if (endOfTrack) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
                 }
             }
         }

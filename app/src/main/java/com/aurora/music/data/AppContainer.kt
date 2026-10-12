@@ -211,13 +211,18 @@ class AppContainer(context: Context) {
     val ebookTtsPlayer = com.aurora.music.playback.EbookTtsPlayer(appContext, settingsStore, audioSessionId, duckable = true)
     val introTtsPlayer = com.aurora.music.playback.EbookTtsPlayer(appContext, settingsStore, audioSessionId)
     val ttsWorker = com.aurora.music.tts.TtsWorker(appContext, settingsStore, ebookTtsPlayer, introTtsPlayer)
+    // 全局睡眠定时后台：电子书选项页与音乐页月亮气泡共用，进程活着就一直记着
+    val sleepTimer: SleepTimerWorker = SleepTimerWorker().also {
+        it.onFired = { pauseSideMediaForSleep() }
+    }
     val ebookTts = com.aurora.music.data.ebook.EbookTtsController(appContext).also {
         it.prefs = ebookPrefs
         it.settings = settingsStore
         it.player = ebookTtsPlayer
         it.tts = ttsWorker
         it.store = ebookStore
-        it.onSleepSideMedia = { pauseSideMediaForSleep() }
+        it.sleep = sleepTimer
+        sleepTimer.primaryActive = { runCatching { it.playing.value }.getOrDefault(false) }
         songIntro.tts = ttsWorker
     }
 

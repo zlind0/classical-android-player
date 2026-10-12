@@ -3,6 +3,7 @@ package com.aurora.music.ui.player
 import android.app.Activity
 import android.content.Context
 import android.media.AudioManager
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -30,6 +31,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -46,6 +48,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -76,9 +80,11 @@ import com.aurora.music.ui.components.TrackArtwork
 import com.aurora.music.ui.components.formatTime
 import com.aurora.music.ui.ios5.Ios5Sans
 import com.aurora.music.ui.ios5.Ios5Slider
+import com.aurora.music.ui.ios5.Ios5SliderRow
 import com.aurora.music.viewmodel.PlayerUiState
 import com.aurora.music.viewmodel.RepeatMode
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 
 private val iPodBlack = Brush.verticalGradient(
     0f to Color(0xFF3D434C),
@@ -207,6 +213,12 @@ fun Ios5PlayerPage(
     // 合并标题：扫描预计算表 + 内存曲目表同步查出，无 IO、无协程、无分词；
     // 两栈各查各的表（MEDIastore 查 localLibrary，FILE 查 musicRoots），永不串台
     val merged = rememberMergedTitle(song)
+
+    // 睡眠定时（全局后台，与电子书选项页共用）：月亮键开气泡设定
+    val container = (context.applicationContext as AuroraApplication).container
+    val sleepState by container.sleepTimer.timer.collectAsStateWithLifecycle()
+    var sleepBubble by remember { mutableStateOf(false) }
+    BackHandler(sleepBubble) { sleepBubble = false }
 
     BoxWithConstraints(
         // 根吃掉所有点按：背景不挡触摸，没有这层，点封面会漏到后面内容面的列表行上导致切歌
@@ -387,6 +399,16 @@ fun Ios5PlayerPage(
                             onClick = onToggleShuffle,
                         ).padding(9.dp),
                 )
+                Icon(
+                    Icons.Filled.Bedtime, "睡眠定时",
+                    tint = if (sleepState != null) Color(0xFF0A60D6) else Color(0xFF6B7280),
+                    modifier = Modifier.size(40.dp).clip(CircleShape)
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() },
+                            onClick = { sleepBubble = true },
+                        ).padding(9.dp),
+                )
             }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0xFF9AA0A8)))
@@ -445,6 +467,116 @@ fun Ios5PlayerPage(
             )
         }
     }
+        // 睡眠定时气泡（与电子书选项页同一后台）：根 Box 的直接子级，盖住整页；罩层点外部关闭
+        if (sleepBubble) {
+            SleepBubble(onDismiss = { sleepBubble = false })
+        }
+    }
+}
+
+// ---- 睡眠定时气泡：倒计时滑块（电子书选项页同款档位）+ 定时停止 + 剩余分:秒 ----
+// 同一全局后台（container.sleepTimer），两边后设的生效、两边显示同一剩余。
+
+@Composable
+private fun SleepBubble(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val container = (context.applicationContext as AuroraApplication).container
+    val sleep = container.sleepTimer
+    val timer by sleep.timer.collectAsStateWithLifecycle()
+    var nowMs by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
+    LaunchedEffect(timer) {
+        if (timer == null) return@LaunchedEffect
+        while (true) {
+            delay(1_000)
+            nowMs = android.os.SystemClock.elapsedRealtime()
+        }
+    }
+    val remainText = remember(timer, nowMs) {
+        val t = timer ?: return@remember "未设置"
+        val ms = (t.deadlineElapsed - nowMs).coerceAtLeast(0)
+        "%d:%02d".format(ms / 60_000, (ms % 60_000) / 1_000)
+    }
+    Box(
+        Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f))
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() },
+                onClick = onDismiss,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier.fillMaxWidth(0.88f)
+                .clip(RoundedCornerShape(14.dp)).background(Color.White)
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() },
+                    onClick = {},
+                )
+                .padding(horizontal = 4.dp, vertical = 8.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "睡眠定时", color = Color.Black, fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(remainText, color = Color(0xFF0A60D6), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            }
+            val countOptions = listOf(0, 5, 10, 20, 30, 45, 60, 90, 120, 240)
+            val selIdx = timer?.totalMinutes?.let { countOptions.indexOf(it) }?.takeIf { it >= 0 } ?: 0
+            var draftIdx by remember(timer) { mutableFloatStateOf(selIdx.toFloat()) }
+            val draftInt = draftIdx.toInt().coerceIn(countOptions.indices)
+            Ios5SliderRow(
+                title = "倒计时",
+                valueLabel = if (draftInt == 0) "关闭" else "${countOptions[draftInt]}分钟",
+                value = draftIdx,
+                range = 0f..(countOptions.size - 1).toFloat(),
+                steps = countOptions.size - 2,
+                onValueChange = { draftIdx = it },
+                onValueChangeFinished = {
+                    val m = countOptions[draftIdx.toInt().coerceIn(countOptions.indices)]
+                    if (m == 0) sleep.cancel() else sleep.setMinutes(m)
+                },
+            )
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("定时停止", color = Color.Black, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        timer?.clockLabel?.let { "$it（读完当前再停）" } ?: "未设置",
+                        color = Color(0xFF8E8E93), fontSize = 13.sp,
+                    )
+                }
+                Text(
+                    "设置", color = Color(0xFF0A60D6), fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable {
+                        val c = java.util.Calendar.getInstance()
+                        android.app.TimePickerDialog(
+                            context,
+                            { _, h, m -> sleep.setAt(h, m) },
+                            c.get(java.util.Calendar.HOUR_OF_DAY),
+                            c.get(java.util.Calendar.MINUTE),
+                            true,
+                        ).show()
+                    }.padding(8.dp),
+                )
+            }
+            if (timer != null) {
+                Box(
+                    Modifier.fillMaxWidth()
+                        .clickable(onClick = { sleep.cancel() })
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("关闭定时", color = Color(0xFFD63A3A), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
     }
 }
 

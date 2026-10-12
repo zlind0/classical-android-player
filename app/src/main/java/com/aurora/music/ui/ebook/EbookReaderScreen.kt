@@ -1488,7 +1488,7 @@ private fun EbookOptionsPage(
                 }
                 val remainMin = ((cur.deadlineElapsed - nowMs + 59_999) / 60_000).coerceAtLeast(1)
                 val unitName = if (ttsUnit == EbookTtsUnit.SENTENCE) "句" else "段"
-                Ios5StaticText("约 $remainMin 分钟后到点：听书读完当前${unitName}再停，音乐与站外媒体到点即停。手动停止朗读会清除定时。")
+                Ios5StaticText("约 $remainMin 分钟后到点：听书读完当前${unitName}再停，音乐与站外媒体到点即停。手动停止朗读不清定时（后台一直记着），与音乐页月亮共用同一后台。")
             } else {
                 Ios5StaticText("到点后听书读完当前再停，音乐与站外媒体到点即停。倒计时与定时二选一，后设的生效；倒计时滑到关闭可清除定时。")
             }
