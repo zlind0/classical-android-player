@@ -45,6 +45,8 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -100,6 +102,7 @@ import com.aurora.music.tts.TtsEngineInfo
 import com.aurora.music.ui.components.LottieLoader
 import com.aurora.music.ui.ios5.Ios5ActionRow
 import com.aurora.music.ui.ios5.Ios5CellDivider
+import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5GlossButton
 import com.aurora.music.ui.ios5.Ios5NavBar
 import com.aurora.music.ui.ios5.Ios5NavRow
@@ -109,7 +112,6 @@ import com.aurora.music.ui.ios5.Ios5SettingsPage
 import com.aurora.music.ui.ios5.Ios5SliderRow
 import com.aurora.music.ui.ios5.Ios5StaticText
 import com.aurora.music.ui.ios5.Ios5SwitchRow
-import com.aurora.music.ui.ios5.Ios5TextRow
 import com.aurora.music.ui.ios5.ios5FootNote
 import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.ui.ios5.ios5Section
@@ -1171,6 +1173,15 @@ private fun EbookOptionsPage(
     }
     var engineOpen by remember { mutableStateOf(false) }
     var voiceOpen by remember { mutableStateOf(false) }
+    // 仅阅读选项页显示系统状态栏：进页即显示，退出恢复隐藏（其他页面不动）。
+    DisposableEffect(Unit) {
+        val activity = context as? Activity
+        val controller = activity?.let { WindowCompat.getInsetsController(it.window, it.window.decorView) }
+        controller?.show(WindowInsetsCompat.Type.statusBars())
+        onDispose {
+            controller?.hide(WindowInsetsCompat.Type.statusBars())
+        }
+    }
     BackHandler(engineOpen || voiceOpen) {
         if (voiceOpen) voiceOpen = false else engineOpen = false
     }
@@ -1206,20 +1217,39 @@ private fun EbookOptionsPage(
         Ios5SettingsPage(title = "阅读设置", onBack = onBack) {
             ios5Section("进度跳转") {
                 var draft by remember(bookPath) { mutableStateOf("") }
-                Ios5TextRow(
-                    title = "唯一编码",
-                    value = draft,
-                    placeholder = "如 12:34（章:段）",
-                    onValueChange = { draft = it },
-                )
-                Ios5CellDivider()
-                Ios5ActionRow(title = "跳转") {
+                fun doJump() {
                     val a = EbookAnchorCode.decode(draft, book)
                     if (a == null) onToast("编码无效，如 12:34")
                     else onJumpAnchor(a.chapter, a.block)
                 }
-                Ios5CellDivider()
-                Ios5StaticText("编码为章:段，与目录无关，没有目录指向的章节也能跳。")
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        placeholder = { Text("如 12:34", fontSize = 14.sp) },
+                        singleLine = true,
+                        textStyle = androidx.compose.ui.text.TextStyle(color = Color.Black, fontSize = 15.sp),
+                        modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)),
+                        colors = TextFieldDefaults.colors(
+                            focusedTextColor = Color.Black,
+                            unfocusedTextColor = Color.Black,
+                            disabledTextColor = Color.Black,
+                            cursorColor = Color.Black,
+                            focusedContainerColor = Ios5Colors.GroupBg,
+                            unfocusedContainerColor = Ios5Colors.GroupBg,
+                            disabledContainerColor = Ios5Colors.GroupBg,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            focusedPlaceholderColor = Color(0xFF8E8E93),
+                            unfocusedPlaceholderColor = Color(0xFF8E8E93),
+                        ),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Ios5GlossButton("跳转", onClick = ::doJump)
+                }
             }
             ios5Section("进度历史") {
                 var history by remember(bookPath) {
@@ -1231,8 +1261,10 @@ private fun EbookOptionsPage(
                 if (history.isEmpty()) {
                     Ios5StaticText("暂无历史")
                 } else {
+                    var expanded by remember(bookPath) { mutableStateOf(false) }
+                    val visible = if (expanded) history else history.take(5)
                     val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
-                    history.forEachIndexed { i, h ->
+                    visible.forEachIndexed { i, h ->
                         if (i > 0) Ios5CellDivider()
                         val sec = TocSection.currentEntry(book.toc, h.spine, h.block)
                             .takeIf { it >= 0 }?.let { book.toc[it].title.trim() }.orEmpty()
@@ -1243,9 +1275,14 @@ private fun EbookOptionsPage(
                             onClick = { onJumpAnchor(h.spine, h.block) },
                         )
                     }
+                    if (history.size > 5) {
+                        Ios5CellDivider()
+                        Ios5ActionRow(
+                            title = if (expanded) "收起" else "更多",
+                            onClick = { expanded = !expanded },
+                        )
+                    }
                 }
-                Ios5CellDivider()
-                Ios5StaticText("每分钟只留最后一条，共留 30 个有记录的分钟；点一条跳到那条历史。")
             }
             ios5Section("页面风格") {
             Ios5SegmentRow(
