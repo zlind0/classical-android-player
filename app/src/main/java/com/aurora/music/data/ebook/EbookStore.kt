@@ -317,35 +317,71 @@ class EbookStore(context: Context, private val dao: EbookDao) {
         }
     }
 
-    // ---- 进度 ----
+    // ---- 进度（唯一编码章:段 + 每书 30 个自然分钟历史） ----
 
-    /** 完整保存：页 + 块/字锚点 + 百分比。同步版本供 onPause/onDispose 兜底直写。 */
+    /** 进度历史条目（UI 按 book.toc + TocSection 补标题）。 */
+    data class EbookProgressItem(
+        val anchorCode: String,
+        val spine: Int,
+        val block: Int,
+        val updatedAt: Long,
+        val minuteBucket: Long,
+    )
+
+    private suspend fun recordHistory(path: String, spine: Int, block: Int, at: Long) {
+        val code = EbookAnchorCode.encode(spine, block)
+        dao.upsertHistory(
+            EbookProgressHistoryRow(
+                path = path, minuteBucket = EbookAnchorCode.minuteStart(at),
+                anchorCode = code, spine = spine, block = block, updatedAt = at,
+            ),
+        )
+        dao.pruneHistory(path)
+    }
+
+    /** 完整保存：页 + 块/字锚点 + 百分比 + 唯一编码 + 历史。同步版本供 onPause/onDispose 兜底直写。 */
     suspend fun saveProgressSync(path: String, spine: Int, page: Int, block: Int, char: Int, pct: Float) =
         withContext(Dispatchers.IO) {
-            dao.saveProgress(path, spine, page, block, char, pct, System.currentTimeMillis())
+            val at = System.currentTimeMillis()
+            dao.saveProgress(path, spine, page, block, char, pct, EbookAnchorCode.encode(spine, block), at)
+            recordHistory(path, spine, block, at)
             _recents.value = dao.recentBooks(5).map { it.toBook() }
         }
 
     fun saveReadingPos(path: String, spine: Int, page: Int, block: Int, char: Int, pct: Float) {
         scope.launch(Dispatchers.IO) {
-            dao.saveProgress(path, spine, page, block, char, pct, System.currentTimeMillis())
+            val at = System.currentTimeMillis()
+            dao.saveProgress(path, spine, page, block, char, pct, EbookAnchorCode.encode(spine, block), at)
+            recordHistory(path, spine, block, at)
             _recents.value = dao.recentBooks(5).map { it.toBook() }
         }
     }
 
-    /** TTS 推进时的轻量保存：只更新章/块/字偏移。UI 不在前台（锁屏仍在读）时靠它续命。 */
+    /** TTS 推进时的轻量保存：只更新章/块/字偏移 + 唯一编码 + 历史。UI 不在前台（锁屏仍在读）时靠它续命。 */
     suspend fun saveTtsPosSync(path: String, spine: Int, block: Int, char: Int) =
         withContext(Dispatchers.IO) {
             if (path.isBlank()) return@withContext
-            dao.saveTtsPos(path, spine, block, char, System.currentTimeMillis())
+            val at = System.currentTimeMillis()
+            dao.saveTtsPos(path, spine, block, char, EbookAnchorCode.encode(spine, block), at)
+            recordHistory(path, spine, block, at)
         }
 
     fun saveTtsPos(path: String, spine: Int, block: Int, char: Int) {
         if (path.isBlank()) return
         scope.launch(Dispatchers.IO) {
-            dao.saveTtsPos(path, spine, block, char, System.currentTimeMillis())
+            val at = System.currentTimeMillis()
+            dao.saveTtsPos(path, spine, block, char, EbookAnchorCode.encode(spine, block), at)
+            recordHistory(path, spine, block, at)
         }
     }
+
+    /** 该书的进度历史（按自然分钟倒序，最多 30 条有记录的分钟）。 */
+    suspend fun progressHistory(path: String): List<EbookProgressItem> =
+        withContext(Dispatchers.IO) {
+            dao.historyOf(path).map {
+                EbookProgressItem(it.anchorCode, it.spine, it.block, it.updatedAt, it.minuteBucket)
+            }
+        }
 
     suspend fun deleteShelf(paths: List<String>) = withContext(Dispatchers.IO) {
         paths.forEach { p ->
@@ -357,6 +393,8 @@ class EbookStore(context: Context, private val dao: EbookDao) {
             }
         }
         dao.deleteBooks(paths)
+        // 进度历史随书一起删
+        if (paths.isNotEmpty()) dao.deleteHistoryOf(paths)
         refresh()
     }
 
@@ -383,6 +421,7 @@ class EbookStore(context: Context, private val dao: EbookDao) {
         spineIndex = spineIndex, pageIndex = pageIndex,
         progressPct = progressPct, lastReadAt = lastReadAt,
         blockIndex = blockIndex, charOffset = charOffset,
+        anchorCode = anchorCode,
     )
 
     private fun storageTypeOf(name: String): StorageType = runCatching {

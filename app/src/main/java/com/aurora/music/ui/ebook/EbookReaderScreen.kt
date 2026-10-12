@@ -84,8 +84,12 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
+import com.aurora.music.data.ebook.EbookAnchorCode
 import com.aurora.music.data.ebook.EbookReadPrefs
+import com.aurora.music.data.ebook.EbookStore
 import com.aurora.music.data.ebook.EbookTheme
+import com.aurora.music.data.ebook.EbookTtsController
+import com.aurora.music.data.ebook.TocSection
 import com.aurora.music.data.ebook.MAX_RECENT_FONTS
 import com.aurora.music.data.TTS_ENGINE_INTERNAL
 import com.aurora.music.data.UnifiedTtsPrefs
@@ -94,6 +98,7 @@ import com.aurora.music.data.ebook.ParsedEbook
 import com.aurora.music.tts.MsVoices
 import com.aurora.music.tts.TtsEngineInfo
 import com.aurora.music.ui.components.LottieLoader
+import com.aurora.music.ui.ios5.Ios5ActionRow
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5GlossButton
 import com.aurora.music.ui.ios5.Ios5NavBar
@@ -104,6 +109,7 @@ import com.aurora.music.ui.ios5.Ios5SettingsPage
 import com.aurora.music.ui.ios5.Ios5SliderRow
 import com.aurora.music.ui.ios5.Ios5StaticText
 import com.aurora.music.ui.ios5.Ios5SwitchRow
+import com.aurora.music.ui.ios5.Ios5TextRow
 import com.aurora.music.ui.ios5.ios5FootNote
 import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.ui.ios5.ios5Section
@@ -271,7 +277,21 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
             )
         }
         if (optionsOpen) {
-            EbookOptionsPage(onBack = { optionsOpen = false })
+            EbookOptionsPage(
+                onBack = { optionsOpen = false },
+                bookPath = bookPath,
+                book = book,
+                onToast = { toast = it },
+                onJumpAnchor = { s, b ->
+                    scope.launch {
+                        jumpGen += 1
+                        pendingJump = BlockJump(s, b, 0, jumpGen)
+                        optionsOpen = false
+                        // 跳转不等分页，直接把块锚点落盘（附带唯一编码+历史）
+                        store.saveTtsPos(bookPath, s, b, 0)
+                    }
+                },
+            )
         }
     }
 }
@@ -339,45 +359,27 @@ private fun ReaderBody(
         fun charsBeforeChapter(ci: Int): Int = chapterChars.take(ci).sum()
 
         // 每翻一页立刻存档（无防抖）：进设置、进程被杀都不丢。
-        // 块/字取朗读锚点（在读时），否则取页顶首字，下次恢复按锚点推导更准。
+        // 眼睛与耳朵取更靠后的一个落盘（见 persistTargetOf）：锁屏听书越章后
+        // 耳朵超前，退出时不能用冻结的眼睛旧值覆盖。
         // 窗口落定只存一次（旧双通道 currentPage + settledPage 已合并）。
         fun persist(gp: GlobalPage) {
-            val anchor = tts.position.value?.takeIf { it.chapter == gp.chapter }
-            val cps = breaks[gp.chapter]?.filter { it.isNotEmpty() }.orEmpty()
-            val (blk, ch) = if (anchor != null) {
-                anchor.block to anchor.startChar
-            } else {
-                val sl = cps.getOrNull(gp.page)?.firstOrNull()
-                (sl?.block ?: 0) to (sl?.start ?: 0)
-            }
-            val chars = charsBeforeChapter(gp.chapter) + charsOfPage(book, gp.chapter, cps, gp.page)
-            store.saveReadingPos(
-                bookPath, gp.chapter, gp.page, blk, ch,
-                (chars.toFloat() / totalChars).coerceIn(0f, 1f),
-            )
+            val ear = tts.position.value?.takeIf { tts.bookPath == bookPath }
+            val t = persistTargetOf(book, breaks, chapterChars, totalChars, gp, ear)
+            store.saveReadingPos(bookPath, t.spine, t.page, t.block, t.char, t.pct)
         }
 
         // 锁屏/切后台兜底：ON_PAUSE 时把最新位置同步刷盘（fire-and-forget 在被杀时可能来不及）。
-        // 唯一位置源 = 窗口 center + TTS 块锚点。
+        // 同样眼睛与耳朵取更靠后的一个（见 persistTargetOf）。
         val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
         DisposableEffect(lifecycleOwner, bookPath) {
             val obs = androidx.lifecycle.LifecycleEventObserver { _, ev ->
                 if (ev == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) {
                     scope.launch {
                         val gp = win.center
-                        val pos = tts.position.value
-                        val cps = breaks[gp.chapter]?.filter { it.isNotEmpty() }.orEmpty()
-                        val anchor = pos?.takeIf { it.chapter == gp.chapter }
-                        val (blk, ch) = if (anchor != null) anchor.block to anchor.startChar
-                        else cps.getOrNull(gp.page)?.firstOrNull()
-                            ?.let { it.block to it.start } ?: (0 to 0)
-                        val chars = charsBeforeChapter(gp.chapter) +
-                            charsOfPage(book, gp.chapter, cps, gp.page)
+                        val ear = tts.position.value?.takeIf { tts.bookPath == bookPath }
+                        val t = persistTargetOf(book, breaks, chapterChars, totalChars, gp, ear)
                         runCatching {
-                            store.saveProgressSync(
-                                bookPath, gp.chapter, gp.page, blk, ch,
-                                (chars.toFloat() / totalChars).coerceIn(0f, 1f),
-                            )
+                            store.saveProgressSync(bookPath, t.spine, t.page, t.block, t.char, t.pct)
                         }
                     }
                 }
@@ -398,14 +400,18 @@ private fun ReaderBody(
         }
 
         Column(Modifier.fillMaxSize()) {
-            // ---- 顶栏：灰字状态，无按钮（数据源唯一：窗口 center） ----
+            // ---- 顶栏：灰字状态，无按钮（数据源唯一：窗口 center + 同章朗读锚点） ----
+            // 左侧为进度唯一编码 + 本章剩余页数 + 本章百分比。
             val curGP = win.center
             val curPages = breaks[curGP.chapter]?.filter { it.isNotEmpty() }.orEmpty()
-            val pageChars = remember(book, curGP, curPages) { charsOfPage(book, curGP.chapter, curPages, curGP.page) }
-            val pct = ((charsBeforeChapter(curGP.chapter) + pageChars).toFloat() / totalChars).coerceIn(0f, 1f)
             val remain = (curPages.size - 1 - curGP.page).coerceAtLeast(0)
+            val topAnchor = ttsPos?.takeIf { tts.bookPath == bookPath && it.chapter == curGP.chapter }
+            val topBlock = topAnchor?.block ?: curPages.getOrNull(curGP.page)?.firstOrNull()?.block ?: 0
+            val chTotal = chapterChars.getOrNull(curGP.chapter)?.coerceAtLeast(0) ?: 0
+            val chRead = charsOfPage(book, curGP.chapter, curPages, curGP.page)
+            val chPct = if (chTotal <= 0) 0 else ((chRead.toFloat() / chTotal) * 100).toInt().coerceIn(0, 100)
             ReaderStatusBar(
-                left = if (win.slotAt(PAGE_WINDOW_CENTER) == null) "" else "本章还剩${remain}页 · ${(pct * 100).toInt()}%",
+                left = if (win.slotAt(PAGE_WINDOW_CENTER) == null) "" else "${EbookAnchorCode.encode(curGP.chapter, topBlock)} 本章余${remain}页${chPct}%",
                 right = "${rememberTimeText()} · ${rememberBatteryPct()}%",
                 color = meta,
             )
@@ -736,6 +742,46 @@ private fun countVisible(toc: List<com.aurora.music.data.ebook.EbookTocEntry>, e
         stack.add(i to e.level)
     }
     return n
+}
+
+// ---- 进度落盘目标：眼睛（窗口 center）与耳朵（TTS 位置）取全局更靠后的一个 ----
+// 锁屏听书越过章节后，窗口 center 是冻结的旧值；退出/onPause 时若按旧值全量覆盖，
+// DB 里已超前的耳朵进度会被洗回锁屏前。下次打开就回到锁屏前，这正是要修的 bug。
+// 比较键为 (chapter, block, char) 三元组（章节/段落天然有序，无需字符统计）。
+
+private data class PersistTarget(val spine: Int, val page: Int, val block: Int, val char: Int, val pct: Float)
+
+private fun cmpAnchor(c1: Int, b1: Int, h1: Int, c2: Int, b2: Int, h2: Int): Int {
+    if (c1 != c2) return c1.compareTo(c2)
+    if (b1 != b2) return b1.compareTo(b2)
+    return h1.compareTo(h2)
+}
+
+private fun persistTargetOf(
+    book: ParsedEbook,
+    breaks: Map<Int, List<List<PageSlice>>>,
+    chapterChars: List<Int>,
+    totalChars: Int,
+    gp: GlobalPage,
+    ear: EbookTtsController.Para?,
+): PersistTarget {
+    fun charsBefore(ci: Int): Int = chapterChars.take(ci).sum()
+    fun pctOf(spine: Int, pages: List<List<PageSlice>>, page: Int): Float {
+        val chars = charsBefore(spine) + charsOfPage(book, spine, pages, page)
+        return (chars.toFloat() / totalChars).coerceIn(0f, 1f)
+    }
+    val eyePages = breaks[gp.chapter]?.filter { it.isNotEmpty() }.orEmpty()
+    val eyeAnchorSameChapter = ear?.takeIf { it.chapter == gp.chapter }
+    val eyeSl = eyePages.getOrNull(gp.page)?.firstOrNull()
+    val eyeBlock = eyeAnchorSameChapter?.block ?: (eyeSl?.block ?: 0)
+    val eyeChar = eyeAnchorSameChapter?.startChar ?: (eyeSl?.start ?: 0)
+    if (ear != null && cmpAnchor(ear.chapter, ear.block, ear.startChar, gp.chapter, eyeBlock, eyeChar) > 0) {
+        // 耳朵超前：把耳朵锚点换算成页再全量存（含 pct），不能只存眼睛旧值
+        val earPages = breaks[ear.chapter]?.filter { it.isNotEmpty() }.orEmpty()
+        val earPage = if (earPages.isEmpty()) 0 else pageForChar(earPages, ear.block, ear.startChar)
+        return PersistTarget(ear.chapter, earPage, ear.block, ear.startChar, pctOf(ear.chapter, earPages, earPage))
+    }
+    return PersistTarget(gp.chapter, gp.page, eyeBlock, eyeChar, pctOf(gp.chapter, eyePages, gp.page))
 }
 
 private fun charsOfPage(book: ParsedEbook, spine: Int, pages: List<List<PageSlice>>, page: Int): Int {
@@ -1094,7 +1140,13 @@ private fun EbookTocPage(
 // ---- 阅读设置页：风格 / 字体 / 字号（复用 Ios5 设置组件） ----
 
 @Composable
-private fun EbookOptionsPage(onBack: () -> Unit) {
+private fun EbookOptionsPage(
+    onBack: () -> Unit,
+    bookPath: String,
+    book: ParsedEbook,
+    onToast: (String) -> Unit,
+    onJumpAnchor: (chapter: Int, block: Int) -> Unit,
+) {
     val context = LocalContext.current
     val container = (context.applicationContext as AuroraApplication).container
     val prefs by container.ebookPrefs.prefs.collectAsStateWithLifecycle()
@@ -1152,6 +1204,49 @@ private fun EbookOptionsPage(onBack: () -> Unit) {
     val th = themeOf(prefs.theme)
     Box(Modifier.fillMaxSize().background(th.bg)) {
         Ios5SettingsPage(title = "阅读设置", onBack = onBack) {
+            ios5Section("进度跳转") {
+                var draft by remember(bookPath) { mutableStateOf("") }
+                Ios5TextRow(
+                    title = "唯一编码",
+                    value = draft,
+                    placeholder = "如 12:34（章:段）",
+                    onValueChange = { draft = it },
+                )
+                Ios5CellDivider()
+                Ios5ActionRow(title = "跳转") {
+                    val a = EbookAnchorCode.decode(draft, book)
+                    if (a == null) onToast("编码无效，如 12:34")
+                    else onJumpAnchor(a.chapter, a.block)
+                }
+                Ios5CellDivider()
+                Ios5StaticText("编码为章:段，与目录无关，没有目录指向的章节也能跳。")
+            }
+            ios5Section("进度历史") {
+                var history by remember(bookPath) {
+                    mutableStateOf(emptyList<EbookStore.EbookProgressItem>())
+                }
+                LaunchedEffect(bookPath) {
+                    history = container.ebookStore.progressHistory(bookPath)
+                }
+                if (history.isEmpty()) {
+                    Ios5StaticText("暂无历史")
+                } else {
+                    val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
+                    history.forEachIndexed { i, h ->
+                        if (i > 0) Ios5CellDivider()
+                        val sec = TocSection.currentEntry(book.toc, h.spine, h.block)
+                            .takeIf { it >= 0 }?.let { book.toc[it].title.trim() }.orEmpty()
+                        Ios5NavRow(
+                            title = h.anchorCode,
+                            subtitle = (if (sec.isNotBlank()) "$sec · " else "") +
+                                fmt.format(Date(h.updatedAt)),
+                            onClick = { onJumpAnchor(h.spine, h.block) },
+                        )
+                    }
+                }
+                Ios5CellDivider()
+                Ios5StaticText("每分钟只留最后一条，共留 30 个有记录的分钟；点一条跳到那条历史。")
+            }
             ios5Section("页面风格") {
             Ios5SegmentRow(
                 title = "底色",

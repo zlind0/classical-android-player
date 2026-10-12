@@ -65,6 +65,7 @@ class EbookScanner(private val store: EbookStore, private val dao: EbookDao) {
                             lastReadAt = prev?.lastReadAt ?: 0L,
                             blockIndex = prev?.blockIndex ?: 0,
                             charOffset = prev?.charOffset ?: 0,
+                            anchorCode = prev?.anchorCode ?: "",
                         ),
                     )
                 }

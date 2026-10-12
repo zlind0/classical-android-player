@@ -52,6 +52,8 @@ data class EbookBook(
     /** 朗读/阅读锚点：块下标 + 块内字偏移（句子级恢复用） */
     val blockIndex: Int = 0,
     val charOffset: Int = 0,
+    /** 进度唯一编码：章:段（显示/跳转用，见 EbookAnchorCode）。 */
+    val anchorCode: String = "",
 ) {
     val displayTitle: String get() = title.ifBlank { path.substringAfterLast('/').substringBeforeLast('.') }
 }

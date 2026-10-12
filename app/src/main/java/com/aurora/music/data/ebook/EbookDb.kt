@@ -45,6 +45,24 @@ data class EbookRow(
     /** 朗读/阅读锚点：块下标 + 块内字偏移（句子级恢复用；页码由它推导更准） */
     val blockIndex: Int = 0,
     val charOffset: Int = 0,
+    /** 进度唯一编码：章:段（显示用，1-based；恢复仍以 spine/block/char 为准）。 */
+    val anchorCode: String = "",
+)
+
+/** 每本书的进度历史：按自然分钟去重（同分钟只留最后一条），每书最多留 30 条。 */
+@Entity(
+    tableName = "ebook_progress_history",
+    primaryKeys = ["path", "minuteBucket"],
+    indices = [Index(value = ["path"]), Index(value = ["updatedAt"])],
+)
+data class EbookProgressHistoryRow(
+    val path: String,
+    /** 本地自然分钟起始毫秒（见 EbookAnchorCode.minuteStart）。 */
+    val minuteBucket: Long,
+    val anchorCode: String = "",
+    val spine: Int = 0,
+    val block: Int = 0,
+    val updatedAt: Long = 0L,
 )
 
 @Dao
@@ -88,14 +106,14 @@ interface EbookDao {
     @Query("SELECT * FROM ebooks")
     suspend fun allBooks(): List<EbookRow>
 
-    @Query("UPDATE ebooks SET spineIndex = :spine, pageIndex = :page, blockIndex = :block, charOffset = :charOff, progressPct = :pct, lastReadAt = :at WHERE path = :path")
-    suspend fun saveProgress(path: String, spine: Int, page: Int, block: Int, charOff: Int, pct: Float, at: Long)
+    @Query("UPDATE ebooks SET spineIndex = :spine, pageIndex = :page, blockIndex = :block, charOffset = :charOff, progressPct = :pct, anchorCode = :code, lastReadAt = :at WHERE path = :path")
+    suspend fun saveProgress(path: String, spine: Int, page: Int, block: Int, charOff: Int, pct: Float, code: String, at: Long)
 
     /** TTS 推进时的轻量保存：更新章/块/字偏移 + 最近阅读；页码归零等 UI 侧按块锚点推导回填。
      * 页码必须一起写（不能留旧章的页），否则 DB 出现“新章 + 旧页”的杂交行，
      * 下次打开时块锚点为章首（0,0）不触发推导，就会落在错页。 */
-    @Query("UPDATE ebooks SET spineIndex = :spine, pageIndex = 0, blockIndex = :block, charOffset = :charOff, lastReadAt = :at WHERE path = :path")
-    suspend fun saveTtsPos(path: String, spine: Int, block: Int, charOff: Int, at: Long)
+    @Query("UPDATE ebooks SET spineIndex = :spine, pageIndex = 0, blockIndex = :block, charOffset = :charOff, anchorCode = :code, lastReadAt = :at WHERE path = :path")
+    suspend fun saveTtsPos(path: String, spine: Int, block: Int, charOff: Int, code: String, at: Long)
 
     @Query("DELETE FROM ebooks WHERE rootId = :rootId")
     suspend fun deleteBooksOfRoot(rootId: Long)
@@ -103,14 +121,36 @@ interface EbookDao {
     @Query("DELETE FROM ebooks WHERE path IN (:paths)")
     suspend fun deleteBooks(paths: List<String>)
 
+    // ---- 进度历史（随书一起删） ----
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertHistory(row: EbookProgressHistoryRow)
+
+    @Query("SELECT * FROM ebook_progress_history WHERE path = :path ORDER BY minuteBucket DESC LIMIT 30")
+    suspend fun historyOf(path: String): List<EbookProgressHistoryRow>
+
+    @Query("SELECT path FROM ebooks WHERE rootId = :rootId")
+    suspend fun pathsOfRoot(rootId: Long): List<String>
+
+    @Query("DELETE FROM ebook_progress_history WHERE path IN (:paths)")
+    suspend fun deleteHistoryOf(paths: List<String>)
+
+    @Query("DELETE FROM ebook_progress_history WHERE path = :path AND minuteBucket NOT IN (SELECT minuteBucket FROM ebook_progress_history WHERE path = :path ORDER BY minuteBucket DESC LIMIT 30)")
+    suspend fun pruneHistory(path: String)
+
     @Transaction
     suspend fun replaceRootScan(rootId: Long, books: List<EbookRow>) {
+        val oldPaths = pathsOfRoot(rootId).toSet()
+        val keep = books.map { it.path }.toSet()
         deleteBooksOfRoot(rootId)
         upsertBooks(books)
+        // 只清掉本次扫描已消失的书的历史，保留书的历史不动
+        val gone = (oldPaths - keep).toList()
+        if (gone.isNotEmpty()) deleteHistoryOf(gone)
     }
 }
 
-@Database(entities = [EbookRootRow::class, EbookRow::class], version = 2, exportSchema = false)
+@Database(entities = [EbookRootRow::class, EbookRow::class, EbookProgressHistoryRow::class], version = 3, exportSchema = false)
 abstract class EbookDb : RoomDatabase() {
     abstract fun ebookDao(): EbookDao
 }
