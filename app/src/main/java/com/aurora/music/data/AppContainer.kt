@@ -234,19 +234,33 @@ class AppContainer(context: Context) {
      */
     fun pauseSideMediaForSleep() {
         scope.launch(Dispatchers.IO) {
-            // 站内音乐：经统一服务只停音乐一路
+            // 站外先发一轮：若此时站外会话正活跃可直接命中
+            runCatching { dispatchExternalPause() }
+            // 站内音乐：经统一服务只停音乐一路（淡出 6 秒）
             runCatching { com.aurora.music.playback.PlaybackService.pauseMusicForSleep(appContext) }
-            // 站外系统媒体：给当前系统媒体会话发暂停键
-            runCatching {
-                val am = appContext.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
-                am.dispatchMediaKeyEvent(
-                    android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE),
-                )
-                am.dispatchMediaKeyEvent(
-                    android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE),
-                )
-            }
+            // 到点时我们自己的会话可能仍活跃（音乐淡出中），首发暂停键容易被自己吃掉；
+            // 等站内停稳、焦点让出后再补两发，此时在播的只剩站外，必中目标会话。
+            // 只发 PAUSE（已暂停则无操作，绝不发 TOGGLE，避免误把别家唤醒）。
+            kotlinx.coroutines.delay(7_000)
+            runCatching { dispatchExternalPause() }
+            kotlinx.coroutines.delay(5_000)
+            runCatching { dispatchExternalPause() }
         }
+    }
+
+    /**
+     * 给当前系统媒体会话发暂停键（down + up 各一）。
+     * KeyEvent 必须带正常 uptime 时间戳：零时间戳事件会被系统路由丢掉。
+     */
+    private fun dispatchExternalPause() {
+        val am = appContext.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+        val now = android.os.SystemClock.uptimeMillis()
+        am.dispatchMediaKeyEvent(
+            android.view.KeyEvent(now, now, android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE, 0),
+        )
+        am.dispatchMediaKeyEvent(
+            android.view.KeyEvent(now, now, android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE, 0),
+        )
     }
 
     @Volatile
