@@ -197,8 +197,9 @@ class EbookTtsPlayer(
 
     private fun applyEngine() {
         val ap = lastAudioPrefs ?: return
-        auroraDsp.update(buildDspParams(ap, correctionMaxGainDb, correctionTrimDb, 0f))
-        auroraDsp.enabled = true
+        val params = buildDspParams(ap, correctionMaxGainDb, correctionTrimDb, 0f)
+        auroraDsp.update(params)
+        auroraDsp.enabled = !params.isNeutral()
         correctionConv.enabled = correctionActive
         convolver.enabled = ap.dspConvEnabled
         convolver.setMakeup(ap.dspConvMakeupDb)

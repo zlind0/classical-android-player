@@ -144,6 +144,8 @@ class PlaybackService : MediaLibraryService() {
     @Volatile private var driveOn: Boolean = false
     @Volatile private var driveTargetDb: Float = -16f
     @Volatile private var driveGainDb: Float = 0f
+    // v0.7: whole-chain bypass flag for the signal-path readout (see applyAudioEngine)
+    @Volatile private var dspBypassed: Boolean = true
 
     override fun onCreate() {
         super.onCreate()
@@ -473,8 +475,12 @@ class PlaybackService : MediaLibraryService() {
         // 参数装配见 playback/DspChain（听书链共用同一份，保证两边效果一致）
         driveOn = isDrivingOn(ap)
         driveTargetDb = ap.dspDriveTargetDb
-        auroraDsp.update(buildDspParams(ap, correctionMaxGainDb, correctionTrimDb, driveGainDb))
-        auroraDsp.enabled = true
+        val params = buildDspParams(ap, correctionMaxGainDb, correctionTrimDb, driveGainDb)
+        auroraDsp.update(params)
+        val dspNeutral = params.isNeutral()
+        auroraDsp.enabled = !dspNeutral
+        // 全链直通（dsp 中性 + 校正/卷积/单声道全关）才算不改采样，供信号链路展示用
+        dspBypassed = dspNeutral && !correctionActive && !ap.dspConvEnabled && !monoAudioPref
         audioEffects?.setMasterEnabled(false)
         correctionConv.enabled = correctionActive
 
@@ -568,8 +574,8 @@ class PlaybackService : MediaLibraryService() {
             C.ENCODING_PCM_32BIT -> 32; C.ENCODING_PCM_FLOAT -> 32
             else -> 0
         }
-        // anything that alters samples breaks bit-perfect; the DSP chain is always on now
-        val modifying = true
+        // anything that alters samples breaks bit-perfect; fully-bypassed chain is passthrough
+        val modifying = !dspBypassed
         val isBt = device != null && (
             device.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
             device.type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET ||

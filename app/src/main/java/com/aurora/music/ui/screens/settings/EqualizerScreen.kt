@@ -77,6 +77,7 @@ import com.aurora.music.ui.ios5.Ios5SectionTitle
 import com.aurora.music.ui.ios5.Ios5SegmentRow
 import com.aurora.music.ui.ios5.Ios5SettingsPage
 import com.aurora.music.ui.ios5.Ios5SliderRow
+import com.aurora.music.ui.ios5.Ios5Switch
 import com.aurora.music.ui.ios5.Ios5SwitchRow
 import android.content.Context
 import kotlinx.coroutines.CoroutineScope
@@ -104,7 +105,10 @@ fun EqualizerScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val rgLabels = listOf(stringResource(R.string.eq_rg_off), stringResource(R.string.eq_rg_track), stringResource(R.string.eq_rg_album))
 
     Ios5SettingsPage(title = stringResource(R.string.eq_title), onBack = onBack) {
-        collapsible("profiles", ctx.getString(R.string.eq_profiles), "${audioProfiles.size} saved", expanded) {
+        // 纯 UI 面板：开关只控制展开收起
+        val profilesOpen = expanded["profiles"] ?: false
+        switchable("profiles", ctx.getString(R.string.eq_profiles), "${audioProfiles.size} saved",
+            profilesOpen, { expanded["profiles"] = it }) {
             AudioProfilesPanel(container, prefs, activeCorrectionId, audioProfiles, deviceProfiles, store, scope)
         }
 
@@ -113,30 +117,52 @@ fun EqualizerScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
         }
         when (tab) {
             0 -> correctionTab(ctx, prefs, activeCorrection, corrections, activeCorrectionId, store, scope, container, expanded)
-            1 -> userEqTab(ctx, prefs, activeCorrection, store, scope, container, expanded, activeCorrectionId)
-            else -> dynamicsTab(ctx, prefs, store, scope, expanded, container)
+            1 -> userEqTab(ctx, prefs, activeCorrection, store, scope, container, activeCorrectionId)
+            else -> dynamicsTab(ctx, prefs, store, scope, container)
         }
 
         item { Ios5SectionTitle(stringResource(R.string.playback_section_output)) }
-        collapsible("rg", ctx.getString(R.string.eq_volume_leveling), ctx.getString(R.string.eq_rg_fmt, rgLabels[prefs.replayGain.coerceIn(0, 2)]), expanded) {
-            Ios5SegmentRow("Mode", rgLabels, prefs.replayGain) { i -> scope.launch { store.setReplayGain(i) } }
+        val rgOn = prefs.replayGain != 0
+        switchable("rg", ctx.getString(R.string.eq_volume_leveling),
+            if (rgOn) ctx.getString(R.string.eq_rg_fmt, rgLabels[prefs.replayGain.coerceIn(0, 2)]) else ctx.getString(R.string.eq_mode_off),
+            rgOn, { v ->
+                scope.launch {
+                    if (v) {
+                        store.setReplayGain(prefs.replayGainLast.coerceIn(1, 2))
+                    } else {
+                        if (prefs.replayGain != 0) store.setReplayGainLast(prefs.replayGain)
+                        store.setReplayGain(0)
+                    }
+                }
+            }) {
+            Ios5SegmentRow("Mode", rgLabels, prefs.replayGain) { i ->
+                scope.launch {
+                    store.setReplayGain(i)
+                    if (i != 0) store.setReplayGainLast(i)
+                }
+            }
         }
 
         item { Spacer(Modifier.height(contentPadding.calculateBottomPadding())) }
     }
 }
 
-private fun LazyListScope.collapsible(
+/**
+ * v0.7 开关式分组：开关开 = 展开 + 模块参与混音，开关关 = 收起 + 模块旁通
+ *（prefs 里的用户值原样保留，不清零）。
+ * 纯 UI 面板（存档/AutoEQ 浏览器）的开关只控制展开收起，无引擎副作用。
+ */
+private fun LazyListScope.switchable(
     key: String, title: String, summary: String?,
-    expanded: SnapshotStateMap<String, Boolean>, defaultOpen: Boolean = false,
+    checked: Boolean, onCheckedChange: (Boolean) -> Unit,
+    switchEnabled: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     item(key = "${key}_title") { Ios5SectionTitle(title) }
     item(key = key) {
-        val open = expanded[key] ?: defaultOpen
         Ios5Group(Modifier.padding(horizontal = 12.dp)) {
             Row(
-                Modifier.fillMaxWidth().clickable { expanded[key] = !open }.padding(horizontal = 12.dp, vertical = 10.dp),
+                Modifier.fillMaxWidth().clickable(enabled = switchEnabled) { onCheckedChange(!checked) }.padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
@@ -145,9 +171,9 @@ private fun LazyListScope.collapsible(
                         Text(summary, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 1)
                     }
                 }
-                Text(if (open) "▲" else "▼", color = Ios5Colors.TextSecondary, fontSize = 13.sp)
+                Ios5Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = switchEnabled)
             }
-            AnimatedVisibility(visible = open) {
+            AnimatedVisibility(visible = checked) {
                 Column(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
                     Ios5CellDivider()
                     content()
@@ -203,13 +229,6 @@ private fun ConvolutionPanel(prefs: AudioPrefs, store: SettingsStore, scope: Cor
         }
     }
     Column(Modifier.fillMaxWidth()) {
-        Ios5SwitchRow(
-            title = stringResource(R.string.eq_conv_enable),
-            subtitle = if (prefs.dspConvIrName.isNotBlank()) "IR: ${prefs.dspConvIrName}" else stringResource(R.string.eq_conv_hint),
-            checked = prefs.dspConvEnabled,
-            onCheckedChange = { v -> scope.launch { store.setDspConvEnabled(v) } },
-        )
-        Ios5CellDivider()
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Ios5GlossButton(
                 text = if (prefs.dspConvIrName.isBlank()) stringResource(R.string.eq_conv_load) else stringResource(R.string.eq_conv_replace),
@@ -248,6 +267,7 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
     val outLabel = container.autoEqController.currentOutputLabel()
     val ctx = LocalContext.current
     fun toast(msg: String) = android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
+    val activeCorrId by store.activeCorrectionId.collectAsStateWithLifecycle(initialValue = "flat")
 
     // Session scope: the preset index is held only while this browser is open.
     var sessionReady by remember { mutableStateOf(false) }
@@ -299,7 +319,10 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
                 Spacer(Modifier.width(8.dp))
                 Text(stringResource(R.string.eq_clear), color = Ios5Colors.IosBlue, fontSize = 14.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.clip(RoundedCornerShape(50)).clickable {
-                        scope.launch { store.setActiveCorrectionId("flat"); store.setDspPreamp(0f); store.setActiveEqProfile("") }
+                        scope.launch {
+                            if (activeCorrId != "flat") store.setDspCorrLastId(activeCorrId)
+                            store.setActiveCorrectionId("flat"); store.setDspPreamp(0f); store.setActiveEqProfile("")
+                        }
                     }.padding(horizontal = 8.dp, vertical = 4.dp))
             }
             Ios5CellDivider()
@@ -432,19 +455,37 @@ private fun LazyListScope.correctionTab(
         val highcut by store.correctionHighcutHz.collectAsStateWithLifecycle(initialValue = 0f)
         EqCurveChart(
             correction = activeCorrection,
-            graphicFreqs = layout.freqs, graphicQ = layout.q, graphicGains = graphic,
-            parametric = prefs.dspParametric, preampDb = prefs.dspPreampDb,
+            graphicFreqs = layout.freqs, graphicQ = layout.q,
+            graphicGains = if (prefs.dspGraphicEnabled) graphic else List(layout.freqs.size) { 0f },
+            parametric = if (prefs.dspParametricEnabled) prefs.dspParametric else emptyList(),
+            preampDb = if (prefs.dspGainEnabled) prefs.dspPreampDb else 0f,
             lowcutHz = lowcut, highcutHz = highcut,
         )
     }
-    collapsible("corr_list", ctx.getString(R.string.eq_correction_profile),
-        activeCorrection?.name?.ifBlank { ctx.getString(R.string.eq_flat) } ?: ctx.getString(R.string.eq_flat), expanded, defaultOpen = true) {
+    val corrOn = activeCorrectionId != "flat"
+    switchable("corr_list", ctx.getString(R.string.eq_correction_profile),
+        if (corrOn) activeCorrection?.name?.ifBlank { ctx.getString(R.string.eq_flat) } ?: ctx.getString(R.string.eq_flat) else ctx.getString(R.string.eq_mode_off),
+        corrOn, { v ->
+            scope.launch {
+                if (v) {
+                    val restore = prefs.dspCorrLastId
+                    if (restore.isNotBlank() && corrections.any { it.id == restore }) store.setActiveCorrectionId(restore)
+                } else {
+                    if (activeCorrectionId != "flat") store.setDspCorrLastId(activeCorrectionId)
+                    store.setActiveCorrectionId("flat")
+                }
+            }
+        }) {
         CorrectionProfilesPanel(corrections, activeCorrectionId, activeCorrection, store, scope)
     }
-    collapsible("autoeq", ctx.getString(R.string.eq_device_presets), ctx.getString(R.string.eq_device_presets_sub), expanded) {
+    val autoeqOpen = expanded["autoeq"] ?: false
+    switchable("autoeq", ctx.getString(R.string.eq_device_presets), ctx.getString(R.string.eq_device_presets_sub),
+        autoeqOpen, { expanded["autoeq"] = it }) {
         AutoEqPanel(container, prefs, store, scope)
     }
-    collapsible("conv", ctx.getString(R.string.eq_convolution), if (prefs.dspConvEnabled && prefs.dspConvIrName.isNotBlank()) prefs.dspConvIrName else ctx.getString(R.string.eq_conv_off), expanded) {
+    switchable("conv", ctx.getString(R.string.eq_convolution),
+        if (prefs.dspConvEnabled && prefs.dspConvIrName.isNotBlank()) prefs.dspConvIrName else ctx.getString(R.string.eq_conv_off),
+        prefs.dspConvEnabled, { v -> scope.launch { store.setDspConvEnabled(v) } }) {
         ConvolutionPanel(prefs, store, scope)
     }
 }
@@ -456,7 +497,6 @@ private fun LazyListScope.userEqTab(
     store: SettingsStore,
     scope: CoroutineScope,
     container: AppContainer,
-    expanded: SnapshotStateMap<String, Boolean>,
     activeCorrectionId: String,
 ) {
     item {
@@ -466,8 +506,10 @@ private fun LazyListScope.userEqTab(
         val highcut by store.correctionHighcutHz.collectAsStateWithLifecycle(initialValue = 0f)
         EqCurveChart(
             correction = activeCorrection,
-            graphicFreqs = layout.freqs, graphicQ = layout.q, graphicGains = graphic,
-            parametric = prefs.dspParametric, preampDb = prefs.dspPreampDb,
+            graphicFreqs = layout.freqs, graphicQ = layout.q,
+            graphicGains = if (prefs.dspGraphicEnabled) graphic else List(layout.freqs.size) { 0f },
+            parametric = if (prefs.dspParametricEnabled) prefs.dspParametric else emptyList(),
+            preampDb = if (prefs.dspGainEnabled) prefs.dspPreampDb else 0f,
             lowcutHz = lowcut, highcutHz = highcut,
         )
     }
@@ -476,7 +518,9 @@ private fun LazyListScope.userEqTab(
     val graphic = (0 until nBands).map { prefs.dspGraphicBands.getOrElse(it) { 0f } }
     val anyGraphic = graphic.any { it != 0f }
 
-    collapsible("c_graphic", ctx.getString(R.string.eq_graphic), "${layout.name}${if (anyGraphic) ctx.getString(R.string.eq_active_suffix) else ""}", expanded, defaultOpen = true) {
+    switchable("c_graphic", ctx.getString(R.string.eq_graphic),
+        if (!prefs.dspGraphicEnabled) ctx.getString(R.string.eq_mode_off) else "${layout.name}${if (anyGraphic) ctx.getString(R.string.eq_active_suffix) else ""}",
+        prefs.dspGraphicEnabled, { v -> scope.launch { store.setDspGraphicEnabled(v) } }) {
         Ios5SegmentRow("Bands", DspCoeffBuilder.GRAPHIC_LAYOUTS.map { it.name }, prefs.dspGraphicLayout) { i ->
             scope.launch { store.setDspGraphicLayout(i); store.setDspGraphicBands(List(DspCoeffBuilder.GRAPHIC_LAYOUTS[i].freqs.size) { 0f }) }
         }
@@ -505,7 +549,9 @@ private fun LazyListScope.userEqTab(
         TextLink(stringResource(R.string.eq_reset_graphic)) { scope.launch { store.setDspGraphicBands(List(nBands) { 0f }) } }
     }
 
-    collapsible("c_param", ctx.getString(R.string.eq_parametric), ctx.getString(R.string.eq_bands_unit, prefs.dspParametric.size, if (prefs.dspParametric.size == 1) "" else "s"), expanded) {
+    switchable("c_param", ctx.getString(R.string.eq_parametric),
+        if (!prefs.dspParametricEnabled) ctx.getString(R.string.eq_mode_off) else ctx.getString(R.string.eq_bands_unit, prefs.dspParametric.size, if (prefs.dspParametric.size == 1) "" else "s"),
+        prefs.dspParametricEnabled, { v -> scope.launch { store.setDspParametricEnabled(v) } }) {
         prefs.dspParametric.forEachIndexed { i, band ->
             if (i > 0) Ios5CellDivider()
             ParametricBandCard(
@@ -519,7 +565,9 @@ private fun LazyListScope.userEqTab(
         }
     }
 
-    collapsible("c_gain", ctx.getString(R.string.eq_gain_headroom), ctx.getString(R.string.eq_preamp_fmt, prefs.dspPreampDb), expanded) {
+    switchable("c_gain", ctx.getString(R.string.eq_gain_headroom),
+        if (!prefs.dspGainEnabled) ctx.getString(R.string.eq_mode_off) else ctx.getString(R.string.eq_preamp_fmt, prefs.dspPreampDb),
+        prefs.dspGainEnabled, { v -> scope.launch { store.setDspGainEnabled(v) } }) {
         Ios5SwitchRow(stringResource(R.string.eq_auto_headroom), stringResource(R.string.eq_auto_headroom_sub), prefs.dspAutoHeadroom) { v ->
             scope.launch { store.setDspAutoHeadroom(v) }
         }
@@ -527,8 +575,10 @@ private fun LazyListScope.userEqTab(
         DbSliderRow(stringResource(R.string.eq_preamp_trim), prefs.dspPreampDb, -12f..12f) { v -> scope.launch { store.setDspPreamp(v) } }
         val lowcutPeak by store.correctionLowcutHz.collectAsStateWithLifecycle(initialValue = 0f)
         val highcutPeak by store.correctionHighcutHz.collectAsStateWithLifecycle(initialValue = 0f)
-        val peak = androidx.compose.runtime.remember(prefs.dspGraphicBands, prefs.dspParametric, prefs.dspGraphicLayout, activeCorrection, lowcutPeak, highcutPeak) {
-            val base = DspCoeffBuilder.eqPeakDb(DspParams(graphic = graphic.toFloatArray(), graphicFreqs = layout.freqs, graphicQ = layout.q, parametric = prefs.dspParametric.map { DspBand(it.freqHz, it.gainDb, it.q, it.type) }))
+        val peak = androidx.compose.runtime.remember(prefs.dspGraphicBands, prefs.dspParametric, prefs.dspGraphicLayout, prefs.dspGraphicEnabled, prefs.dspParametricEnabled, activeCorrection, lowcutPeak, highcutPeak) {
+            val gatedGraphic = if (prefs.dspGraphicEnabled) graphic else List(layout.freqs.size) { 0f }
+            val gatedParam = if (prefs.dspParametricEnabled) prefs.dspParametric else emptyList()
+            val base = DspCoeffBuilder.eqPeakDb(DspParams(graphic = gatedGraphic.toFloatArray(), graphicFreqs = layout.freqs, graphicQ = layout.q, parametric = gatedParam.map { DspBand(it.freqHz, it.gainDb, it.q, it.type) }))
             val corrMax = activeCorrection?.takeIf { it.enabled }?.let {
                 applyCorrectionCutoffs(it.scaledGains(), correctionFreqs(), lowcutPeak, highcutPeak).maxOrNull()
             } ?: 0f
@@ -540,18 +590,24 @@ private fun LazyListScope.userEqTab(
     }
 
     val spatial = buildList { if (prefs.dspWidth != 1f) add("Width %.2f×".format(prefs.dspWidth)); if (prefs.dspCrossfeed > 0f) add("Crossfeed ${(prefs.dspCrossfeed * 100).roundToInt()}%") }.joinToString(" · ").ifBlank { ctx.getString(R.string.eq_spatial_off) }
-    collapsible("c_spatial", ctx.getString(R.string.eq_spatial), spatial, expanded) {
+    switchable("c_spatial", ctx.getString(R.string.eq_spatial),
+        if (!prefs.dspSpatialEnabled) ctx.getString(R.string.eq_mode_off) else spatial,
+        prefs.dspSpatialEnabled, { v -> scope.launch { store.setDspSpatialEnabled(v) } }) {
         FloatSliderRow(stringResource(R.string.eq_width), prefs.dspWidth, 0f..2f, valueText = "%.2f×".format(prefs.dspWidth)) { v -> scope.launch { store.setDspWidth(v) } }
         Ios5CellDivider()
         FloatSliderRow(stringResource(R.string.eq_crossfeed), prefs.dspCrossfeed, 0f..1f, valueText = if (prefs.dspCrossfeed <= 0f) stringResource(R.string.eq_crossfeed_off) else "${(prefs.dspCrossfeed * 100).roundToInt()}%") { v -> scope.launch { store.setDspCrossfeed(v) } }
     }
 
-    collapsible("c_harm", ctx.getString(R.string.eq_harmonics), if (prefs.dspSaturation > 0f) ctx.getString(R.string.eq_tube_fmt, (prefs.dspSaturation * 100).roundToInt()) else ctx.getString(R.string.eq_harm_off), expanded) {
+    switchable("c_harm", ctx.getString(R.string.eq_harmonics),
+        if (!prefs.dspHarmEnabled) ctx.getString(R.string.eq_mode_off) else if (prefs.dspSaturation > 0f) ctx.getString(R.string.eq_tube_fmt, (prefs.dspSaturation * 100).roundToInt()) else ctx.getString(R.string.eq_harm_off),
+        prefs.dspHarmEnabled, { v -> scope.launch { store.setDspHarmEnabled(v) } }) {
         FloatSliderRow(stringResource(R.string.eq_tube), prefs.dspSaturation, 0f..1f, valueText = if (prefs.dspSaturation <= 0f) stringResource(R.string.eq_harm_off) else "${(prefs.dspSaturation * 100).roundToInt()}%") { v -> scope.launch { store.setDspSaturation(v) } }
     }
 
     val aligned = prefs.dspDelayLeftMs > 0f || prefs.dspDelayRightMs > 0f || prefs.dspTrimLeftDb != 0f || prefs.dspTrimRightDb != 0f
-    collapsible("c_align", ctx.getString(R.string.eq_alignment), if (aligned) ctx.getString(R.string.eq_align_adjusted) else ctx.getString(R.string.eq_align_off), expanded) {
+    switchable("c_align", ctx.getString(R.string.eq_alignment),
+        if (!prefs.dspAlignEnabled) ctx.getString(R.string.eq_mode_off) else if (aligned) ctx.getString(R.string.eq_align_adjusted) else ctx.getString(R.string.eq_align_off),
+        prefs.dspAlignEnabled, { v -> scope.launch { store.setDspAlignEnabled(v) } }) {
         FloatSliderRow(stringResource(R.string.eq_delay_left), prefs.dspDelayLeftMs, 0f..20f, valueText = "%.1f ms".format(prefs.dspDelayLeftMs)) { v -> scope.launch { store.setDspDelayLeft(v) } }
         Ios5CellDivider()
         FloatSliderRow(stringResource(R.string.eq_delay_right), prefs.dspDelayRightMs, 0f..20f, valueText = "%.1f ms".format(prefs.dspDelayRightMs)) { v -> scope.launch { store.setDspDelayRight(v) } }
@@ -567,16 +623,28 @@ private fun LazyListScope.dynamicsTab(
     prefs: AudioPrefs,
     store: SettingsStore,
     scope: CoroutineScope,
-    expanded: SnapshotStateMap<String, Boolean>,
     container: AppContainer,
 ) {
     // v0.6 driving loudness (plan §35, §38)
-    collapsible("c_drive", ctx.getString(R.string.eq_driving),
-        DrivingMode.label(prefs.dspDriveMode) + if (prefs.dspDriveMode != DrivingMode.OFF) ctx.getString(R.string.eq_drive_target_fmt, prefs.dspDriveTargetDb) else "",
-        expanded, defaultOpen = true) {
+    val driveOn = prefs.dspDriveMode != DrivingMode.OFF
+    switchable("c_drive", ctx.getString(R.string.eq_driving),
+        if (!driveOn) ctx.getString(R.string.eq_mode_off) else DrivingMode.label(prefs.dspDriveMode) + ctx.getString(R.string.eq_drive_target_fmt, prefs.dspDriveTargetDb),
+        driveOn, { v ->
+            scope.launch {
+                if (v) {
+                    store.setDspDriveMode(prefs.dspDriveLastMode.takeIf { it != DrivingMode.OFF } ?: DrivingMode.NATURAL)
+                } else {
+                    if (prefs.dspDriveMode != DrivingMode.OFF) store.setDspDriveLastMode(prefs.dspDriveMode)
+                    store.setDspDriveMode(DrivingMode.OFF)
+                }
+            }
+        }) {
         val modes = listOf(DrivingMode.OFF, DrivingMode.NATURAL, DrivingMode.BALANCED, DrivingMode.STRONG, DrivingMode.CUSTOM)
         Ios5SegmentRow("Mode", modes.map { DrivingMode.label(it) }, modes.indexOf(prefs.dspDriveMode).coerceAtLeast(0)) { i ->
-            scope.launch { store.setDspDriveMode(modes[i]) }
+            scope.launch {
+                store.setDspDriveMode(modes[i])
+                if (modes[i] != DrivingMode.OFF) store.setDspDriveLastMode(modes[i])
+            }
         }
         Text(
             when (prefs.dspDriveMode) {
@@ -599,10 +667,12 @@ private fun LazyListScope.dynamicsTab(
         if (prefs.dspLimiterEnabled) add(ctx.getString(R.string.eq_lim))
         if (prefs.dspCompEnabled && prefs.dspDriveMode == DrivingMode.OFF) add(ctx.getString(R.string.eq_compressor))
     }.joinToString(" · ").ifBlank { ctx.getString(R.string.eq_mode_off) }
-    collapsible("c_dyn", ctx.getString(R.string.eq_compressor), dyn, expanded) {
-        if (prefs.dspDriveMode == DrivingMode.OFF) {
-            Ios5SwitchRow(stringResource(R.string.eq_compressor), stringResource(R.string.eq_comp_on_sub), prefs.dspCompEnabled) { v -> scope.launch { store.setDspCompEnabled(v) } }
-        } else {
+    val driving = prefs.dspDriveMode != DrivingMode.OFF
+    switchable("c_dyn", ctx.getString(R.string.eq_compressor),
+        if (!prefs.dspCompEnabled && !driving) ctx.getString(R.string.eq_mode_off) else dyn,
+        prefs.dspCompEnabled, { v -> scope.launch { store.setDspCompEnabled(v) } },
+        switchEnabled = !driving) {
+        if (driving) {
             Text(stringResource(R.string.eq_driven_note),
                 color = Ios5Colors.TextSecondary, fontSize = 13.sp,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
@@ -629,9 +699,9 @@ private fun LazyListScope.dynamicsTab(
         GainReductionMeter(container)
     }
 
-    collapsible("c_lim", ctx.getString(R.string.eq_lim),
-        if (prefs.dspLimiterEnabled) "%.1f dBTP".format(prefs.dspLimiterCeilingDb) else ctx.getString(R.string.eq_mode_off), expanded) {
-        Ios5SwitchRow(stringResource(R.string.eq_lim), stringResource(R.string.eq_lim_sub), prefs.dspLimiterEnabled) { v -> scope.launch { store.setDspLimiterEnabled(v) } }
+    switchable("c_lim", ctx.getString(R.string.eq_lim),
+        if (prefs.dspLimiterEnabled) "%.1f dBTP".format(prefs.dspLimiterCeilingDb) else ctx.getString(R.string.eq_mode_off),
+        prefs.dspLimiterEnabled, { v -> scope.launch { store.setDspLimiterEnabled(v) } }) {
         if (prefs.dspLimiterEnabled) {
             Ios5CellDivider()
             FloatSliderRow(stringResource(R.string.eq_tp_ceiling), prefs.dspLimiterCeilingDb, -6f..0f, valueText = "%.1f dBTP".format(prefs.dspLimiterCeilingDb)) { v -> scope.launch { store.setDspCeiling(v) } }

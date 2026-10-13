@@ -92,7 +92,9 @@ class AutoEqController(
                 settingsStore.setActiveEqProfile(b.profileName)
             } else {
                 settingsStore.setDspParametric(b.bands)
+                settingsStore.setDspParametricEnabled(b.bands.isNotEmpty())
                 settingsStore.setDspPreamp(b.preampDb)
+                settingsStore.setDspGainEnabled(true)
                 settingsStore.setDspMode(DspMode.CUSTOM)
                 settingsStore.setActiveEqProfile(b.profileName)
             }
@@ -105,7 +107,14 @@ class AutoEqController(
         settingsStore.setActiveCorrectionId(profile.correctionId.ifBlank { "flat" })
         settingsStore.setDspGraphicLayout(profile.graphicLayout)
         settingsStore.setDspGraphicBands(profile.graphic)
+        // legacy profiles predate the module switches: a stored non-neutral value implies on
+        settingsStore.setDspGraphicEnabled(profile.graphicEnabled || profile.graphic.any { it != 0f })
         settingsStore.setDspParametric(profile.parametric)
+        settingsStore.setDspParametricEnabled(profile.parametricEnabled || profile.parametric.isNotEmpty())
+        settingsStore.setDspGainEnabled(profile.gainEnabled)
+        settingsStore.setDspSpatialEnabled(profile.spatialEnabled)
+        settingsStore.setDspHarmEnabled(profile.harmEnabled)
+        settingsStore.setDspAlignEnabled(profile.alignEnabled)
         settingsStore.setDspConvEnabled(profile.convEnabled)
         if (profile.convIrPath.isNotBlank()) settingsStore.setDspConvIr(profile.convIrPath, profile.convIrName)
         settingsStore.setDspConvMakeup(profile.convMakeupDb)
@@ -134,7 +143,13 @@ class AutoEqController(
             correctionId = correctionId.ifBlank { "flat" },
             graphic = prefs.dspGraphicBands,
             graphicLayout = prefs.dspGraphicLayout,
+            graphicEnabled = prefs.dspGraphicEnabled,
             parametric = prefs.dspParametric,
+            parametricEnabled = prefs.dspParametricEnabled,
+            gainEnabled = prefs.dspGainEnabled,
+            spatialEnabled = prefs.dspSpatialEnabled,
+            harmEnabled = prefs.dspHarmEnabled,
+            alignEnabled = prefs.dspAlignEnabled,
             convEnabled = prefs.dspConvEnabled,
             convIrPath = prefs.dspConvIrPath,
             convIrName = prefs.dspConvIrName,

@@ -175,7 +175,7 @@ data class AudioPrefs(
     val dspBalance: Float = 0f,             // -1 L .. +1 R
     val dspWidth: Float = 1f,               // 0 mono 1 normal 2 wide
     val dspCrossfeed: Float = 0f,
-    val dspLimiterEnabled: Boolean = true,
+    val dspLimiterEnabled: Boolean = false,
     val dspLimiterCeilingDb: Float = -0.3f,
     val dspCompEnabled: Boolean = false,
     val dspCompThreshDb: Float = -18f,
@@ -199,6 +199,16 @@ data class AudioPrefs(
     val dspTrimLeftDb: Float = 0f,
     val dspTrimRightDb: Float = 0f,
     val dspAutoHeadroom: Boolean = true,   // v0.5: automatic preamp = -max positive gain (plan §28)
+    // v0.7 module switches: off = bypassed (values preserved, not mixed). All default off.
+    val dspGraphicEnabled: Boolean = false,
+    val dspParametricEnabled: Boolean = false,
+    val dspGainEnabled: Boolean = false,
+    val dspSpatialEnabled: Boolean = false,
+    val dspHarmEnabled: Boolean = false,
+    val dspAlignEnabled: Boolean = false,
+    val dspDriveLastMode: Int = DrivingMode.NATURAL,
+    val replayGainLast: Int = 1,             // last non-off RG mode for the header switch restore
+    val dspCorrLastId: String = "",          // last non-flat correction id for the header switch restore
 )
 
 object ThemeMode { const val SYSTEM = 0; const val LIGHT = 1; const val DARK = 2; const val AMOLED = 3 }
@@ -398,6 +408,15 @@ class SettingsStore(private val context: Context) {
         val DSP_TRIM_L = floatPreferencesKey("dsp_trim_l")
         val DSP_TRIM_R = floatPreferencesKey("dsp_trim_r")
         val DSP_AUTO_HEADROOM = booleanPreferencesKey("dsp_auto_headroom")
+        val DSP_GRAPHIC_EN = booleanPreferencesKey("dsp_graphic_en")
+        val DSP_PARAM_EN = booleanPreferencesKey("dsp_param_en")
+        val DSP_GAIN_EN = booleanPreferencesKey("dsp_gain_en")
+        val DSP_SPATIAL_EN = booleanPreferencesKey("dsp_spatial_en")
+        val DSP_HARM_EN = booleanPreferencesKey("dsp_harm_en")
+        val DSP_ALIGN_EN = booleanPreferencesKey("dsp_align_en")
+        val DSP_DRIVE_LAST = intPreferencesKey("dsp_drive_last")
+        val RG_LAST = intPreferencesKey("rg_last")
+        val DSP_CORR_LAST = stringPreferencesKey("dsp_corr_last")
         val UI_THEME_MODE = intPreferencesKey("ui_theme_mode")
         val UI_THEME_STYLE = intPreferencesKey("ui_theme_style")
         val UI_ACCENT_MODE = intPreferencesKey("ui_accent_mode")
@@ -472,7 +491,7 @@ class SettingsStore(private val context: Context) {
             dspBalance = p[Keys.DSP_BALANCE] ?: 0f,
             dspWidth = p[Keys.DSP_WIDTH] ?: 1f,
             dspCrossfeed = p[Keys.DSP_CROSSFEED] ?: 0f,
-            dspLimiterEnabled = p[Keys.DSP_LIMITER] ?: true,
+            dspLimiterEnabled = p[Keys.DSP_LIMITER] ?: false,
             dspLimiterCeilingDb = p[Keys.DSP_CEILING] ?: -0.3f,
             dspCompEnabled = p[Keys.DSP_COMP] ?: false,
             dspCompThreshDb = p[Keys.DSP_COMP_THRESH] ?: -18f,
@@ -495,6 +514,15 @@ class SettingsStore(private val context: Context) {
             dspTrimLeftDb = p[Keys.DSP_TRIM_L] ?: 0f,
             dspTrimRightDb = p[Keys.DSP_TRIM_R] ?: 0f,
             dspAutoHeadroom = p[Keys.DSP_AUTO_HEADROOM] ?: true,
+            dspGraphicEnabled = p[Keys.DSP_GRAPHIC_EN] ?: false,
+            dspParametricEnabled = p[Keys.DSP_PARAM_EN] ?: false,
+            dspGainEnabled = p[Keys.DSP_GAIN_EN] ?: false,
+            dspSpatialEnabled = p[Keys.DSP_SPATIAL_EN] ?: false,
+            dspHarmEnabled = p[Keys.DSP_HARM_EN] ?: false,
+            dspAlignEnabled = p[Keys.DSP_ALIGN_EN] ?: false,
+            dspDriveLastMode = p[Keys.DSP_DRIVE_LAST] ?: DrivingMode.NATURAL,
+            replayGainLast = p[Keys.RG_LAST] ?: 1,
+            dspCorrLastId = p[Keys.DSP_CORR_LAST].orEmpty(),
         )
     }
 
@@ -854,6 +882,15 @@ class SettingsStore(private val context: Context) {
     suspend fun setDspTrimLeft(v: Float) = context.dataStore.edit { it[Keys.DSP_TRIM_L] = v }
     suspend fun setDspTrimRight(v: Float) = context.dataStore.edit { it[Keys.DSP_TRIM_R] = v }
     suspend fun setDspAutoHeadroom(v: Boolean) = context.dataStore.edit { it[Keys.DSP_AUTO_HEADROOM] = v }
+    suspend fun setDspGraphicEnabled(v: Boolean) = context.dataStore.edit { it[Keys.DSP_GRAPHIC_EN] = v }
+    suspend fun setDspParametricEnabled(v: Boolean) = context.dataStore.edit { it[Keys.DSP_PARAM_EN] = v }
+    suspend fun setDspGainEnabled(v: Boolean) = context.dataStore.edit { it[Keys.DSP_GAIN_EN] = v }
+    suspend fun setDspSpatialEnabled(v: Boolean) = context.dataStore.edit { it[Keys.DSP_SPATIAL_EN] = v }
+    suspend fun setDspHarmEnabled(v: Boolean) = context.dataStore.edit { it[Keys.DSP_HARM_EN] = v }
+    suspend fun setDspAlignEnabled(v: Boolean) = context.dataStore.edit { it[Keys.DSP_ALIGN_EN] = v }
+    suspend fun setDspDriveLastMode(v: Int) = context.dataStore.edit { it[Keys.DSP_DRIVE_LAST] = v }
+    suspend fun setReplayGainLast(v: Int) = context.dataStore.edit { it[Keys.RG_LAST] = v }
+    suspend fun setDspCorrLastId(v: String) = context.dataStore.edit { it[Keys.DSP_CORR_LAST] = v }
 
     suspend fun setThemeMode(v: Int) = context.dataStore.edit { it[Keys.UI_THEME_MODE] = v }
     suspend fun setThemeStyle(v: Int) = context.dataStore.edit { it[Keys.UI_THEME_STYLE] = v.coerceIn(ThemeStyle.AURORA, ThemeStyle.GLASS) }
