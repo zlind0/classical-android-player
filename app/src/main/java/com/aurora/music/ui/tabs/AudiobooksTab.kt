@@ -17,6 +17,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -45,6 +46,11 @@ fun AudiobooksTab(
     val recents by container.audiobookStore.recents.collectAsStateWithLifecycle()
     val roots by container.audiobookStore.roots.collectAsStateWithLifecycle()
     val enabledRoots = roots.filter { it.enabled }
+    // 在听里的书只在上面出现一次，避免同 LazyColumn key 重复闪退
+    val rest = remember(books, recents) {
+        val recentIds = recents.map { it.id }.toSet()
+        books.filterNot { it.id in recentIds }
+    }
 
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "有声书")
@@ -65,7 +71,7 @@ fun AudiobooksTab(
             if (books.isEmpty()) {
                 item { Ios5Empty("还没有有声书\n请到 设置 → 有声书 → 有声书来源 添加目录并扫描") }
             } else {
-                ios5Rows(books, key = { it.id }) { _, b ->
+                ios5Rows(rest, key = { it.id }) { _, b ->
                     AudiobookRow(
                         title = b.displayTitle,
                         subtitle = bookSubtitle(b.chapterCount, b.currentIndex, b.progressPct, b.skippedCount),
