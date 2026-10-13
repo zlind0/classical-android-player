@@ -5,8 +5,10 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -16,18 +18,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Headset
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -38,6 +36,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -52,15 +53,18 @@ import com.aurora.music.data.ebook.export.EbookExportRunner
 import com.aurora.music.data.ebook.export.EbookExportService
 import com.aurora.music.data.ebook.export.ExportPhase
 import com.aurora.music.tts.MsVoices
-import com.aurora.music.ui.ios5.Ios5Cell
 import com.aurora.music.ui.ios5.Ios5CellDivider
+import com.aurora.music.ui.ios5.Ios5CheckRow
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5Empty
 import com.aurora.music.ui.ios5.Ios5GlossButton
 import com.aurora.music.ui.ios5.Ios5Group
+import com.aurora.music.ui.ios5.Ios5Loading
 import com.aurora.music.ui.ios5.Ios5MiniButton
 import com.aurora.music.ui.ios5.Ios5NavBar
 import com.aurora.music.ui.ios5.Ios5SectionTitle
+import com.aurora.music.ui.ios5.Ios5SliderRow
+import com.aurora.music.ui.ios5.Ios5SwitchRow
 import com.aurora.music.viewmodel.EbookExportViewModel
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -145,14 +149,7 @@ fun EbookExportScreen(
             item {
                 Ios5Group(Modifier.padding(horizontal = 12.dp)) {
                     when {
-                        vm.parsing -> Row(
-                            Modifier.fillMaxWidth().padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(22.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("解析中…", color = Ios5Colors.TextSecondary, fontSize = 14.sp)
-                        }
+                        vm.parsing -> Ios5Loading()
                         vm.parseError != null -> Text(
                             vm.parseError.orEmpty(),
                             color = androidx.compose.ui.graphics.Color(0xFFD63A3A),
@@ -190,17 +187,10 @@ fun EbookExportScreen(
                     if (vm.internalAvailable) {
                         MsVoices.ALL.forEachIndexed { i, v ->
                             if (i > 0) Ios5CellDivider()
-                            Ios5Cell(
+                            Ios5CheckRow(
                                 title = "内置 · ${v.label()}",
-                                showChevron = false,
+                                checked = vm.useInternal && vm.internalCode == v.code,
                                 onClick = { if (!running) vm.setVoiceInternal(v.code) },
-                                trailing = {
-                                    RadioButton(
-                                        selected = vm.useInternal && vm.internalCode == v.code,
-                                        onClick = { if (!running) vm.setVoiceInternal(v.code) },
-                                        enabled = !running,
-                                    )
-                                },
                             )
                         }
                         Ios5CellDivider()
@@ -212,17 +202,10 @@ fun EbookExportScreen(
                             modifier = Modifier.padding(12.dp),
                         )
                     }
-                    Ios5Cell(
+                    Ios5CheckRow(
                         title = "系统 TTS（自动选中文音色）",
-                        showChevron = false,
+                        checked = !vm.useInternal,
                         onClick = { if (!running) vm.setVoiceSystem(vm.systemEnginePkg) },
-                        trailing = {
-                            RadioButton(
-                                selected = !vm.useInternal,
-                                onClick = { if (!running) vm.setVoiceSystem(vm.systemEnginePkg) },
-                                enabled = !running,
-                            )
-                        },
                     )
                     if (!vm.useInternal) {
                         if (vm.engines.isEmpty()) {
@@ -236,18 +219,11 @@ fun EbookExportScreen(
                         } else {
                             vm.engines.forEach { e ->
                                 Ios5CellDivider()
-                                Ios5Cell(
+                                Ios5CheckRow(
                                     title = e.label + if (e.isDefault) "（默认）" else "",
-                                    showChevron = false,
+                                    checked = vm.systemEnginePkg == e.packageName ||
+                                        (vm.systemEnginePkg.isBlank() && e.isDefault),
                                     onClick = { if (!running) vm.setVoiceSystem(e.packageName) },
-                                    trailing = {
-                                        RadioButton(
-                                            selected = vm.systemEnginePkg == e.packageName ||
-                                                (vm.systemEnginePkg.isBlank() && e.isDefault),
-                                            onClick = { if (!running) vm.setVoiceSystem(e.packageName) },
-                                            enabled = !running,
-                                        )
-                                    },
                                 )
                             }
                         }
@@ -258,18 +234,22 @@ fun EbookExportScreen(
             item { Ios5SectionTitle("语速 · 语调") }
             item {
                 Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                    ExportSliderRow(
-                        label = "语速",
+                    Ios5SliderRow(
+                        title = "语速",
+                        valueLabel = "%.2f".format(vm.rate),
                         value = vm.rate,
-                        enabled = !running,
-                        onChange = { vm.setRate(it) },
+                        range = 0.5f..2f,
+                        steps = 29,
+                        onValueChange = { if (!running) vm.setRate(it) },
                     )
                     Ios5CellDivider()
-                    ExportSliderRow(
-                        label = "语调",
+                    Ios5SliderRow(
+                        title = "语调",
+                        valueLabel = "%.2f".format(vm.pitch),
                         value = vm.pitch,
-                        enabled = !running,
-                        onChange = { vm.setPitch(it) },
+                        range = 0.5f..2f,
+                        steps = 29,
+                        onValueChange = { if (!running) vm.setPitch(it) },
                     )
                 }
             }
@@ -285,18 +265,11 @@ fun EbookExportScreen(
                     } else {
                         enabledRoots.forEachIndexed { i, r ->
                             if (i > 0) Ios5CellDivider()
-                            Ios5Cell(
+                            Ios5CheckRow(
                                 title = r.displayName,
                                 subtitle = r.rootPath,
-                                showChevron = false,
+                                checked = rootId == r.id,
                                 onClick = { if (!running) rootId = r.id },
-                                trailing = {
-                                    RadioButton(
-                                        selected = rootId == r.id,
-                                        onClick = { if (!running) rootId = r.id },
-                                        enabled = !running,
-                                    )
-                                },
                             )
                         }
                     }
@@ -306,39 +279,21 @@ fun EbookExportScreen(
             item { Ios5SectionTitle("转换选项") }
             item {
                 Ios5Group(Modifier.padding(horizontal = 12.dp)) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "并行 ${vm.threadCount} 线程（本机 ${vm.cpuCores} 核）",
-                            color = Ios5Colors.TextPrimary,
-                            fontSize = 14.sp,
-                            modifier = Modifier.padding(end = 8.dp),
-                        )
-                        Slider(
-                            value = vm.threadCount.toFloat(),
-                            onValueChange = { vm.setThreads(it.toInt().coerceIn(1, vm.cpuCores)) },
-                            valueRange = 1f..vm.cpuCores.toFloat(),
-                            steps = (vm.cpuCores - 2).coerceAtLeast(0),
-                            enabled = !running,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
+                    Ios5SliderRow(
+                        title = "并行线程",
+                        valueLabel = "${vm.threadCount} 线程（本机 ${vm.cpuCores} 核）",
+                        value = vm.threadCount.toFloat(),
+                        range = 1f..vm.cpuCores.toFloat(),
+                        steps = (vm.cpuCores - 2).coerceAtLeast(0),
+                        onValueChange = { if (!running) vm.setThreads(it.toInt().coerceIn(1, vm.cpuCores)) },
+                    )
                     Ios5CellDivider()
-                    Row(
-                        Modifier.fillMaxWidth().clickable(enabled = !running) { vm.setOverwrite(!vm.overwriteExisting) }
-                            .padding(horizontal = 12.dp, vertical = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Checkbox(
-                            checked = vm.overwriteExisting,
-                            onCheckedChange = { if (!running) vm.setOverwrite(it) },
-                            enabled = !running,
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text("覆盖已存在文件", color = Ios5Colors.TextPrimary, fontSize = 15.sp)
-                    }
+                    Ios5SwitchRow(
+                        title = "覆盖已存在文件",
+                        subtitle = "关闭时已存在的章节自动跳过",
+                        checked = vm.overwriteExisting,
+                        onCheckedChange = { if (!running) vm.setOverwrite(it) },
+                    )
                 }
             }
             // ---- 开始 ----
@@ -361,10 +316,7 @@ fun EbookExportScreen(
                     Ios5Group(Modifier.padding(horizontal = 12.dp)) {
                         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             val p = progress!!
-                            LinearProgressIndicator(
-                                progress = { p.done.toFloat() / p.total.coerceAtLeast(1) },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
+                            Ios5ProgressBar(frac = p.done.toFloat() / p.total.coerceAtLeast(1))
                             Text(
                                 if (p.phase == ExportPhase.SYNTH && p.batchTotal > 0) {
                                     "${p.done}/${p.total}段 · 合成 ${p.batchDone}/${p.batchTotal} · " +
@@ -382,7 +334,7 @@ fun EbookExportScreen(
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                                 Ios5MiniButton(
                                     text = "取消",
-                                    icon = Icons.Filled.Check,
+                                    icon = Icons.Filled.Close,
                                     onClick = { EbookExportService.cancel(context) },
                                 )
                             }
@@ -448,19 +400,16 @@ fun EbookExportScreen(
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.weight(1f),
                         )
-                        Text(
-                            "全选",
-                            color = Ios5Colors.IosBlue,
-                            fontSize = 14.sp,
-                            modifier = Modifier.clickable(enabled = !running) { vm.selectAll(true) }
-                                .padding(6.dp),
+                        Ios5MiniButton(
+                            text = "全选",
+                            icon = Icons.Filled.Check,
+                            onClick = { if (!running) vm.selectAll(true) },
                         )
-                        Text(
-                            "全不选",
-                            color = Ios5Colors.IosBlue,
-                            fontSize = 14.sp,
-                            modifier = Modifier.clickable(enabled = !running) { vm.selectAll(false) }
-                                .padding(6.dp),
+                        Spacer(Modifier.width(8.dp))
+                        Ios5MiniButton(
+                            text = "全不选",
+                            icon = Icons.Filled.Close,
+                            onClick = { if (!running) vm.selectAll(false) },
                         )
                     }
                     Text(
@@ -471,23 +420,11 @@ fun EbookExportScreen(
                     Spacer(Modifier.height(8.dp))
                     LazyColumn(modifier = Modifier.fillMaxWidth().fillMaxHeight(0.6f)) {
                         items(vm.segments, key = { it.index }) { s ->
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth()
-                                    .clickable(enabled = !running) { vm.toggleSelect(s.index) },
-                            ) {
-                                Checkbox(
-                                    checked = vm.selected.contains(s.index),
-                                    onCheckedChange = { vm.toggleSelect(s.index) },
-                                    enabled = !running,
-                                )
-                                Text(
-                                    "${s.index + 1}. ${s.title}",
-                                    color = Ios5Colors.TextPrimary,
-                                    fontSize = 14.sp,
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
+                            Ios5CheckRow(
+                                title = "${s.index + 1}. ${s.title}",
+                                checked = vm.selected.contains(s.index),
+                                onClick = { if (!running) vm.toggleSelect(s.index) },
+                            )
                         }
                     }
                     Spacer(Modifier.height(8.dp))
@@ -500,31 +437,40 @@ fun EbookExportScreen(
     }
 }
 
+/**
+ * iOS5 风格进度条：银灰凹槽 + 蓝色填充（与 Ios5Slider 同一套质感）。
+ */
 @Composable
-private fun ExportSliderRow(
-    label: String,
-    value: Float,
-    enabled: Boolean,
-    onChange: (Float) -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
+private fun Ios5ProgressBar(frac: Float) {
+    val f = frac.coerceIn(0f, 1f)
+    val shape = RoundedCornerShape(5.dp)
+    Box(
+        Modifier.fillMaxWidth()
+            .height(10.dp)
+            .clip(shape)
+            .background(
+                Brush.verticalGradient(
+                    0f to Color(0xFFC9CED6),
+                    0.5f to Color(0xFFE4E7EC),
+                    1f to Color(0xFFF4F5F7),
+                ),
+            )
+            .border(1.dp, Color(0xFF9AA0A8), shape),
     ) {
-        Text(
-            "$label ${"%.2f".format(value)}",
-            color = Ios5Colors.TextPrimary,
-            fontSize = 14.sp,
-            modifier = Modifier.padding(end = 8.dp),
-        )
-        Slider(
-            value = value,
-            onValueChange = onChange,
-            valueRange = 0.5f..2f,
-            steps = 29,
-            enabled = enabled,
-            modifier = Modifier.weight(1f),
-        )
+        if (f > 0f) {
+            Box(
+                Modifier.align(Alignment.CenterStart)
+                    .fillMaxHeight()
+                    .fillMaxWidth(f)
+                    .clip(shape)
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color(0xFF53A7EB),
+                            1f to Color(0xFF0B6EDB),
+                        ),
+                    ),
+            )
+        }
     }
 }
 
