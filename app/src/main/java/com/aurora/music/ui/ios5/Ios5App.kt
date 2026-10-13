@@ -309,6 +309,7 @@ fun Ios5App() {
                                 onOpenDetail = { k, i, t -> openDetail(k, i, t) },
                                 onPlaySongs = { songs, index -> playerVM.playAll(songs, index) },
                                 onOpenBook = { p -> navController.navigate(Ios5Routes.ebookReader(p)) },
+                                onPlayAudiobook = { playAudiobook(it) },
                             )
                         }
                         composable(Ios5Routes.PLAYLISTS) {

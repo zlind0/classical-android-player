@@ -61,9 +61,11 @@ fun HomeTab(
     onOpenDetail: (kind: String, id: String, title: String) -> Unit,
     onPlaySongs: (songs: List<Song>, index: Int) -> Unit,
     onOpenBook: (path: String) -> Unit,
+    onPlayAudiobook: (bookId: String) -> Unit,
 ) {
     val container = (androidx.compose.ui.platform.LocalContext.current.applicationContext as AuroraApplication).container
     val ebookRecents by container.ebookStore.recents.collectAsStateWithLifecycle()
+    val abookRecents by container.audiobookStore.recents.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "首页")
         if (state.loading) {
@@ -83,6 +85,20 @@ fun HomeTab(
                         coverPath = b.coverPath,
                         accentKey = b.path,
                         onClick = { onOpenBook(b.path) },
+                    )
+                }
+            }
+            // 最近听的 3 本有声书（点行整本续播）
+            val recentAbooks = abookRecents.take(3)
+            if (recentAbooks.isNotEmpty()) {
+                item { Ios5SectionTitle("最近听书") }
+                ios5Rows(recentAbooks, key = { it.id }) { _, b ->
+                    AudiobookRow(
+                        title = b.displayTitle,
+                        subtitle = bookSubtitle(b.chapterCount, b.currentIndex, b.progressPct, b.skippedCount),
+                        coverPath = b.coverPath,
+                        accentKey = b.id,
+                        onClick = { onPlayAudiobook(b.id) },
                     )
                 }
             }
@@ -146,7 +162,7 @@ fun HomeTab(
                     )
                 }
             }
-            if (d.newReleases.isEmpty() && d.playlists.isEmpty() && d.artists.isEmpty() && d.starred.isEmpty() && d.recentlyPlayed.isEmpty() && recentBooks.isEmpty()) {
+            if (d.newReleases.isEmpty() && d.playlists.isEmpty() && d.artists.isEmpty() && d.starred.isEmpty() && d.recentlyPlayed.isEmpty() && recentBooks.isEmpty() && recentAbooks.isEmpty()) {
                 item { Ios5Empty("资料库是空的\n请到 设置 → 音乐来源 添加目录并扫描") }
             }
         }
