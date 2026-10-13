@@ -226,6 +226,7 @@ fun Ios5App() {
         val idx = book.chapters.indexOfFirst { it.path == savedPath }.takeIf { it >= 0 } ?: 0
         val pos = if (book.chapters.getOrNull(idx)?.path == savedPath) prog?.positionMs ?: 0L else 0L
         container.haptic()
+        if (!playerVM.hasController()) confirm("正在连接播放服务，连上就播")
         playerVM.playAudiobook(bookId, songs, idx, pos, prog?.speed ?: 1f, prog?.gain ?: 1f)
     }
 

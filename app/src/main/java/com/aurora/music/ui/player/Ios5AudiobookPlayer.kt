@@ -27,8 +27,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
@@ -318,15 +316,14 @@ fun Ios5AudiobookPlayerPage(
                     horizontalArrangement = Arrangement.SpaceEvenly,
                 ) {
                     AbookCellButton(label = "后退${step}秒", onClick = { onSeekBy(-step) }) {
-                        Text("−${step}s", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = Ios5Sans)
+                        SeekCircleIcon(seconds = step, forward = false, modifier = Modifier.size(54.dp))
                     }
-                    Icon(
-                        if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        if (state.isPlaying) "暂停" else "播放", tint = Color.White,
-                        modifier = Modifier.size(72.dp).clip(androidx.compose.foundation.shape.CircleShape).clickable(onClick = onTogglePlay).padding(8.dp),
+                    AbookPlayPauseIcon(
+                        playing = state.isPlaying,
+                        modifier = Modifier.size(72.dp).clip(androidx.compose.foundation.shape.CircleShape).clickable(onClick = onTogglePlay).padding(10.dp),
                     )
                     AbookCellButton(label = "前进${step}秒", onClick = { onSeekBy(step) }) {
-                        Text("+${step}s", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = Ios5Sans)
+                        SeekCircleIcon(seconds = step, forward = true, modifier = Modifier.size(54.dp))
                     }
                 }
                 Spacer(Modifier.height(4.dp))

@@ -79,6 +79,18 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
     private var ticker: Job? = null
     private var queueFillJob: Job? = null
     private var songById: Map<String, Song> = emptyMap()
+    // 冷启动点书时 controller 可能还没连上：存下参数，连上即播（只保留最后一次）
+    private data class PendingAbook(
+        val bookId: String,
+        val songs: List<Song>,
+        val idx: Int,
+        val posMs: Long,
+        val speed: Float,
+        val gain: Float,
+    )
+    @Volatile private var pendingAbook: PendingAbook? = null
+
+    fun hasController(): Boolean = controller != null
 
     @Volatile private var autoplayEnabled = false
 
@@ -217,6 +229,11 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             if (c.mediaItemCount > 0 && songById.isEmpty()) rehydrateFromController()
             syncFromController()
             startTicker()
+            // 冷启动时排队的有声书点播：连上即播
+            pendingAbook?.let { p ->
+                pendingAbook = null
+                playAudiobook(p.bookId, p.songs, p.idx, p.posMs, p.speed, p.gain)
+            }
         }, ContextCompat.getMainExecutor(app))
 
         // restore a saved queue only if the service came up empty otherwise keep its queue
@@ -498,7 +515,17 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         speed: Float,
         gain: Float,
     ) {
-        val c = controller ?: return
+        val c = controller
+        if (c == null) {
+            // 连接中：排队，连上即播（调用方负责 toast 提示）
+            pendingAbook = PendingAbook(
+                bookId, songs,
+                startIndex.coerceIn(0, songs.lastIndex.coerceAtLeast(0)),
+                positionMs, speed, gain,
+            )
+            return
+        }
+        pendingAbook = null
         if (songs.isEmpty()) return
         container.haptic()
         playingAccountKey = container.currentAccountKey()
