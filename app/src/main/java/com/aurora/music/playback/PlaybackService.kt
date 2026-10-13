@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.media.AudioManager
+import android.media.AudioPlaybackConfiguration
 import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -97,9 +98,15 @@ class PlaybackService : MediaLibraryService() {
     @Volatile private var abookSeekSec = 30
     @Volatile private var abookDuckHeld = false
     private var abookDuckRequest: android.media.AudioFocusRequest? = null
+    // VM 装载的书（开播前已置位、切歌/停止时清空；tick 用它在出声前就保持丢焦点）
+    @Volatile private var abookBook: String? = null
     private val abookFocusListener = android.media.AudioManager.OnAudioFocusChangeListener { change ->
-        scope.launch { handleBookFocusChange(change) }
+        scope.launch { handleAbookFocusChange(change) }
     }
+    // 书是否真正在出声（队列是书 + playing；暂停/切走即 false）
+    @Volatile private var abookPlayingNow = false
+    private var abookPlaybackCb: AudioManager.AudioPlaybackCallback? = null
+    @Volatile private var lastReduckMs = 0L
 
     // ---- 统一会话（单服务单会话）：音乐 + 听书共用一个系统会话 ----
     // 双播一旦进入（dualArmed）就保持，直到用户亲手停掉其中一路；
@@ -415,6 +422,23 @@ class PlaybackService : MediaLibraryService() {
                 ContextCompat.RECEIVER_NOT_EXPORTED,
             )
         }
+        // 后启动的站外音乐：播配置回调发现（排除本站会话），强制压低
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            val am = getSystemService(AUDIO_SERVICE) as AudioManager
+            val cb = object : AudioManager.AudioPlaybackCallback() {
+                override fun onPlaybackConfigChanged(configs: List<AudioPlaybackConfiguration>) {
+                    if (!abookPlayingNow || !abookAllowMix || !abookDuckOthers) return
+                    // 公开 API 拿不到 session/uid，只能按 usage 判；
+                    // 自己的启停也会触发，重拿一次无害（3s 节流）
+                    val other = configs.any { cfg ->
+                        cfg.audioAttributes?.usage == android.media.AudioAttributes.USAGE_MEDIA
+                    }
+                    if (other) scope.launch { reduckOthers() }
+                }
+            }
+            abookPlaybackCb = cb
+            runCatching { am.registerAudioPlaybackCallback(cb, null) }
+        }
         refreshArbitration()
         scope.launch {
             container.settingsStore.unifiedTts.collect {
@@ -432,6 +456,9 @@ class PlaybackService : MediaLibraryService() {
         }
         scope.launch {
             container.abookSession.gain.collect { abookGain = it.coerceIn(0.5f, 2f) }
+        }
+        scope.launch {
+            container.abookSession.activeBookId.collect { abookBook = it }
         }
 
         scope.launch {
@@ -626,6 +653,7 @@ class PlaybackService : MediaLibraryService() {
         abookActive = player.currentMediaItem?.mediaId?.startsWith(
             com.aurora.music.data.audiobook.ABOOK_ID_PREFIX,
         ) == true
+        abookPlayingNow = abookActive && player.isPlaying
         syncEbookDuck()
         if (sleepFadeActive) { driveSleepFade(); return }
         if (wakeFadeActive) { driveWakeFade(); return }
@@ -759,7 +787,11 @@ class PlaybackService : MediaLibraryService() {
                 else (abookGainApplied - step).coerceAtLeast(gainTarget)
         }
         if (!independentOutput && !bitPerfect) {
-            val wantDrop = (ebookPlaying && ebookDuckOthers) || (abookActive && abookAllowMix)
+            // 独占丢焦点：TTS 听书播着，或有声书已装载（开播前即丢，否则起播瞬间
+            // GAIN 抢占会先暂停站外；暂停时不持有也不打断别人）。
+            // 注意 MAY_DUCK 仍只在真正在播时持有（见 updateAbookDuckFocus）。
+            val wantDrop = (ebookPlaying && ebookDuckOthers) ||
+                ((abookActive || abookBook != null) && abookAllowMix)
             if (wantDrop != ebookFocusDropped) {
                 ebookFocusDropped = wantDrop
                 val attrs = musicAudioAttrs ?: return
@@ -769,10 +801,42 @@ class PlaybackService : MediaLibraryService() {
         updateAbookDuckFocus()
     }
 
-    /** 有声书 MAY_DUCK 焦点：共存 + 压低都开且有声书在列时持有，否则归还。 */
+    /**
+     * 有声书 MAY_DUCK 焦点：书正在播 + 共存 + 压低都开时持有，否则归还。
+     * 只看 playing 不看队列：暂停时按开关也不压别人。
+     */
     private fun updateAbookDuckFocus() {
-        if (abookActive && abookAllowMix && abookDuckOthers) requestAbookDuckFocus()
+        if (abookPlayingNow && abookAllowMix && abookDuckOthers) requestAbookDuckFocus()
         else abandonAbookDuckFocus()
+    }
+
+    /**
+     * 有声书自己的焦点变化（共存语义，与 TTS 听书的 handleBookFocusChange 分开）：
+     * 被后来者抢占不断书；若仍在播且需压低，重拿一次把对方压下去。
+     */
+    private fun handleAbookFocusChange(focusChange: Int) {
+        when (focusChange) {
+            AudioManager.AUDIOFOCUS_LOSS, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                abookDuckHeld = false
+                // tick 会在 100ms 内按现态重拿；这里只清标记不断书
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK,
+            AudioManager.AUDIOFOCUS_GAIN,
+                -> Unit
+        }
+    }
+
+    /**
+     * 后启动的站外媒体：框架不会自动把它压低（后来者拿 gain，我方收 LOSS），
+     * 靠播放配置回调发现它，强制重走一次 duck 把它压下去（3s 节流）。
+     */
+    private fun reduckOthers() {
+        if (!abookPlayingNow || !abookAllowMix || !abookDuckOthers) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastReduckMs < 3000) return
+        lastReduckMs = now
+        abandonAbookDuckFocus()
+        requestAbookDuckFocus()
     }
 
     private fun requestAbookDuckFocus() {
@@ -1047,6 +1111,19 @@ class PlaybackService : MediaLibraryService() {
                     val ms = customCommand.customExtras.getInt("fadeMs", 0)
                     if (ms > 0) { sleepFadeMs = ms; sleepFadeStartMs = android.os.SystemClock.elapsedRealtime(); sleepFadeActive = true }
                     else { sleepFadeActive = false; player.volume = volBase() }
+                }
+                // 有声书开播前：共存则先丢独占焦点 + 按开关持 duck，
+                // 否则起播瞬间的 GAIN 会先把站外暂停（tick 里补丢已经晚了）
+                CMD_ABOOK_START -> {
+                    if (abookAllowMix) {
+                        val attrs = musicAudioAttrs
+                        if (attrs != null) {
+                            ebookFocusDropped = true
+                            runCatching { player.setAudioAttributes(attrs, false) }
+                        }
+                        if (abookDuckOthers) requestAbookDuckFocus()
+                        else abandonAbookDuckFocus()
+                    }
                 }
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -1500,6 +1577,12 @@ class PlaybackService : MediaLibraryService() {
         runCatching { noisyReceiver?.let { unregisterReceiver(it) } }
         noisyReceiver = null
         runCatching { container.ebookTtsPlayer.onAudioFocusChange = null }
+        runCatching {
+            abookPlaybackCb?.let {
+                (getSystemService(AUDIO_SERVICE) as AudioManager).unregisterAudioPlaybackCallback(it)
+            }
+        }
+        abookPlaybackCb = null
         abandonAbookDuckFocus()
         mediaSession?.release()
         mediaSession = null
@@ -1515,6 +1598,7 @@ class PlaybackService : MediaLibraryService() {
         const val CMD_SHUFFLE = "com.aurora.music.SHUFFLE"
         const val CMD_REPEAT = "com.aurora.music.REPEAT"
         const val CMD_SLEEP_FADE = "com.aurora.music.SLEEP_FADE"
+        const val CMD_ABOOK_START = "com.aurora.music.ABOOK_START"
         const val ACTION_PLAY_PAUSE = "com.aurora.music.action.PLAY_PAUSE"
         const val ACTION_NEXT = "com.aurora.music.action.NEXT"
         const val ACTION_PREV = "com.aurora.music.action.PREV"

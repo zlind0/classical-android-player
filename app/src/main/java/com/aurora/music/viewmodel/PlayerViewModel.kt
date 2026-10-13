@@ -29,10 +29,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.pow
+import java.util.concurrent.TimeUnit
 
 enum class RepeatMode { OFF, ALL, ONE }
 
@@ -515,39 +517,54 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         speed: Float,
         gain: Float,
     ) {
-        val c = controller
-        if (c == null) {
-            // 连接中：排队，连上即播（调用方负责 toast 提示）
-            pendingAbook = PendingAbook(
-                bookId, songs,
-                startIndex.coerceIn(0, songs.lastIndex.coerceAtLeast(0)),
-                positionMs, speed, gain,
-            )
-            return
-        }
-        pendingAbook = null
-        if (songs.isEmpty()) return
-        container.haptic()
-        playingAccountKey = container.currentAccountKey()
-        songById = songs.associateBy { it.id }
-        abookOrder = songs.map { it.id }
-        val idx = startIndex.coerceIn(0, songs.lastIndex)
-        val clampedSpeed = speed.coerceIn(0.5f, 4f)
-        val clampedGain = gain.coerceIn(0.5f, 2f)
-        val delivery = deliverQueue(songs, idx, positionMs.coerceAtLeast(0L))
-        // 不变调变速：pitch 恒 1，与音乐 matchPitch 逻辑解耦
-        c.playbackParameters = PlaybackParameters(clampedSpeed, 1f)
-        c.prepare()
-        c.play()
-        sendShuffle(0)
-        container.abookSession.setActive(bookId, clampedGain)
-        container.abookSession.setCurrentPath(songs[idx].path)
-        _state.update {
-            it.copy(
-                queue = delivery.songs, currentIndex = delivery.currentIndex, current = songs[idx],
-                positionSec = positionMs / 1000f, isPlaying = true,
-                abookId = bookId, abookSpeed = clampedSpeed, abookGain = clampedGain,
-            )
+        viewModelScope.launch {
+            val c = controller
+            if (c == null) {
+                // 连接中：排队，连上即播（调用方负责 toast 提示）
+                pendingAbook = PendingAbook(
+                    bookId, songs,
+                    startIndex.coerceIn(0, songs.lastIndex.coerceAtLeast(0)),
+                    positionMs, speed, gain,
+                )
+                return@launch
+            }
+            pendingAbook = null
+            if (songs.isEmpty()) return@launch
+            container.haptic()
+            playingAccountKey = container.currentAccountKey()
+            songById = songs.associateBy { it.id }
+            abookOrder = songs.map { it.id }
+            val idx = startIndex.coerceIn(0, songs.lastIndex)
+            val clampedSpeed = speed.coerceIn(0.5f, 4f)
+            val clampedGain = gain.coerceIn(0.5f, 2f)
+            container.abookSession.setActive(bookId, clampedGain)
+            container.abookSession.setCurrentPath(songs[idx].path)
+            // 共存：先等 service 丢掉独占焦点再起播，否则 GAIN 瞬间暂停站外
+            val allowMix = runCatching { container.settingsStore.audiobookPrefs.first().allowMix }
+                .getOrDefault(false)
+            if (allowMix) {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        c.sendCustomCommand(
+                            SessionCommand(PlaybackService.CMD_ABOOK_START, android.os.Bundle.EMPTY),
+                            android.os.Bundle.EMPTY,
+                        ).get(2, TimeUnit.SECONDS)
+                    }
+                }
+            }
+            val delivery = deliverQueue(songs, idx, positionMs.coerceAtLeast(0L))
+            // 不变调变速：pitch 恒 1，与音乐 matchPitch 逻辑解耦
+            c.playbackParameters = PlaybackParameters(clampedSpeed, 1f)
+            c.prepare()
+            c.play()
+            sendShuffle(0)
+            _state.update {
+                it.copy(
+                    queue = delivery.songs, currentIndex = delivery.currentIndex, current = songs[idx],
+                    positionSec = positionMs / 1000f, isPlaying = true,
+                    abookId = bookId, abookSpeed = clampedSpeed, abookGain = clampedGain,
+                )
+            }
         }
     }
 
