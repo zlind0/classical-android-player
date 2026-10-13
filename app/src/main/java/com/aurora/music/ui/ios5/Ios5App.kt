@@ -88,9 +88,11 @@ import com.aurora.music.ui.browse.Ios5GroupsBrowse
 import com.aurora.music.ui.browse.Ios5SongsBrowse
 import com.aurora.music.ui.browse.searchScopeFor
 import com.aurora.music.ui.player.Ios5MiniStrip
+import com.aurora.music.ui.player.Ios5AudiobookPlayerPage
 import com.aurora.music.ui.player.Ios5PlayerPage
 import com.aurora.music.ui.search.Ios5SearchPage
 import com.aurora.music.ui.tabs.ArtistsTab
+import com.aurora.music.ui.tabs.AudiobooksTab
 import com.aurora.music.ui.tabs.EbooksTab
 import com.aurora.music.ui.tabs.HomeTab
 import com.aurora.music.ui.tabs.MoreTab
@@ -112,6 +114,10 @@ fun Ios5App() {
 
     val playerState by playerVM.state.collectAsStateWithLifecycle()
     val browseState by browseVM.state.collectAsStateWithLifecycle()
+    val abooks by container.audiobookStore.books.collectAsStateWithLifecycle()
+    val abookPrefs by container.settingsStore.audiobookPrefs.collectAsStateWithLifecycle(
+        initialValue = com.aurora.music.data.SettingsStore.AudiobookPrefs(),
+    )
     val sessionReady by container.sessionReady.collectAsStateWithLifecycle()
     val uiPrefs by container.settingsStore.uiPrefs.collectAsStateWithLifecycle(initialValue = com.aurora.music.data.UiPrefs())
 
@@ -192,6 +198,35 @@ fun Ios5App() {
     }
     fun playById(id: String) = scope.launch {
         container.repository.songFor(id)?.let { playerVM.play(it) }
+    }
+    // 有声书：点书即整本续播（替换音乐队列），记忆按文件路径找回
+    fun playAudiobook(bookId: String) = scope.launch {
+        val book = container.audiobookStore.books.value.firstOrNull { it.id == bookId }
+        if (book == null || book.chapters.isEmpty()) {
+            confirm(if (book == null) "这本书不在书库里了" else "这本书没有可播章节（可能全被关键字过滤）")
+            return@launch
+        }
+        val prog = container.audiobookStore.progressOf(bookId)
+        val songs = book.chapters.mapIndexed { i, c ->
+            com.aurora.music.model.Song(
+                id = com.aurora.music.data.audiobook.abookSongId(bookId, i),
+                title = c.displayTitle,
+                artist = book.displayTitle,
+                album = book.displayTitle,
+                artworkUrl = book.coverPath,
+                durationSec = c.durationSec,
+                streamUrl = runCatching { Uri.fromFile(java.io.File(c.path)).toString() }.getOrDefault(""),
+                suffix = c.path.substringAfterLast('.', ""),
+                path = c.path,
+                accent = com.aurora.music.util.accentFor(c.path),
+                trackNumber = c.trackNumber,
+            )
+        }
+        val savedPath = prog?.currentPath.orEmpty()
+        val idx = book.chapters.indexOfFirst { it.path == savedPath }.takeIf { it >= 0 } ?: 0
+        val pos = if (book.chapters.getOrNull(idx)?.path == savedPath) prog?.positionMs ?: 0L else 0L
+        container.haptic()
+        playerVM.playAudiobook(bookId, songs, idx, pos, prog?.speed ?: 1f, prog?.gain ?: 1f)
     }
 
     if (sessionReady == null) {
@@ -307,6 +342,11 @@ fun Ios5App() {
                                 },
                                 onOpenBook = { p -> navController.navigate(Ios5Routes.ebookReader(p)) },
                                 onOpenSearch = { navController.navigate(Ios5Routes.EBOOK_SEARCH) },
+                            )
+                        }
+                        composable(Ios5Routes.AUDIOBOOKS) {
+                            AudiobooksTab(
+                                onPlayBook = { playAudiobook(it) },
                             )
                         }
                         composable(
@@ -544,6 +584,19 @@ fun Ios5App() {
                                 confirm = { confirm(it) },
                             )
                         }
+                        composable(Ios5Routes.SETTINGS_AUDIOBOOK_SOURCES) {
+                            com.aurora.music.ui.screens.settings.AudiobookSourcesScreen(
+                                contentPadding = PaddingValues(0.dp),
+                                onBack = { navController.popBackStack() },
+                                confirm = { confirm(it) },
+                            )
+                        }
+                        composable(Ios5Routes.SETTINGS_AUDIOBOOK) {
+                            com.aurora.music.ui.screens.settings.AudiobookSettingsScreen(
+                                contentPadding = PaddingValues(0.dp),
+                                onBack = { navController.popBackStack() },
+                            )
+                        }
                         composable(Ios5Routes.SETTINGS_STORAGE) {
                             com.aurora.music.ui.screens.settings.StorageSettingsScreen(
                                 contentPadding = PaddingValues(0.dp),
@@ -699,7 +752,11 @@ fun Ios5App() {
                                 state = playerState,
                                 onExpand = { playerVM.setExpanded(true) },
                                 onTogglePlay = { playerVM.togglePlay() },
-                                onNext = { playerVM.next() },
+                                // 有声书态 mini 条下一键 = 前进步长（与通知栏一致），音乐态切歌
+                                onNext = {
+                                    if (playerState.abookId != null) playerVM.seekBySeconds(playerVM.abookStep())
+                                    else playerVM.next()
+                                },
                             )
                         }
                         Ios5TabBar(tabHighlight, onNavigate = { navigateTopLevel(it) })
@@ -875,9 +932,16 @@ fun Ios5App() {
                                 com.aurora.music.ui.player.Ios5LandscapeTransport(
                                     state = playerState,
                                     onTogglePlay = { playerVM.togglePlay() },
-                                    onNext = { playerVM.next() },
-                                    onPrevious = { playerVM.previous() },
-                                    onToggleLike = { playerVM.toggleLikeCurrent() },
+                                    // 横屏有声书态：走带键切章节（系统键仍走 ±步长，由 service 拦截）
+                                    onNext = {
+                                        if (playerState.abookId != null) playerVM.abookChapter(+1)
+                                        else playerVM.next()
+                                    },
+                                    onPrevious = {
+                                        if (playerState.abookId != null) playerVM.abookChapter(-1)
+                                        else playerVM.previous()
+                                    },
+                                    onToggleLike = { if (playerState.abookId == null) playerVM.toggleLikeCurrent() },
                                     onToggleShuffle = { playerVM.toggleShuffle() },
                                     onCycleRepeat = { playerVM.cycleRepeat() },
                                     modifier = Modifier.padding(vertical = 2.dp),
@@ -905,6 +969,33 @@ fun Ios5App() {
                     },
             ) {
                 if (playerState.hasTrack) {
+                    val abook = abooks.firstOrNull { it.id == playerState.abookId }
+                    if (playerState.abookId != null && abook != null) {
+                        Ios5AudiobookPlayerPage(
+                            state = playerState,
+                            book = abook,
+                            allowMix = abookPrefs.allowMix,
+                            onCollapse = { playerVM.setExpanded(false) },
+                            onTogglePlay = { playerVM.togglePlay() },
+                            onPrevChapter = { playerVM.abookChapter(-1) },
+                            onNextChapter = { playerVM.abookChapter(+1) },
+                            onSeekChapter = { playerVM.abookJumpToChapter(it) },
+                            onSeekBy = { playerVM.seekBySeconds(it) },
+                            onSeek = { playerVM.seekTo(it) },
+                            onSpeed = { playerVM.setAbookSpeed(it) },
+                            onGain = { playerVM.setAbookGain(it) },
+                            onToggleMix = {
+                                scope.launch {
+                                    container.settingsStore.setAbookAllowMix(!abookPrefs.allowMix)
+                                }
+                            },
+                            onToggleShuffle = { playerVM.toggleShuffle() },
+                            onCycleRepeat = { playerVM.cycleRepeat() },
+                            onOpenQueue = { showQueue = true },
+                            introActive = introState.active,
+                            onIntroClick = { onIntroClick() },
+                        )
+                    } else {
                     Ios5PlayerPage(
                         state = playerState,
                         onCollapse = { playerVM.setExpanded(false) },
@@ -919,6 +1010,7 @@ fun Ios5App() {
                         introActive = introState.active,
                         onIntroClick = { onIntroClick() },
                     )
+                    }
                 }
             }
             } // if expanded 播放面结束

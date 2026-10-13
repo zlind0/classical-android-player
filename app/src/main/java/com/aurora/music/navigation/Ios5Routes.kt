@@ -13,6 +13,7 @@ object Ios5Routes {
     const val PLAYLISTS = "ios5_playlists"
     const val ARTISTS = "ios5_artists"
     const val EBOOKS = "ios5_ebooks"
+    const val AUDIOBOOKS = "ios5_audiobooks"
     const val MORE = "ios5_more"
     const val SETTINGS = "ios5_settings"
 
@@ -62,6 +63,8 @@ object Ios5Routes {
     const val SETTINGS_BACKUP = "settings_backup"
     const val SETTINGS_SOURCES = "settings_sources"
     const val SETTINGS_EBOOK_SOURCES = "settings_ebook_sources"
+    const val SETTINGS_AUDIOBOOK_SOURCES = "settings_audiobook_sources"
+    const val SETTINGS_AUDIOBOOK = "settings_audiobook"
     const val SETTINGS_INTRO = "settings_intro"
     const val SETTINGS_INTRO_PROMPT = "settings_intro_prompt"
     const val SETTINGS_INTRO_VOICE = "settings_intro_voice"
@@ -87,6 +90,7 @@ val ios5Tabs = listOf(
     Ios5Tab(Ios5Routes.PLAYLISTS, "歌单"),
     Ios5Tab(Ios5Routes.ARTISTS, "艺人"),
     Ios5Tab(Ios5Routes.EBOOKS, "电子书"),
+    Ios5Tab(Ios5Routes.AUDIOBOOKS, "有声书"),
     Ios5Tab(Ios5Routes.MORE, "更多"),
     Ios5Tab(Ios5Routes.SETTINGS, "设置"),
 )

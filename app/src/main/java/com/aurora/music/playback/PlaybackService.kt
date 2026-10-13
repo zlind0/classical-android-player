@@ -88,6 +88,18 @@ class PlaybackService : MediaLibraryService() {
     @Volatile private var ebookDuckApplied = 1f
     @Volatile private var ebookFocusDropped = false
     private var musicAudioAttrs: AudioAttributes? = null
+    // 有声书：当前播的是否是有声书（mediaId 前缀判定）+ 本书增益 + 混音开关 + 步长
+    @Volatile private var abookActive = false
+    @Volatile private var abookGain = 1f
+    @Volatile private var abookGainApplied = 1f
+    @Volatile private var abookAllowMix = false
+    @Volatile private var abookDuckOthers = true
+    @Volatile private var abookSeekSec = 30
+    @Volatile private var abookDuckHeld = false
+    private var abookDuckRequest: android.media.AudioFocusRequest? = null
+    private val abookFocusListener = android.media.AudioManager.OnAudioFocusChangeListener { change ->
+        scope.launch { handleBookFocusChange(change) }
+    }
 
     // ---- 统一会话（单服务单会话）：音乐 + 听书共用一个系统会话 ----
     // 双播一旦进入（dualArmed）就保持，直到用户亲手停掉其中一路；
@@ -410,6 +422,17 @@ class PlaybackService : MediaLibraryService() {
                 ebookDuckOthers = it.duckOthers
             }
         }
+        scope.launch {
+            // 有声书混音/步长（全局设置）+ 本书增益（VM 写 abookSession）
+            container.settingsStore.audiobookPrefs.collect {
+                abookAllowMix = it.allowMix
+                abookDuckOthers = it.duckOthers
+                abookSeekSec = it.seekSec
+            }
+        }
+        scope.launch {
+            container.abookSession.gain.collect { abookGain = it.coerceIn(0.5f, 2f) }
+        }
 
         scope.launch {
             while (isActive) {
@@ -600,6 +623,9 @@ class PlaybackService : MediaLibraryService() {
     private fun tickAudio() {
         // v0.6 GR meters for the Dynamics UI (cheap volatile reads)
         container.dspMeters.value = com.aurora.music.data.DspMeters(auroraDsp.compGrDb, auroraDsp.limGrDb)
+        abookActive = player.currentMediaItem?.mediaId?.startsWith(
+            com.aurora.music.data.audiobook.ABOOK_ID_PREFIX,
+        ) == true
         syncEbookDuck()
         if (sleepFadeActive) { driveSleepFade(); return }
         if (wakeFadeActive) { driveWakeFade(); return }
@@ -608,10 +634,13 @@ class PlaybackService : MediaLibraryService() {
             if (player.currentMediaItem?.mediaId != xfadeExpectedId) { endXfade() } else { driveXfade() }
             return
         }
-        val base = replayGainMultiplier() * ebookDuckApplied
+        val base = volBase()
         if (kotlin.math.abs(player.volume - base) > 0.01f) player.volume = base
         maybeBeginXfade()
     }
+
+    /** 音量基数：replaygain × 听书压低 × 有声书本书增益。 */
+    private fun volBase(): Float = replayGainMultiplier() * ebookDuckApplied * abookGainApplied
 
     /**
      * 统一会话仲裁：单服务单会话，按模式换会话 player。
@@ -705,11 +734,13 @@ class PlaybackService : MediaLibraryService() {
     }
 
     /**
-     * 听书混音同步（每 tick 跑一次，100ms 常态 / 25ms 淡入淡出中）：
+     * 听书/有声书混音同步（每 tick 跑一次，100ms 常态 / 25ms 淡入淡出中）：
      * - 音量斜坡：站内音乐向 用户设定的保留音量 / 1.0 平滑过渡；
-     * - 焦点让出：听书播着且 duck 开关开时，音乐主动丢焦点，
+     * - 有声书增益：向本书增益（0.5..2.0）平滑过渡；
+     * - 焦点让出：听书播着且 duck 开关开时，或有声书播着且共存开时，音乐主动丢焦点，
      *   避免 Media3 自动 duck（固定 0.2）与手动比例叠加导致过 quiet；
-     *   听书停后恢复焦点持有。independentOutput 下本来就无焦点，跳过切换。
+     *   停后恢复焦点持有。independentOutput 下本来就无焦点，跳过切换。
+     * - 有声书压低：共存 + 压低都开时持 MAY_DUCK 焦点，把站外压低。
      */
     private fun syncEbookDuck() {
         val target = if (ebookPlaying) ebookMusicLevel.coerceIn(0.05f, 1f) else 1f
@@ -720,32 +751,104 @@ class PlaybackService : MediaLibraryService() {
                 if (cur < target) (cur + step).coerceAtMost(target)
                 else (cur - step).coerceAtLeast(target)
         }
+        val gainTarget = if (abookActive) abookGain else 1f
+        if (abookGainApplied != gainTarget) {
+            val step = 0.1f
+            abookGainApplied =
+                if (abookGainApplied < gainTarget) (abookGainApplied + step).coerceAtMost(gainTarget)
+                else (abookGainApplied - step).coerceAtLeast(gainTarget)
+        }
         if (!independentOutput && !bitPerfect) {
-            val wantDrop = ebookPlaying && ebookDuckOthers
+            val wantDrop = (ebookPlaying && ebookDuckOthers) || (abookActive && abookAllowMix)
             if (wantDrop != ebookFocusDropped) {
                 ebookFocusDropped = wantDrop
                 val attrs = musicAudioAttrs ?: return
                 runCatching { player.setAudioAttributes(attrs, !wantDrop) }
             }
         }
+        updateAbookDuckFocus()
     }
+
+    /** 有声书 MAY_DUCK 焦点：共存 + 压低都开且有声书在列时持有，否则归还。 */
+    private fun updateAbookDuckFocus() {
+        if (abookActive && abookAllowMix && abookDuckOthers) requestAbookDuckFocus()
+        else abandonAbookDuckFocus()
+    }
+
+    private fun requestAbookDuckFocus() {
+        if (abookDuckHeld) return
+        val am = getSystemService(AUDIO_SERVICE) as AudioManager
+        val res = if (android.os.Build.VERSION.SDK_INT >= 26) {
+            val attrs = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            val req = android.media.AudioFocusRequest.Builder(
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+            ).setAudioAttributes(attrs)
+                .setOnAudioFocusChangeListener(abookFocusListener)
+                .build()
+            abookDuckRequest = req
+            am.requestAudioFocus(req)
+        } else {
+            @Suppress("DEPRECATION")
+            am.requestAudioFocus(
+                abookFocusListener,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+            )
+        }
+        abookDuckHeld = res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
+
+    private fun abandonAbookDuckFocus() {
+        if (!abookDuckHeld && abookDuckRequest == null) return
+        abookDuckHeld = false
+        val am = getSystemService(AUDIO_SERVICE) as AudioManager
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            abookDuckRequest?.let { runCatching { am.abandonAudioFocusRequest(it) } }
+        } else {
+            @Suppress("DEPRECATION")
+            runCatching { am.abandonAudioFocus(abookFocusListener) }
+        }
+        abookDuckRequest = null
+    }
+
+    /** 有声书态系统上一首/下一首 = ±步长位移（钳制本章内，不跨章）。 */
+    private fun abookSeekBy(deltaSec: Int) {
+        if (!abookActive) return
+        val dur = player.duration.takeIf { it > 0 } ?: return
+        val pos = (player.currentPosition + deltaSec * 1000L).coerceIn(0L, dur)
+        player.seekTo(pos)
+        // 暂停态下 VM ticker 不落盘，这里经 abookSession 直写不断位
+        val mediaId = player.currentMediaItem?.mediaId ?: return
+        val bookId = mediaId.removePrefix(com.aurora.music.data.audiobook.ABOOK_ID_PREFIX)
+            .substringBeforeLast('#', "").ifBlank { return }
+        val path = container.abookSession.currentPath.value.ifBlank { return }
+        scope.launch(Dispatchers.IO) {
+            runCatching { container.audiobookStore.savePos(bookId, path, pos) }
+        }
+    }
+
+    private fun isAbookMedia(mediaId: String?): Boolean =
+        mediaId?.startsWith(com.aurora.music.data.audiobook.ABOOK_ID_PREFIX) == true
 
     private fun driveSleepFade() {
         val ms = sleepFadeMs.coerceAtLeast(1)
         val t = ((android.os.SystemClock.elapsedRealtime() - sleepFadeStartMs).toFloat() / ms).coerceIn(0f, 1f)
-        player.volume = ((1f - t) * replayGainMultiplier() * ebookDuckApplied).coerceIn(0f, 1f)
+        player.volume = ((1f - t) * volBase()).coerceIn(0f, 1f)
         if (t >= 1f) {
             sleepFadeActive = false
             player.pause()
-            player.volume = replayGainMultiplier() * ebookDuckApplied
+            player.volume = volBase()
         }
     }
 
     private fun driveWakeFade() {
         val ms = wakeFadeMs.coerceAtLeast(1)
         val t = ((android.os.SystemClock.elapsedRealtime() - wakeFadeStartMs).toFloat() / ms).coerceIn(0f, 1f)
-        player.volume = (t * replayGainMultiplier() * ebookDuckApplied).coerceIn(0f, 1f)
-        if (t >= 1f) { wakeFadeActive = false; player.volume = replayGainMultiplier() * ebookDuckApplied }
+        player.volume = (t * volBase()).coerceIn(0f, 1f)
+        if (t >= 1f) { wakeFadeActive = false; player.volume = volBase() }
     }
 
     private fun maybeBeginXfade() {
@@ -822,7 +925,7 @@ class PlaybackService : MediaLibraryService() {
         xfadeActive = false
         xfadeExpectedId = null
         runCatching { fadePlayer?.run { pause(); clearMediaItems() } }
-        player.volume = replayGainMultiplier() * ebookDuckApplied
+        player.volume = volBase()
     }
 
     private fun ensureFadePlayer(): ExoPlayer {
@@ -856,6 +959,63 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private inner class MediaCallback : MediaLibrarySession.Callback {
+        /**
+         * 有声书态：系统上一首/下一首（通知栏、Auto、系统播放键经 controller 下发）
+         * 改为 ±步长位移，不再切章节；音乐态原样放行。
+         * media3 1.5 的 onPlayerCommandRequest 返回解析后的命令：执行完位移后
+         * 回 COMMAND_INVALID 吞掉原命令，避免再切一次章节。
+         */
+        override fun onPlayerCommandRequest(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            playerCommand: Int,
+        ): Int {
+            if (isAbookMedia(player.currentMediaItem?.mediaId)) {
+                when (playerCommand) {
+                    Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
+                        abookSeekBy(-abookSeekSec)
+                        return Player.COMMAND_INVALID
+                    }
+                    Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> {
+                        abookSeekBy(abookSeekSec)
+                        return Player.COMMAND_INVALID
+                    }
+                }
+            }
+            return super.onPlayerCommandRequest(session, controller, playerCommand)
+        }
+
+        /**
+         * 有声书态：耳机/线控上一首/下一首键同样改为 ±步长位移（只消费 ACTION_DOWN 防双跳）。
+         */
+        override fun onMediaButtonEvent(
+            session: MediaSession,
+            controllerInfo: MediaSession.ControllerInfo,
+            intent: Intent,
+        ): Boolean {
+            val event = if (android.os.Build.VERSION.SDK_INT >= 33) {
+                intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, android.view.KeyEvent::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT) as? android.view.KeyEvent
+            }
+            if (event?.action == android.view.KeyEvent.ACTION_DOWN &&
+                isAbookMedia(player.currentMediaItem?.mediaId)
+            ) {
+                when (event.keyCode) {
+                    android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                        abookSeekBy(-abookSeekSec)
+                        return true
+                    }
+                    android.view.KeyEvent.KEYCODE_MEDIA_NEXT -> {
+                        abookSeekBy(abookSeekSec)
+                        return true
+                    }
+                }
+            }
+            return super.onMediaButtonEvent(session, controllerInfo, intent)
+        }
+
         override fun onConnect(
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
@@ -876,8 +1036,7 @@ class PlaybackService : MediaLibraryService() {
             controller: MediaSession.ControllerInfo,
             customCommand: SessionCommand,
             args: Bundle,
-        ): ListenableFuture<SessionResult> {
-            when (customCommand.customAction) {
+        ): ListenableFuture<SessionResult> {            when (customCommand.customAction) {
                 // target 1=on 0=off -1=toggle order = pre-shuffle order when caller already shuffled
                 CMD_SHUFFLE -> setShuffle(
                     customCommand.customExtras.getInt("target", -1),
@@ -887,7 +1046,7 @@ class PlaybackService : MediaLibraryService() {
                 CMD_SLEEP_FADE -> {
                     val ms = customCommand.customExtras.getInt("fadeMs", 0)
                     if (ms > 0) { sleepFadeMs = ms; sleepFadeStartMs = android.os.SystemClock.elapsedRealtime(); sleepFadeActive = true }
-                    else { sleepFadeActive = false; player.volume = replayGainMultiplier() * ebookDuckApplied }
+                    else { sleepFadeActive = false; player.volume = volBase() }
                 }
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -1341,6 +1500,7 @@ class PlaybackService : MediaLibraryService() {
         runCatching { noisyReceiver?.let { unregisterReceiver(it) } }
         noisyReceiver = null
         runCatching { container.ebookTtsPlayer.onAudioFocusChange = null }
+        abandonAbookDuckFocus()
         mediaSession?.release()
         mediaSession = null
         runCatching { unifiedPlayer?.release() }

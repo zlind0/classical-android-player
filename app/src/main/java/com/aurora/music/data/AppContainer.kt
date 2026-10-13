@@ -81,6 +81,13 @@ class AppContainer(context: Context) {
     val ebookScanner = com.aurora.music.data.ebook.EbookScanner(ebookStore, ebookDb.ebookDao())
     val ebookPrefs = com.aurora.music.data.ebook.EbookPrefs(appContext)
 
+    // 有声书栈：独立 Room 库 + 仓库 + 扫描器（书=根下直接子目录，章=书内音频文件）
+    private val audiobookDb: com.aurora.music.data.audiobook.AudiobookDb = Room.databaseBuilder(
+        appContext, com.aurora.music.data.audiobook.AudiobookDb::class.java, "audiobook_library.db",
+    ).fallbackToDestructiveMigration().build()
+    val audiobookStore = com.aurora.music.data.audiobook.AudiobookStore(appContext, audiobookDb.audiobookDao())
+    val audiobookScanner = com.aurora.music.data.audiobook.AudiobookScanner(audiobookStore, audiobookDb.audiobookDao())
+
     // 曲库来源开关（默认 MEDIastore）。两个栈各自独立，切换 = 换 backend + 按源加载。
     private val _librarySource = MutableStateFlow(LibrarySource.MEDIastore)
     val librarySource: StateFlow<LibrarySource> = _librarySource.asStateFlow()
@@ -179,6 +186,9 @@ class AppContainer(context: Context) {
 
     val songIntroLog = SongIntroLogStore(appContext)
     val songIntro = SongIntroController(appContext, settingsStore, songIntroLog)
+
+    // 有声书会话态：VM 写当前书/增益，PlaybackService 读（音量乘子/混音焦点）
+    val abookSession = com.aurora.music.data.audiobook.AudiobookSession()
 
     val isLocal: Boolean get() = true
 
@@ -371,6 +381,10 @@ class AppContainer(context: Context) {
         scope.launch {
             // 电子书旧 TTS 设置一次性迁入统一设置（失败不影响启动）。
             runCatching { settingsStore.migrateEbookTts(ebookPrefs.snapshotTts(), ebookPrefs.isTtsCustomized()) }
+        }
+        scope.launch {
+            // 有声书跳过关键字变化只重过滤，不碰 DB
+            settingsStore.audiobookPrefs.collect { runCatching { audiobookStore.setSkipKeywords(it.skipKeywords) } }
         }
         scope.launch(Dispatchers.IO) {
             // 断点续扫：上次没扫完（每 200 个已暂存）的接着扫，已暂存的不重扫。

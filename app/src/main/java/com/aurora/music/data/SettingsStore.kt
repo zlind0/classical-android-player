@@ -451,6 +451,10 @@ class SettingsStore(private val context: Context) {
         val INTRO_TTS_VOLUME = floatPreferencesKey("intro_tts_volume")
         val EBOOK_DUCK_OTHERS = booleanPreferencesKey("ebook_duck_others")
         val EBOOK_MUSIC_LEVEL = floatPreferencesKey("ebook_music_level")
+        val ABOOK_ALLOW_MIX = booleanPreferencesKey("abook_allow_mix")
+        val ABOOK_DUCK_OTHERS = booleanPreferencesKey("abook_duck_others")
+        val ABOOK_SEEK_SEC = intPreferencesKey("abook_seek_sec")
+        val ABOOK_SKIP_KEYWORDS = stringSetPreferencesKey("abook_skip_keywords")
     }
 
     val uiPrefs: Flow<UiPrefs> = context.dataStore.data.map { p ->
@@ -993,6 +997,36 @@ class SettingsStore(private val context: Context) {
     suspend fun setTtsVolume(v: Float) = context.dataStore.edit { it[Keys.INTRO_TTS_VOLUME] = v.coerceIn(0.2f, 2.0f) }
     suspend fun setDuckOthers(v: Boolean) = context.dataStore.edit { it[Keys.EBOOK_DUCK_OTHERS] = v }
     suspend fun setOwnMusicLevel(v: Float) = context.dataStore.edit { it[Keys.EBOOK_MUSIC_LEVEL] = v.coerceIn(0.05f, 1.0f) }
+
+    // ---- 有声书设置（设置 → 有声书设置大类，全局） ----
+
+    data class AudiobookPrefs(
+        /** 允许其他应用同时播放音乐（丢掉独占焦点，互不暂停） */
+        val allowMix: Boolean = false,
+        /** 共存时压低站外音量（MAY_DUCK 焦点；仅 allowMix 开时生效） */
+        val duckOthers: Boolean = true,
+        /** 快进/快退步长秒（5..120，step 5） */
+        val seekSec: Int = 30,
+        /** 跳过章节关键字（章节名包含任一即剔除） */
+        val skipKeywords: Set<String> = setOf("目录", "版权", "注释", "参考"),
+    )
+
+    val audiobookPrefs: Flow<AudiobookPrefs> = context.dataStore.data.map { p ->
+        AudiobookPrefs(
+            allowMix = p[Keys.ABOOK_ALLOW_MIX] ?: false,
+            duckOthers = p[Keys.ABOOK_DUCK_OTHERS] ?: true,
+            seekSec = (p[Keys.ABOOK_SEEK_SEC] ?: 30).coerceIn(5, 120),
+            skipKeywords = (p[Keys.ABOOK_SKIP_KEYWORDS] ?: setOf("目录", "版权", "注释", "参考"))
+                .map { it.trim() }.filter { it.isNotEmpty() }.toSet(),
+        )
+    }.distinctUntilChanged()
+
+    suspend fun setAbookAllowMix(v: Boolean) = context.dataStore.edit { it[Keys.ABOOK_ALLOW_MIX] = v }
+    suspend fun setAbookDuckOthers(v: Boolean) = context.dataStore.edit { it[Keys.ABOOK_DUCK_OTHERS] = v }
+    suspend fun setAbookSeekSec(v: Int) = context.dataStore.edit { it[Keys.ABOOK_SEEK_SEC] = v.coerceIn(5, 120) }
+    suspend fun setAbookSkipKeywords(v: Set<String>) = context.dataStore.edit {
+        it[Keys.ABOOK_SKIP_KEYWORDS] = v.map { s -> s.trim() }.filter { s -> s.isNotEmpty() }.toSet()
+    }
 
     // typed so json round-trips losslessly
     suspend fun exportPrefs(): PrefsBackup {

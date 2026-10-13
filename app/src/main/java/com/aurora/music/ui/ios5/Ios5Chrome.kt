@@ -52,6 +52,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Book
+import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
@@ -197,6 +198,7 @@ private val tabIcons: Map<String, ImageVector> = mapOf(
     "歌单" to Icons.AutoMirrored.Filled.QueueMusic,
     "艺人" to Icons.Filled.Mic,
     "电子书" to Icons.Filled.Book,
+    "有声书" to Icons.Filled.Headset,
     "更多" to Icons.Filled.GridView,
     "设置" to Icons.Filled.Settings,
 )
@@ -214,7 +216,7 @@ fun Ios5TabBar(currentRoute: String?, onNavigate: (String) -> Unit, showTopDivid
             Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.4f)))
         }
         Row(
-            Modifier.fillMaxWidth().height(Ios5Dimens.TabHeight).padding(horizontal = 2.dp, vertical = 4.dp),
+            Modifier.fillMaxWidth().height(Ios5Dimens.TabHeight).padding(horizontal = 0.dp, vertical = 4.dp),
         ) {
             ios5Tabs.forEach { tab ->
                 val selected = currentRoute == tab.route
@@ -235,12 +237,12 @@ fun Ios5TabBar(currentRoute: String?, onNavigate: (String) -> Unit, showTopDivid
                         tabIcons[tab.label] ?: Icons.Filled.Home,
                         tab.label,
                         tint = if (selected) Ios5Colors.TabSelected else Ios5Colors.TabUnselected,
-                        modifier = Modifier.size(22.dp),
+                        modifier = Modifier.size(20.dp),
                     )
                     Text(
                         tab.label,
-                        fontSize = 10.sp,
-                        lineHeight = 12.sp,
+                        fontSize = 9.sp,
+                        lineHeight = 11.sp,
                         maxLines = 1,
                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                         color = if (selected) Color.White else Ios5Colors.TabUnselected,

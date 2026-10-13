@@ -478,7 +478,7 @@ fun Ios5PlayerPage(
 // 同一全局后台（container.sleepTimer），两边后设的生效、两边显示同一剩余。
 
 @Composable
-private fun SleepBubble(onDismiss: () -> Unit) {
+internal fun SleepBubble(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val container = (context.applicationContext as AuroraApplication).container
     val sleep = container.sleepTimer
@@ -581,7 +581,7 @@ private fun SleepBubble(onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun IpodBarButton(onClick: () -> Unit, content: @Composable () -> Unit) {
+internal fun IpodBarButton(onClick: () -> Unit, content: @Composable () -> Unit) {
     Box(
         Modifier.size(width = 52.dp, height = 36.dp)
             .clip(RoundedCornerShape(8.dp))

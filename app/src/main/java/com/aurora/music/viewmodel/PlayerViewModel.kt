@@ -18,6 +18,7 @@ import com.aurora.music.AuroraApplication
 import com.aurora.music.R
 import com.aurora.music.data.SavedQueue
 import com.aurora.music.data.TrackArtworkCache
+import com.aurora.music.data.audiobook.ABOOK_ID_PREFIX
 import com.aurora.music.data.toSavedTrack
 import com.aurora.music.model.Song
 import com.aurora.music.playback.PlaybackService
@@ -53,6 +54,10 @@ data class PlayerUiState(
     val bpm: Int = 0,
     val camelot: String = "",
     val keyName: String = "",
+    // 有声书态：当前书 id（音乐态为 null）+ 本书变速/增益
+    val abookId: String? = null,
+    val abookSpeed: Float = 1f,
+    val abookGain: Float = 1f,
 ) {
     val durationSec: Int get() = current.durationSec
     val progress: Float get() = if (durationSec == 0) 0f else (positionSec / durationSec).coerceIn(0f, 1f)
@@ -84,6 +89,10 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
     private var lastNowPlayingId: String? = null
     // account the live queue belongs to so it persists/restores under the right key
     @Volatile private var playingAccountKey: String = ""
+    // 有声书全书 id 序（分窗时 controller 序号是窗内序号，展示用这份反查书级序号）
+    @Volatile private var abookOrder: List<String> = emptyList()
+    // 有声书快进/快退步长秒（全局设置，service 拦截与 VM 共用）
+    @Volatile private var abookSeekSec: Int = 30
     private var openRestoreAttempted = false
     private var lastPersistMs = 0L
     private var lastKeyInfoId: String? = null
@@ -109,6 +118,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             // reset position so the bar doesn't show the previous track during the gap usb sink lags across a skip
             _state.update { it.copy(positionSec = 0f) }
             item?.mediaId?.let { maybeRevive(it) }
+            item?.mediaId?.let { onAbookChapterChanged(it) }
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -240,17 +250,23 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+        viewModelScope.launch {
+            // 有声书快进/快退步长（全局，service 拦截与 VM 共用同一份）
+            container.settingsStore.audiobookPrefs.collect { abookSeekSec = it.seekSec }
+        }
     }
 
     fun stopPlayback() {
         controller?.let { c ->
             runCatching { c.pause(); c.stop(); c.clearMediaItems() }
         }
+        container.abookSession.setActive(null, 1f)
         songById = emptyMap()
         lastRecordedId = null
         lastNowPlayingId = null
         _state.update {
-            it.copy(current = emptySong, queue = emptyList(), isPlaying = false, positionSec = 0f, currentIndex = 0, expanded = false)
+            it.copy(current = emptySong, queue = emptyList(), isPlaying = false, positionSec = 0f, currentIndex = 0, expanded = false,
+                abookId = null, abookSpeed = 1f, abookGain = 1f)
         }
     }
 
@@ -336,7 +352,11 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
                     maybeNowPlaying()
                     recordIfPlayed(posSec)
                     val now = System.currentTimeMillis()
-                    if (now - lastPersistMs > 2000) { lastPersistMs = now; persistQueue() }
+                    if (now - lastPersistMs > 2000) {
+                        lastPersistMs = now
+                        persistQueue()
+                        persistAbookNow()
+                    }
                 }
             }
         }
@@ -349,6 +369,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         val q = (0 until c.mediaItemCount).mapNotNull { i -> songById[c.getMediaItemAt(i).mediaId] }
         if (cur.id != lastKeyInfoId) { lastKeyInfoId = cur.id; lastKeyInfo = runCatching { container.sonicEngine.keyInfo(cur.id) }.getOrNull() }
         val ki = lastKeyInfo
+        val abookIdx = _state.value.abookId?.let { abookOrder.indexOf(cur.id).takeIf { it >= 0 } }
         _state.update {
             it.copy(
                 current = cur,
@@ -361,7 +382,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
                 },
                 positionSec = (c.currentPosition / 1000f).coerceAtLeast(0f),
                 queue = if (q.isNotEmpty()) q else it.queue,
-                currentIndex = c.currentMediaItemIndex.coerceAtLeast(0),
+                currentIndex = abookIdx ?: c.currentMediaItemIndex.coerceAtLeast(0),
                 bpm = ki?.bpm ?: 0,
                 camelot = ki?.camelot ?: "",
                 keyName = ki?.name ?: "",
@@ -450,6 +471,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         val c = controller ?: return
         if (songs.isEmpty()) return
         container.haptic()
+        clearAbook()
         playingAccountKey = container.currentAccountKey()
         songById = songs.associateBy { it.id }
         val idx = startIndex.coerceIn(0, songs.lastIndex)
@@ -463,6 +485,132 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun play(song: Song) = playAll(listOf(song), 0)
+
+    // ---- 有声书（章节 = Song，id 前缀 audiobook:；点书替换音乐队列） ----
+
+    fun isAbookSong(id: String): Boolean = id.startsWith(ABOOK_ID_PREFIX)
+
+    fun playAudiobook(
+        bookId: String,
+        songs: List<Song>,
+        startIndex: Int,
+        positionMs: Long,
+        speed: Float,
+        gain: Float,
+    ) {
+        val c = controller ?: return
+        if (songs.isEmpty()) return
+        container.haptic()
+        playingAccountKey = container.currentAccountKey()
+        songById = songs.associateBy { it.id }
+        abookOrder = songs.map { it.id }
+        val idx = startIndex.coerceIn(0, songs.lastIndex)
+        val clampedSpeed = speed.coerceIn(0.5f, 4f)
+        val clampedGain = gain.coerceIn(0.5f, 2f)
+        val delivery = deliverQueue(songs, idx, positionMs.coerceAtLeast(0L))
+        // 不变调变速：pitch 恒 1，与音乐 matchPitch 逻辑解耦
+        c.playbackParameters = PlaybackParameters(clampedSpeed, 1f)
+        c.prepare()
+        c.play()
+        sendShuffle(0)
+        container.abookSession.setActive(bookId, clampedGain)
+        container.abookSession.setCurrentPath(songs[idx].path)
+        _state.update {
+            it.copy(
+                queue = delivery.songs, currentIndex = delivery.currentIndex, current = songs[idx],
+                positionSec = positionMs / 1000f, isPlaying = true,
+                abookId = bookId, abookSpeed = clampedSpeed, abookGain = clampedGain,
+            )
+        }
+    }
+
+    /** 有声书上一章/下一章：无条件切文件（不复用音乐 4s 重播逻辑）。 */
+    fun abookChapter(step: Int) {
+        val c = controller ?: return
+        if (_state.value.abookId == null) return
+        container.haptic()
+        val target = (c.currentMediaItemIndex + step).coerceIn(0, (c.mediaItemCount - 1).coerceAtLeast(0))
+        if (target == c.currentMediaItemIndex) return
+        c.seekTo(target, 0)
+        c.play()
+        syncFromController()
+    }
+
+    fun abookJumpToChapter(index: Int) {
+        val c = controller ?: return
+        if (_state.value.abookId == null) return
+        container.haptic()
+        if (index in 0 until c.mediaItemCount) {
+            c.seekTo(index, 0)
+            c.play()
+            syncFromController()
+        }
+    }
+
+    /** 快进/快退：按全局步长位移，钳制在本章内，不跨章。 */
+    fun seekBySeconds(deltaSec: Int) {
+        val c = controller ?: return
+        val dur = c.duration.takeIf { it > 0 } ?: (_state.value.durationSec * 1000L)
+        if (dur <= 0) return
+        c.seekTo((c.currentPosition + deltaSec * 1000L).coerceIn(0L, dur))
+        persistAbookNow()
+    }
+
+    fun abookStep(): Int = abookSeekSec
+
+    fun setAbookSpeed(speed: Float) {
+        val c = controller ?: return
+        val bookId = _state.value.abookId ?: return
+        // 0.5..4x step 0.25
+        val snapped = (kotlin.math.round(speed / 0.25f) * 0.25f).coerceIn(0.5f, 4f)
+        _state.update { it.copy(abookSpeed = snapped) }
+        c.playbackParameters = PlaybackParameters(snapped, 1f)
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { container.audiobookStore.saveSpeed(bookId, snapped) }
+        }
+    }
+
+    fun setAbookGain(gain: Float) {
+        val bookId = _state.value.abookId ?: return
+        val clamped = gain.coerceIn(0.5f, 2f)
+        _state.update { it.copy(abookGain = clamped) }
+        container.abookSession.setGain(clamped)
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { container.audiobookStore.saveGain(bookId, clamped) }
+        }
+    }
+
+    private fun onAbookChapterChanged(mediaId: String) {
+        val bookId = _state.value.abookId ?: return
+        if (!isAbookSong(mediaId)) return
+        val song = songById[mediaId] ?: return
+        container.abookSession.setCurrentPath(song.path)
+        // 切章即记新章 0 位（ticker 随后会跟进精确位置）
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { container.audiobookStore.savePos(bookId, song.path, 0L) }
+        }
+    }
+
+    private fun persistAbookNow() {
+        val st = _state.value
+        val bookId = st.abookId ?: return
+        val song = st.current
+        if (!isAbookSong(song.id) || song.path.isBlank()) return
+        container.abookSession.setCurrentPath(song.path)
+        val posMs = ((controller?.currentPosition ?: (st.positionSec * 1000).toLong())).coerceAtLeast(0L)
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { container.audiobookStore.savePos(bookId, song.path, posMs) }
+        }
+    }
+
+    private fun clearAbook() {
+        if (_state.value.abookId != null) {
+            persistAbookNow()
+            abookOrder = emptyList()
+            container.abookSession.setActive(null, 1f)
+            _state.update { it.copy(abookId = null, abookSpeed = 1f, abookGain = 1f) }
+        }
+    }
 
     fun playCollection(kind: String, id: String, loaded: List<Song>, startIndex: Int, total: Int) {
         playAll(loaded, startIndex)
@@ -575,6 +723,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
     fun shufflePlay(songs: List<Song>) {
         val c = controller ?: return
         if (songs.isEmpty()) return
+        clearAbook()
         playingAccountKey = container.currentAccountKey()
         songById = songs.associateBy { it.id }
         val shuffled = songs.shuffled()

@@ -372,6 +372,14 @@ fun SettingsTab(
                 }
             }
             item {
+                Ios5SectionTitle("有声书")
+                Ios5Group(Modifier.padding(horizontal = 12.dp)) {
+                    Ios5Cell(title = "有声书来源", subtitle = "目录 / 扫描", onClick = { onOpen(Ios5Routes.SETTINGS_AUDIOBOOK_SOURCES) })
+                    Ios5CellDivider()
+                    Ios5Cell(title = "有声书设置", subtitle = "共存 / 步长 / 跳过", onClick = { onOpen(Ios5Routes.SETTINGS_AUDIOBOOK) })
+                }
+            }
+            item {
                 Ios5SectionTitle("播放与音效")
                 Ios5Group(Modifier.padding(horizontal = 12.dp)) {
                     Ios5Cell(title = "播放", onClick = { onOpen(Ios5Routes.SETTINGS_PLAYBACK) })

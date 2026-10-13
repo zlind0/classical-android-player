@@ -45,7 +45,7 @@ data class ScanProgress(
     val current: String = "",
 )
 
-val AUDIO_EXTENSIONS = setOf("flac", "mp3", "m4a", "aac", "alac", "ogg", "oga", "opus", "wav", "aiff", "aif")
+val AUDIO_EXTENSIONS = setOf("flac", "mp3", "m4a", "m4b", "aac", "alac", "ogg", "oga", "opus", "wav", "aiff", "aif")
 
 // 扫描过滤：时长小于此值（秒）的曲目直接忽略（含读不到时长的 0）
 const val MIN_TRACK_DURATION_SEC = 10
