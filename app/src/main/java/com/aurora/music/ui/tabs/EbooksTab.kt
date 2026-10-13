@@ -47,6 +47,7 @@ fun EbooksTab(
     onOpenRoot: (rootId: Long, dir: String, title: String) -> Unit,
     onOpenBook: (path: String) -> Unit,
     onOpenSearch: () -> Unit,
+    onOpenExport: (path: String) -> Unit,
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val recents = container.ebookStore.recents.collectAsStateWithLifecycle()
@@ -67,6 +68,9 @@ fun EbooksTab(
                         coverPath = b.coverPath,
                         accentKey = b.path,
                         onClick = { onOpenBook(b.path) },
+                        trailing = {
+                            com.aurora.music.ui.ebook.EbookExportButton(b.path, onOpenExport)
+                        },
                     )
                 }
             }

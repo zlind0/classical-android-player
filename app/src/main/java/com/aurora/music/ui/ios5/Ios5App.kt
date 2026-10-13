@@ -310,6 +310,7 @@ fun Ios5App() {
                                 onPlaySongs = { songs, index -> playerVM.playAll(songs, index) },
                                 onOpenBook = { p -> navController.navigate(Ios5Routes.ebookReader(p)) },
                                 onPlayAudiobook = { playAudiobook(it) },
+                                onOpenExport = { p -> navController.navigate(Ios5Routes.ebookExport(p)) },
                             )
                         }
                         composable(Ios5Routes.PLAYLISTS) {
@@ -344,6 +345,7 @@ fun Ios5App() {
                                 },
                                 onOpenBook = { p -> navController.navigate(Ios5Routes.ebookReader(p)) },
                                 onOpenSearch = { navController.navigate(Ios5Routes.EBOOK_SEARCH) },
+                                onOpenExport = { p -> navController.navigate(Ios5Routes.ebookExport(p)) },
                             )
                         }
                         composable(Ios5Routes.AUDIOBOOKS) {
@@ -378,6 +380,7 @@ fun Ios5App() {
                                     )
                                 },
                                 onOpenBook = { p -> navController.navigate(Ios5Routes.ebookReader(p)) },
+                                onOpenExport = { p -> navController.navigate(Ios5Routes.ebookExport(p)) },
                                 confirm = { confirm(it) },
                             )
                         }
@@ -385,6 +388,24 @@ fun Ios5App() {
                             com.aurora.music.ui.ebook.EbookSearchScreen(
                                 onBack = { navController.popBackStack() },
                                 onOpenBook = { p -> navController.navigate(Ios5Routes.ebookReader(p)) },
+                                onOpenExport = { p -> navController.navigate(Ios5Routes.ebookExport(p)) },
+                            )
+                        }
+                        composable(
+                            Ios5Routes.EBOOK_EXPORT,
+                            arguments = listOf(
+                                androidx.navigation.navArgument("epath") { defaultValue = "" },
+                            ),
+                        ) { entry ->
+                            val epath = Uri.decode(entry.arguments?.getString("epath").orEmpty())
+                            com.aurora.music.ui.ebook.EbookExportScreen(
+                                bookPath = epath,
+                                onBack = { navController.popBackStack() },
+                                onOpenAudiobooks = { navigateTopLevel(Ios5Routes.AUDIOBOOKS) },
+                                onOpenAudiobookSources = {
+                                    navController.navigate(Ios5Routes.SETTINGS_AUDIOBOOK_SOURCES)
+                                },
+                                confirm = { confirm(it) },
                             )
                         }
                         composable(

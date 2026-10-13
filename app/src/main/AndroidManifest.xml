@@ -101,6 +101,12 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- 电子书转有声书：逐段串行、段内分批并行合成，切界面/切后台都不停 -->
+        <service
+            android:name=".data.ebook.export.EbookExportService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <activity
             android:name=".playback.AlarmActivity"
             android:exported="false"

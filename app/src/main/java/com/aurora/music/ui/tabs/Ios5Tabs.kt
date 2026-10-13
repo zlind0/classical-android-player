@@ -62,6 +62,7 @@ fun HomeTab(
     onPlaySongs: (songs: List<Song>, index: Int) -> Unit,
     onOpenBook: (path: String) -> Unit,
     onPlayAudiobook: (bookId: String) -> Unit,
+    onOpenExport: (path: String) -> Unit,
 ) {
     val container = (androidx.compose.ui.platform.LocalContext.current.applicationContext as AuroraApplication).container
     val ebookRecents by container.ebookStore.recents.collectAsStateWithLifecycle()
@@ -85,6 +86,9 @@ fun HomeTab(
                         coverPath = b.coverPath,
                         accentKey = b.path,
                         onClick = { onOpenBook(b.path) },
+                        trailing = {
+                            com.aurora.music.ui.ebook.EbookExportButton(b.path, onOpenExport)
+                        },
                     )
                 }
             }

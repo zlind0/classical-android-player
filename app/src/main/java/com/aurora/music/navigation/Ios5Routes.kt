@@ -44,6 +44,8 @@ object Ios5Routes {
     const val EBOOK_SEARCH = "ios5_ebook_search"
     const val EBOOK_READER = "ebook_reader?epath={epath}"
     fun ebookReader(path: String) = "ebook_reader?epath=${Uri.encode(path)}"
+    const val EBOOK_EXPORT = "ebook_export?epath={epath}"
+    fun ebookExport(path: String) = "ebook_export?epath=${Uri.encode(path)}"
 
     // ---- search (scope = songs|albums|genres|composers|all) ----
     const val SEARCH = "ios5_search?scope={scope}"

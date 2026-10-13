@@ -46,3 +46,52 @@ add_library(aurora_fp SHARED
 
 find_library(log-lib log)
 target_link_libraries(aurora_fp ${log-lib})
+
+# ---- 电子书转有声书：vendored vo-aacenc (VisualOn, Apache 2.0) ----
+# AAC-LC 128kbps mono 48kHz，纯 C 无汇编，arm64/x86_64 同源编译。
+# JNI 入口见 ebook_aac_jni.c（每批独立编码器实例，可并行）。
+set(VO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vo-aacenc)
+
+add_library(aurora_aac SHARED
+    ebook_aac_jni.c
+    ${VO_DIR}/common/cmnMemory.c
+    ${VO_DIR}/aacenc/basic_op/basicop2.c
+    ${VO_DIR}/aacenc/basic_op/oper_32b.c
+    ${VO_DIR}/aacenc/src/aac_rom.c
+    ${VO_DIR}/aacenc/src/aacenc.c
+    ${VO_DIR}/aacenc/src/aacenc_core.c
+    ${VO_DIR}/aacenc/src/adj_thr.c
+    ${VO_DIR}/aacenc/src/band_nrg.c
+    ${VO_DIR}/aacenc/src/bit_cnt.c
+    ${VO_DIR}/aacenc/src/bitbuffer.c
+    ${VO_DIR}/aacenc/src/bitenc.c
+    ${VO_DIR}/aacenc/src/block_switch.c
+    ${VO_DIR}/aacenc/src/channel_map.c
+    ${VO_DIR}/aacenc/src/dyn_bits.c
+    ${VO_DIR}/aacenc/src/grp_data.c
+    ${VO_DIR}/aacenc/src/interface.c
+    ${VO_DIR}/aacenc/src/line_pe.c
+    ${VO_DIR}/aacenc/src/memalign.c
+    ${VO_DIR}/aacenc/src/ms_stereo.c
+    ${VO_DIR}/aacenc/src/pre_echo_control.c
+    ${VO_DIR}/aacenc/src/psy_configuration.c
+    ${VO_DIR}/aacenc/src/psy_main.c
+    ${VO_DIR}/aacenc/src/qc_main.c
+    ${VO_DIR}/aacenc/src/quantize.c
+    ${VO_DIR}/aacenc/src/sf_estim.c
+    ${VO_DIR}/aacenc/src/spreading.c
+    ${VO_DIR}/aacenc/src/stat_bits.c
+    ${VO_DIR}/aacenc/src/tns.c
+    ${VO_DIR}/aacenc/src/transform.c
+)
+
+target_include_directories(aurora_aac PRIVATE
+    ${VO_DIR}/aacenc/src
+    ${VO_DIR}/aacenc/inc
+    ${VO_DIR}/aacenc/basic_op
+    ${VO_DIR}/common/include
+)
+
+target_compile_options(aurora_aac PRIVATE -O2)
+
+target_link_libraries(aurora_aac ${log-lib})

@@ -455,6 +455,14 @@ class SettingsStore(private val context: Context) {
         val ABOOK_DUCK_OTHERS = booleanPreferencesKey("abook_duck_others")
         val ABOOK_SEEK_SEC = intPreferencesKey("abook_seek_sec")
         val ABOOK_SKIP_KEYWORDS = stringSetPreferencesKey("abook_skip_keywords")
+        val EEXPORT_USE_INTERNAL = booleanPreferencesKey("eexport_use_internal")
+        val EEXPORT_INTERNAL_CODE = stringPreferencesKey("eexport_internal_code")
+        val EEXPORT_ENGINE = stringPreferencesKey("eexport_engine")
+        val EEXPORT_RATE = floatPreferencesKey("eexport_rate")
+        val EEXPORT_PITCH = floatPreferencesKey("eexport_pitch")
+        val EEXPORT_THREADS = intPreferencesKey("eexport_threads")
+        val EEXPORT_ROOT = longPreferencesKey("eexport_root")
+        val EEXPORT_OVERWRITE = booleanPreferencesKey("eexport_overwrite")
     }
 
     val uiPrefs: Flow<UiPrefs> = context.dataStore.data.map { p ->
@@ -1027,6 +1035,43 @@ class SettingsStore(private val context: Context) {
     suspend fun setAbookSkipKeywords(v: Set<String>) = context.dataStore.edit {
         it[Keys.ABOOK_SKIP_KEYWORDS] = v.map { s -> s.trim() }.filter { s -> s.isNotEmpty() }.toSet()
     }
+
+    // ---- 电子书转有声书设置（转换页，默认语速 1.1x，默认不覆盖） ----
+
+    data class EbookExportPrefs(
+        val useInternal: Boolean = true,
+        val internalCode: String = "zh-CN-XiaoxiaoNeural",
+        val systemEnginePkg: String = "",
+        val rate: Float = 1.1f,
+        val pitch: Float = 1f,
+        /** <= 0 = 跟随 CPU 核数。 */
+        val threads: Int = 0,
+        /** 上次使用的有声书来源 rootId，-1 = 未选过。 */
+        val lastRootId: Long = -1L,
+        val overwrite: Boolean = false,
+    )
+
+    val ebookExportPrefs: Flow<EbookExportPrefs> = context.dataStore.data.map { p ->
+        EbookExportPrefs(
+            useInternal = p[Keys.EEXPORT_USE_INTERNAL] ?: true,
+            internalCode = p[Keys.EEXPORT_INTERNAL_CODE] ?: "zh-CN-XiaoxiaoNeural",
+            systemEnginePkg = p[Keys.EEXPORT_ENGINE].orEmpty(),
+            rate = (p[Keys.EEXPORT_RATE] ?: 1.1f).coerceIn(0.5f, 2f),
+            pitch = (p[Keys.EEXPORT_PITCH] ?: 1f).coerceIn(0.5f, 2f),
+            threads = p[Keys.EEXPORT_THREADS] ?: 0,
+            lastRootId = p[Keys.EEXPORT_ROOT] ?: -1L,
+            overwrite = p[Keys.EEXPORT_OVERWRITE] ?: false,
+        )
+    }.distinctUntilChanged()
+
+    suspend fun setEexportUseInternal(v: Boolean) = context.dataStore.edit { it[Keys.EEXPORT_USE_INTERNAL] = v }
+    suspend fun setEexportInternalCode(v: String) = context.dataStore.edit { it[Keys.EEXPORT_INTERNAL_CODE] = v }
+    suspend fun setEexportEngine(v: String) = context.dataStore.edit { it[Keys.EEXPORT_ENGINE] = v.trim() }
+    suspend fun setEexportRate(v: Float) = context.dataStore.edit { it[Keys.EEXPORT_RATE] = v.coerceIn(0.5f, 2f) }
+    suspend fun setEexportPitch(v: Float) = context.dataStore.edit { it[Keys.EEXPORT_PITCH] = v.coerceIn(0.5f, 2f) }
+    suspend fun setEexportThreads(v: Int) = context.dataStore.edit { it[Keys.EEXPORT_THREADS] = v }
+    suspend fun setEexportRoot(v: Long) = context.dataStore.edit { it[Keys.EEXPORT_ROOT] = v }
+    suspend fun setEexportOverwrite(v: Boolean) = context.dataStore.edit { it[Keys.EEXPORT_OVERWRITE] = v }
 
     // typed so json round-trips losslessly
     suspend fun exportPrefs(): PrefsBackup {

@@ -63,6 +63,7 @@ fun EbookLibraryScreen(
     onBack: () -> Unit,
     onOpenDir: (dir: String, title: String) -> Unit,
     onOpenBook: (path: String) -> Unit,
+    onOpenExport: (path: String) -> Unit,
     confirm: (String) -> Unit,
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
@@ -143,6 +144,7 @@ fun EbookLibraryScreen(
                                 coverPath = b.coverPath,
                                 accentKey = b.path,
                                 onClick = { onOpenBook(b.path) },
+                                trailing = { EbookExportButton(b.path, onOpenExport) },
                             )
                         }
                     }
@@ -199,6 +201,7 @@ fun EbookLibraryScreen(
                                     coverPath = b.coverPath,
                                     accentKey = b.path,
                                     onClick = { onOpenBook(b.path) },
+                                    trailing = { EbookExportButton(b.path, onOpenExport) },
                                 )
                             }
                         }
@@ -252,6 +255,7 @@ private fun EbookCheckRow(
 fun EbookSearchScreen(
     onBack: () -> Unit,
     onOpenBook: (path: String) -> Unit,
+    onOpenExport: (path: String) -> Unit,
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     var query by remember { mutableStateOf("") }
@@ -303,6 +307,7 @@ fun EbookSearchScreen(
                                 coverPath = b.coverPath,
                                 accentKey = b.path,
                                 onClick = { onOpenBook(b.path) },
+                                trailing = { EbookExportButton(b.path, onOpenExport) },
                             )
                         }
                     }
