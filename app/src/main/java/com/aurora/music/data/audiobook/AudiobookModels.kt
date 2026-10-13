@@ -79,3 +79,6 @@ fun abookSongId(bookId: String, index: Int): String = "$ABOOK_ID_PREFIX$bookId#$
 
 fun abookBookIdOf(songId: String): String? =
     songId.removePrefix(ABOOK_ID_PREFIX).substringBeforeLast('#', "").ifBlank { null }
+
+fun abookIndexOf(songId: String): Int? =
+    songId.substringAfterLast('#', "").toIntOrNull()

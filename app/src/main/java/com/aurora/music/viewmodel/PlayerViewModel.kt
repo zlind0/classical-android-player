@@ -19,6 +19,7 @@ import com.aurora.music.R
 import com.aurora.music.data.SavedQueue
 import com.aurora.music.data.TrackArtworkCache
 import com.aurora.music.data.audiobook.ABOOK_ID_PREFIX
+import com.aurora.music.data.audiobook.abookBookIdOf
 import com.aurora.music.data.toSavedTrack
 import com.aurora.music.model.Song
 import com.aurora.music.playback.PlaybackService
@@ -311,8 +312,34 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         val songs = sq.tracks.orEmpty().map { it.toSong() }.filter { it.id.isNotEmpty() && it.streamUrl.isNotEmpty() }
         if (songs.isEmpty()) return
         songById = songs.associateBy { it.id }
+        // 冷启动恢复的是书：走有声书分支（变速/增益/会话），否则还是音乐页
+        val abookId = songs.takeIf { it.isNotEmpty() && it.all { s -> isAbookSong(s.id) } }
+            ?.let { abookBookIdOf(it.first().id) }
+        if (abookId != null) abookOrder = songs.map { it.id }
         val idx = sq.currentIndex.coerceIn(0, songs.lastIndex)
         val delivery = deliverQueue(songs, idx, sq.positionSec.toLong() * 1000)
+        if (abookId != null) {
+            viewModelScope.launch {
+                val prog = withContext(Dispatchers.IO) {
+                    runCatching { container.audiobookStore.progressOf(abookId) }.getOrNull()
+                }
+                val speed = prog?.speed ?: 1f
+                val gain = prog?.gain ?: 1f
+                container.abookSession.setActive(abookId, gain)
+                container.abookSession.setCurrentPath(songs[idx].path)
+                c.playbackParameters = PlaybackParameters(speed, 1f)
+                _state.update { it.copy(abookId = abookId, abookSpeed = speed, abookGain = gain) }
+                syncFromController()
+            }
+            c.repeatMode = when (sq.repeat) { 1 -> Player.REPEAT_MODE_ALL; 2 -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_OFF }
+            c.prepare()   // buffer at saved position but stay paused
+            _state.update {
+                it.copy(queue = delivery.songs, current = songs[idx], positionSec = sq.positionSec.toFloat(), isPlaying = false, currentIndex = delivery.currentIndex, shuffle = sq.shuffle,
+                    repeat = when (sq.repeat) { 1 -> RepeatMode.ALL; 2 -> RepeatMode.ONE; else -> RepeatMode.OFF },
+                    abookId = abookId)
+            }
+            return
+        }
         c.playbackParameters = currentParams()
         c.repeatMode = when (sq.repeat) { 1 -> Player.REPEAT_MODE_ALL; 2 -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_OFF }
         c.prepare()   // buffer at saved position but stay paused
@@ -351,6 +378,59 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             )
         }
         songById = songs.associateBy { it.id }
+        restoreAbookFromController()
+    }
+
+    /**
+     * service 活着但 VM 重建（旋转/重建）：controller 里是书的章节队，
+     * 按 mediaId 反查章节重建成完整 Song（含 path），恢复书会话。
+     * 音乐队直接返回（上面的快照已够用）。
+     */
+    private fun restoreAbookFromController() {
+        val c = controller ?: return
+        if (c.mediaItemCount == 0) return
+        val firstId = c.getMediaItemAt(0).mediaId
+        if (!isAbookSong(firstId)) return
+        val bookId = com.aurora.music.data.audiobook.abookBookIdOf(firstId) ?: return
+        viewModelScope.launch {
+            val book = container.audiobookStore.books.value.firstOrNull { it.id == bookId }
+            val chapters = runCatching { container.audiobookStore.chaptersOfBookFiltered(bookId) }
+                .getOrDefault(emptyList())
+            if (chapters.isEmpty()) return@launch
+            val songs = (0 until c.mediaItemCount).mapNotNull { i ->
+                val mid = c.getMediaItemAt(i).mediaId
+                val idx = com.aurora.music.data.audiobook.abookIndexOf(mid) ?: return@mapNotNull null
+                val ch = chapters.getOrNull(idx) ?: return@mapNotNull null
+                Song(
+                    id = mid,
+                    title = ch.displayTitle,
+                    artist = book?.displayTitle.orEmpty(),
+                    album = book?.displayTitle.orEmpty(),
+                    artworkUrl = book?.coverPath.orEmpty(),
+                    durationSec = ch.durationSec,
+                    streamUrl = runCatching {
+                        android.net.Uri.fromFile(java.io.File(ch.path)).toString()
+                    }.getOrDefault(""),
+                    suffix = ch.path.substringAfterLast('.', ""),
+                    path = ch.path,
+                    accent = com.aurora.music.util.accentFor(ch.path),
+                    trackNumber = ch.trackNumber,
+                )
+            }
+            if (songs.isEmpty()) return@launch
+            songById = songs.associateBy { it.id }
+            abookOrder = songs.map { it.id }
+            val prog = withContext(Dispatchers.IO) {
+                runCatching { container.audiobookStore.progressOf(bookId) }.getOrNull()
+            }
+            val speed = prog?.speed ?: 1f
+            val gain = prog?.gain ?: 1f
+            container.abookSession.setActive(bookId, gain)
+            c.playbackParameters = PlaybackParameters(speed, 1f)
+            _state.update { it.copy(abookId = bookId, abookSpeed = speed, abookGain = gain) }
+            syncFromController()
+            container.abookSession.setCurrentPath(_state.value.current.path)
+        }
     }
 
     fun setPreferredDevice(deviceId: Int) {
