@@ -990,8 +990,6 @@ fun Ios5App() {
                                     container.settingsStore.setAbookAllowMix(!abookPrefs.allowMix)
                                 }
                             },
-                            onToggleShuffle = { playerVM.toggleShuffle() },
-                            onCycleRepeat = { playerVM.cycleRepeat() },
                             onOpenQueue = { showQueue = true },
                             introActive = introState.active,
                             onIntroClick = { onIntroClick() },

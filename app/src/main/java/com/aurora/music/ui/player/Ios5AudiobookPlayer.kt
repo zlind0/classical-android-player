@@ -27,9 +27,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Repeat
-import androidx.compose.material.icons.filled.RepeatOne
-import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
@@ -40,6 +37,7 @@ import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -65,7 +63,6 @@ import com.aurora.music.ui.ios5.Ios5Sans
 import com.aurora.music.ui.ios5.Ios5Slider
 import com.aurora.music.ui.ios5.Ios5SliderRow
 import com.aurora.music.viewmodel.PlayerUiState
-import com.aurora.music.viewmodel.RepeatMode
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.roundToInt
 
@@ -96,8 +93,6 @@ fun Ios5AudiobookPlayerPage(
     onSpeed: (Float) -> Unit,
     onGain: (Float) -> Unit,
     onToggleMix: () -> Unit,
-    onToggleShuffle: () -> Unit,
-    onCycleRepeat: () -> Unit,
     onOpenQueue: () -> Unit,
     introActive: Boolean = false,
     onIntroClick: () -> Unit = {},
@@ -114,6 +109,26 @@ fun Ios5AudiobookPlayerPage(
     val remaining = (state.durationSec - state.positionSec.toInt()).coerceAtLeast(0)
     val chapterLabel = "第 ${state.currentIndex + 1} 章 / 共 ${book.chapterCount} 章"
 
+    val context = LocalContext.current
+    // 黑顶栏下状态栏图标切白、导航栏刷黑，离开还原（与音乐页同规则）
+    DisposableEffect(Unit) {
+        val window = (context as android.app.Activity).window
+        val controller = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+        val prevStatus = controller.isAppearanceLightStatusBars
+        val prevNav = controller.isAppearanceLightNavigationBars
+        val prevNavColor = window.navigationBarColor
+        controller.isAppearanceLightStatusBars = false
+        controller.isAppearanceLightNavigationBars = false
+        window.navigationBarColor = android.graphics.Color.BLACK
+        onDispose {
+            controller.isAppearanceLightStatusBars = prevStatus
+            controller.isAppearanceLightNavigationBars = prevNav
+            window.navigationBarColor = prevNavColor
+        }
+    }
+
+    // 高度分配：顶栏/灰条/黑底全部包内容，封面区高度恒等于宽度（正方形区域）；
+    // 黑底 weight 吃掉所有剩余（内容居中，面积自由长大）——总高度恒等于屏幕，不留缝
     BoxWithConstraints(
         Modifier.fillMaxSize().background(Color(0xFFF4F4F6))
             .clickable(
@@ -125,23 +140,22 @@ fun Ios5AudiobookPlayerPage(
         val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
         val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
         val titleAreaH = 46.dp
-        val topBase = statusTop + 87.dp
-        val grayBase = 100.dp
-        val bottomBase = 200.dp + navBottom
-        val coverSide = minOf(maxWidth, maxHeight - topBase - grayBase - bottomBase).coerceAtLeast(0.dp)
-        val leftover = (maxHeight - topBase - grayBase - coverSide - bottomBase).coerceAtLeast(0.dp)
-        val topExtra = leftover * 0.4f
-        val bottomExtra = leftover - topExtra
-        val third = topExtra / 3f
+        // 顶栏定高 statusTop+87（36 行 + 46 标题 + 4 间距 + 1 分割线），灰条预留 100，
+        // 黑底内容 174（66 第一行 + 10 间距 + 72 第二行 + 26 上下垫）；
+        // 这些只决定封面缩小的时机，不参与等式——等式由 weight 保证
+        val coverSide = minOf(
+            maxWidth,
+            maxHeight - statusTop - 87.dp - 100.dp - 174.dp - navBottom,
+        ).coerceAtLeast(0.dp)
         Column(Modifier.fillMaxSize()) {
             // 黑顶栏：返回 | 书名 | 队列 + 章节标题区
             Column(
                 Modifier.fillMaxWidth()
                     .background(iPodBlack)
-                    .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + third),
+                    .padding(top = statusTop),
             ) {
                 Row(
-                    Modifier.fillMaxWidth().height(36.dp + third).padding(horizontal = 8.dp),
+                    Modifier.fillMaxWidth().height(36.dp).padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IpodBarButton(onClick = onCollapse) {
@@ -171,7 +185,7 @@ fun Ios5AudiobookPlayerPage(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
-                Spacer(Modifier.height(4.dp + third))
+                Spacer(Modifier.height(4.dp))
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Color.Black))
             }
 
@@ -271,25 +285,30 @@ fun Ios5AudiobookPlayerPage(
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0xFF9AA0A8)))
 
-            // 封面
+            // 封面区：高度恒等于宽度（正方形区域，全幅顶满灰条与黑底之间）；
+            // 矮屏兜底 coverSide 缩小，区域仍是正方形
             Box(
                 Modifier.fillMaxWidth().height(coverSide),
                 contentAlignment = Alignment.Center,
             ) {
-                TrackArtwork(
-                    song,
-                    Modifier.size(coverSide),
-                    corner = 0.dp,
-                    fullQuality = true,
-                )
+                if (coverSide > 0.dp) {
+                    Box(Modifier.size(coverSide)) {
+                        TrackArtwork(
+                            song,
+                            Modifier.fillMaxSize(),
+                            corner = 0.dp,
+                            fullQuality = true,
+                        )
+                    }
+                }
             }
 
-            // 黑底走带：两行三列
+            // 黑底：weight 吃掉封面之外的全部剩余（面积自由长大），内容垂直居中
             Column(
-                Modifier.fillMaxWidth().background(iPodBlack).padding(horizontal = 20.dp)
+                Modifier.weight(1f).fillMaxWidth().background(iPodBlack).padding(horizontal = 20.dp)
                     .padding(
-                        top = 8.dp + bottomExtra / 2,
-                        bottom = 18.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + bottomExtra / 2,
+                        top = 8.dp,
+                        bottom = 18.dp + navBottom,
                     ),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -299,13 +318,13 @@ fun Ios5AudiobookPlayerPage(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceEvenly,
                 ) {
-                    AbookCellButton(label = "上一章", onClick = onPrevChapter) {
+                    AbookCellButton(onClick = onPrevChapter) {
                         Icon(Icons.Filled.SkipPrevious, "上一章", tint = Color.White, modifier = Modifier.size(30.dp))
                     }
-                    AbookCellButton(label = "第 ${state.currentIndex + 1} 章", onClick = { bubble = AbookBubble.CHAPTERS }) {
+                    AbookCellButton(onClick = { bubble = AbookBubble.CHAPTERS }) {
                         Icon(Icons.Outlined.FormatListNumbered, "章节选择", tint = Color.White, modifier = Modifier.size(30.dp))
                     }
-                    AbookCellButton(label = "下一章", onClick = onNextChapter) {
+                    AbookCellButton(onClick = onNextChapter) {
                         Icon(Icons.Filled.SkipNext, "下一章", tint = Color.White, modifier = Modifier.size(30.dp))
                     }
                 }
@@ -315,48 +334,16 @@ fun Ios5AudiobookPlayerPage(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceEvenly,
                 ) {
-                    AbookCellButton(label = "后退${step}秒", onClick = { onSeekBy(-step) }) {
+                    AbookCellButton(onClick = { onSeekBy(-step) }) {
                         SeekCircleIcon(seconds = step, forward = false, modifier = Modifier.size(54.dp))
                     }
                     AbookPlayPauseIcon(
                         playing = state.isPlaying,
                         modifier = Modifier.size(72.dp).clip(androidx.compose.foundation.shape.CircleShape).clickable(onClick = onTogglePlay).padding(10.dp),
                     )
-                    AbookCellButton(label = "前进${step}秒", onClick = { onSeekBy(step) }) {
+                    AbookCellButton(onClick = { onSeekBy(step) }) {
                         SeekCircleIcon(seconds = step, forward = true, modifier = Modifier.size(54.dp))
                     }
-                }
-                Spacer(Modifier.height(4.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
-                ) {
-                    Icon(
-                        when (state.repeat) {
-                            RepeatMode.ONE -> Icons.Filled.RepeatOne
-                            else -> Icons.Filled.Repeat
-                        },
-                        "循环",
-                        tint = if (state.repeat == RepeatMode.OFF) Color(0xFF8E8E93) else Color(0xFF0A60D6),
-                        modifier = Modifier.size(30.dp).clip(androidx.compose.foundation.shape.CircleShape)
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() },
-                                onClick = onCycleRepeat,
-                            ).padding(5.dp),
-                    )
-                    Spacer(Modifier.width(28.dp))
-                    Icon(
-                        Icons.Filled.Shuffle, "随机",
-                        tint = if (state.shuffle) Color(0xFF0A60D6) else Color(0xFF8E8E93),
-                        modifier = Modifier.size(30.dp).clip(androidx.compose.foundation.shape.CircleShape)
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() },
-                                onClick = onToggleShuffle,
-                            ).padding(5.dp),
-                    )
                 }
             }
         }
@@ -388,25 +375,17 @@ private enum class AbookBubble { SPEED, GAIN, CHAPTERS, SLEEP }
 
 @Composable
 private fun AbookCellButton(
-    label: String,
     onClick: () -> Unit,
     content: @Composable () -> Unit,
 ) {
-    Column(
+    Box(
         Modifier.width(96.dp)
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
             .padding(vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        content()
-        Spacer(Modifier.height(2.dp))
-        Text(
-            label, color = Color(0xFFB9BEC7), fontSize = 11.sp,
-            fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
-            maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
-        )
-    }
+        contentAlignment = Alignment.Center,
+        content = { content() },
+    )
 }
 
 // ---- 速度气泡：0.5..4x step 0.25（不变调） ----

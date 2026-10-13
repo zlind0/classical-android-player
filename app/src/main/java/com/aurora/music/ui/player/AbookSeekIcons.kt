@@ -109,18 +109,23 @@ fun AbookPlayPauseIcon(
                 cornerRadius = CornerRadius(barW / 2, barW / 2),
             )
         } else {
+            // 等边三角：高 0.62S、半宽 0.31S·√3/2，正中放置，不再被粗描边吃比例
+            val h = size.height * 0.62f
+            val halfW = h * 0.433f
+            val cy = size.height * 0.5f
+            val x0 = center.x - halfW
             val path = Path().apply {
-                moveTo(size.width * 0.30f, size.height * 0.22f)
-                lineTo(size.width * 0.30f, size.height * 0.78f)
-                lineTo(size.width * 0.78f, size.height * 0.5f)
+                moveTo(x0, cy - h / 2)
+                lineTo(x0, cy + h / 2)
+                lineTo(x0 + halfW * 2, cy)
                 close()
             }
             drawPath(path, color)
-            // 同色粗描边 + 圆角连接，钝化三角三个角
+            // 同色细描边 + 圆角连接，只钝化三个角
             drawPath(
                 path,
                 color,
-                style = Stroke(width = 5.dp.toPx(), join = StrokeJoin.Round),
+                style = Stroke(width = 3.dp.toPx(), join = StrokeJoin.Round),
             )
         }
     }
