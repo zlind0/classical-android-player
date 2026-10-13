@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
@@ -49,6 +50,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -514,6 +516,14 @@ private fun ChapterBubble(
     onSelect: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    // 在播章节默认居中：列表高 540，行高约 39，居中偏移 -(540/2-39/2) ≈ -250dp
+    val listState = rememberLazyListState()
+    val density = LocalDensity.current
+    androidx.compose.runtime.LaunchedEffect(book.id) {
+        val safe = currentIndex.coerceIn(0, (book.chapterCount - 1).coerceAtLeast(0))
+        val centerOffset = with(density) { (-250.dp).roundToPx() }
+        listState.scrollToItem(safe, centerOffset)
+    }
     Box(
         Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f))
             .clickable(
@@ -547,7 +557,10 @@ private fun ChapterBubble(
                     )
                 }
             }
-            LazyColumn(Modifier.fillMaxWidth().height(360.dp)) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxWidth().height(540.dp),
+            ) {
                 itemsIndexed(book.chapters, key = { _, c -> c.path }) { i, c ->
                     Row(
                         Modifier.fillMaxWidth()
