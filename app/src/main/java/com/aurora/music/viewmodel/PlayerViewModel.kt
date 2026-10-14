@@ -307,7 +307,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         ))
     }
 
-    private fun restoreQueue(sq: SavedQueue) {
+    private suspend fun restoreQueue(sq: SavedQueue) {
         val c = controller ?: return
         val songs = sq.tracks.orEmpty().map { it.toSong() }.filter { it.id.isNotEmpty() && it.streamUrl.isNotEmpty() }
         if (songs.isEmpty()) return
@@ -317,35 +317,33 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             ?.let { abookBookIdOf(it.first().id) }
         if (abookId != null) abookOrder = songs.map { it.id }
         val idx = sq.currentIndex.coerceIn(0, songs.lastIndex)
-        val delivery = deliverQueue(songs, idx, sq.positionSec.toLong() * 1000)
+        // 变速先于建队（同上，防内部 seek 冲位置）；音乐同样先设后建
         if (abookId != null) {
-            viewModelScope.launch {
-                val prog = withContext(Dispatchers.IO) {
-                    runCatching { container.audiobookStore.progressOf(abookId) }.getOrNull()
-                }
-                val speed = prog?.speed ?: 1f
-                val gain = prog?.gain ?: 1f
-                container.abookSession.setActive(abookId, gain)
-                container.abookSession.setCurrentPath(songs[idx].path)
-                c.playbackParameters = PlaybackParameters(speed, 1f)
-                _state.update { it.copy(abookId = abookId, abookSpeed = speed, abookGain = gain) }
-                syncFromController()
+            val prog = withContext(Dispatchers.IO) {
+                runCatching { container.audiobookStore.progressOf(abookId) }.getOrNull()
             }
+            val speed = prog?.speed ?: 1f
+            val gain = prog?.gain ?: 1f
+            c.playbackParameters = PlaybackParameters(speed, 1f)
+            container.abookSession.setActive(abookId, gain)
+            container.abookSession.setCurrentPath(songs[idx].path)
+            val delivery = deliverQueue(songs, idx, sq.positionSec.toLong() * 1000)
             c.repeatMode = when (sq.repeat) { 1 -> Player.REPEAT_MODE_ALL; 2 -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_OFF }
             c.prepare()   // buffer at saved position but stay paused
             _state.update {
                 it.copy(queue = delivery.songs, current = songs[idx], positionSec = sq.positionSec.toFloat(), isPlaying = false, currentIndex = delivery.currentIndex, shuffle = sq.shuffle,
                     repeat = when (sq.repeat) { 1 -> RepeatMode.ALL; 2 -> RepeatMode.ONE; else -> RepeatMode.OFF },
-                    abookId = abookId)
+                    abookId = abookId, abookSpeed = speed, abookGain = gain)
             }
-            return
-        }
-        c.playbackParameters = currentParams()
-        c.repeatMode = when (sq.repeat) { 1 -> Player.REPEAT_MODE_ALL; 2 -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_OFF }
-        c.prepare()   // buffer at saved position but stay paused
-        _state.update {
-            it.copy(queue = delivery.songs, current = songs[idx], positionSec = sq.positionSec.toFloat(), isPlaying = false, currentIndex = delivery.currentIndex, shuffle = sq.shuffle,
-                repeat = when (sq.repeat) { 1 -> RepeatMode.ALL; 2 -> RepeatMode.ONE; else -> RepeatMode.OFF })
+        } else {
+            c.playbackParameters = currentParams()
+            val delivery = deliverQueue(songs, idx, sq.positionSec.toLong() * 1000)
+            c.repeatMode = when (sq.repeat) { 1 -> Player.REPEAT_MODE_ALL; 2 -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_OFF }
+            c.prepare()   // buffer at saved position but stay paused
+            _state.update {
+                it.copy(queue = delivery.songs, current = songs[idx], positionSec = sq.positionSec.toFloat(), isPlaying = false, currentIndex = delivery.currentIndex, shuffle = sq.shuffle,
+                    repeat = when (sq.repeat) { 1 -> RepeatMode.ALL; 2 -> RepeatMode.ONE; else -> RepeatMode.OFF })
+            }
         }
         if (sq.shuffle) {
             // queue is already in saved order tell the service shuffle is on and remember that order
@@ -632,9 +630,11 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                 }
             }
+            // 变速必须在 setMediaItems 之前设：ExoPlayer 设变速内部会 seek 到当前位置，
+            // 后设会把起播位置冲回 0（音乐页起播本来就是 0 才没暴露）
+            c.playbackParameters = PlaybackParameters(clampedSpeed, 1f)
             val delivery = deliverQueue(songs, idx, positionMs.coerceAtLeast(0L))
             // 不变调变速：pitch 恒 1，与音乐 matchPitch 逻辑解耦
-            c.playbackParameters = PlaybackParameters(clampedSpeed, 1f)
             c.prepare()
             c.play()
             sendShuffle(0)
