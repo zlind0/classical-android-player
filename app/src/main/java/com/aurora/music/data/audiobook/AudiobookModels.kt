@@ -51,9 +51,11 @@ data class AudiobookBook(
     val currentIndex: Int get() = chapters.indexOfFirst { it.path == currentPath }.takeIf { it >= 0 } ?: 0
     val progressPct: Float get() {
         if (chapters.isEmpty()) return 0f
+        // 读不出时长（total = 0）时按章节索引折算，保证听过的书能显示出进度。
+        val total = chapters.sumOf { it.durationSec }.takeIf { it > 0 }
+            ?: return currentIndex.toFloat() / chapters.size
         val done = chapters.take(currentIndex).sumOf { it.durationSec }
         val cur = chapters.getOrNull(currentIndex)?.durationSec?.takeIf { it > 0 } ?: 0
-        val total = chapters.sumOf { it.durationSec }.takeIf { it > 0 } ?: return 0f
         return ((done + (positionMs / 1000f).coerceIn(0f, cur.toFloat())) / total).coerceIn(0f, 1f)
     }
 }

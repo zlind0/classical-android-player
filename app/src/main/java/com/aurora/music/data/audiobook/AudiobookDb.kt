@@ -89,13 +89,36 @@ interface AudiobookDao {
     suspend fun recentProgress(limit: Int): List<AudiobookProgressRow>
 
     @Query("UPDATE abook_progress SET currentPath = :path, positionMs = :pos, lastPlayedAt = :at WHERE bookId = :bookId")
-    suspend fun savePos(bookId: String, path: String, pos: Long, at: Long)
+    suspend fun savePos(bookId: String, path: String, pos: Long, at: Long): Int
 
     @Query("UPDATE abook_progress SET speed = :speed WHERE bookId = :bookId")
-    suspend fun saveSpeed(bookId: String, speed: Float)
+    suspend fun saveSpeed(bookId: String, speed: Float): Int
 
     @Query("UPDATE abook_progress SET gain = :gain WHERE bookId = :bookId")
-    suspend fun saveGain(bookId: String, gain: Float)
+    suspend fun saveGain(bookId: String, gain: Float): Int
+
+    // 先 UPDATE、0 行再 INSERT（@Transaction 保证原子）：调用方并发时 check-then-act 会丢其中一份。
+    // 位置 UPSERT 只碰三列，不动 speed/gain。
+    @Transaction
+    suspend fun upsertPos(bookId: String, path: String, pos: Long, at: Long) {
+        if (savePos(bookId, path, pos, at) == 0) {
+            insertProgress(AudiobookProgressRow(bookId, path, pos, 1f, 1f, at))
+        }
+    }
+
+    @Transaction
+    suspend fun upsertSpeed(bookId: String, speed: Float) {
+        if (saveSpeed(bookId, speed) == 0) {
+            insertProgress(AudiobookProgressRow(bookId, "", 0L, speed, 1f, 0L))
+        }
+    }
+
+    @Transaction
+    suspend fun upsertGain(bookId: String, gain: Float) {
+        if (saveGain(bookId, gain) == 0) {
+            insertProgress(AudiobookProgressRow(bookId, "", 0L, 1f, gain, 0L))
+        }
+    }
 
     @Query("SELECT path FROM abook_chapters WHERE rootId = :rootId")
     suspend fun pathsOfRoot(rootId: Long): List<String>
@@ -108,6 +131,8 @@ interface AudiobookDao {
         val oldBookIds = chaptersOfRoot(rootId).map { it.bookId }.toSet()
         deleteChaptersOfRoot(rootId)
         upsertChapters(rows)
+        // 空扫（权限丢失/介质未挂载/瞬时失败）不删进度，否则重扫回来进度全丢。
+        if (rows.isEmpty()) return
         val keep = rows.map { it.bookId }.toSet()
         val gone = (oldBookIds - keep).toList()
         if (gone.isNotEmpty()) deleteProgress(gone)

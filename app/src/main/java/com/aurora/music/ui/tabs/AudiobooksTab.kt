@@ -60,7 +60,7 @@ fun AudiobooksTab(
                 ios5Rows(recents, key = { it.id }) { _, b ->
                     AudiobookRow(
                         title = b.displayTitle,
-                        subtitle = bookSubtitle(b.chapterCount, b.currentIndex, b.progressPct, b.skippedCount),
+                        subtitle = bookSubtitle(b.chapterCount, b.currentIndex, b.progressPct, b.skippedCount, played = b.lastPlayedAt > 0),
                         coverPath = b.coverPath,
                         accentKey = b.id,
                         onClick = { onPlayBook(b.id) },
@@ -74,7 +74,7 @@ fun AudiobooksTab(
                 ios5Rows(rest, key = { it.id }) { _, b ->
                     AudiobookRow(
                         title = b.displayTitle,
-                        subtitle = bookSubtitle(b.chapterCount, b.currentIndex, b.progressPct, b.skippedCount),
+                        subtitle = bookSubtitle(b.chapterCount, b.currentIndex, b.progressPct, b.skippedCount, played = b.lastPlayedAt > 0),
                         coverPath = b.coverPath,
                         accentKey = b.id,
                         onClick = { onPlayBook(b.id) },
@@ -88,10 +88,11 @@ fun AudiobooksTab(
     }
 }
 
-internal fun bookSubtitle(chapters: Int, currentIndex: Int, pct: Float, skipped: Int): String {
+internal fun bookSubtitle(chapters: Int, currentIndex: Int, pct: Float, skipped: Int, played: Boolean = false): String {
     val parts = mutableListOf<String>()
     parts.add("共 $chapters 章")
-    if (pct > 0f) parts.add("第 ${currentIndex + 1} 章 · ${(pct * 100).toInt()}%")
+    // 播过的书始终显示章节（哪怕 0%），否则用户会以为进度丢了。
+    if (played || pct > 0f) parts.add("第 ${currentIndex + 1} 章 · ${(pct * 100).toInt()}%")
     if (skipped > 0) parts.add("跳过 $skipped 章")
     return parts.joinToString(" · ")
 }

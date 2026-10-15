@@ -99,7 +99,7 @@ fun HomeTab(
                 ios5Rows(recentAbooks, key = { it.id }) { _, b ->
                     AudiobookRow(
                         title = b.displayTitle,
-                        subtitle = bookSubtitle(b.chapterCount, b.currentIndex, b.progressPct, b.skippedCount),
+                        subtitle = bookSubtitle(b.chapterCount, b.currentIndex, b.progressPct, b.skippedCount, played = b.lastPlayedAt > 0),
                         coverPath = b.coverPath,
                         accentKey = b.id,
                         onClick = { onPlayAudiobook(b.id) },

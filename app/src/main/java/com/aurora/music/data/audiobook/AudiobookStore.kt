@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 // 有声书仓库：扫描根 CRUD、书/章节组装（含关键字过滤）、每书记忆。
@@ -35,6 +37,9 @@ class AudiobookStore(context: Context, private val dao: AudiobookDao) {
     val scanProgress = MutableStateFlow(AudiobookScanProgress())
 
     @Volatile var skipKeywords: Set<String> = emptySet()
+
+    // 进度写串行化：savePos/saveSpeed/saveGain 并发时 check-then-act 会互相覆盖。
+    private val progressMutex = Mutex()
 
     init {
         scope.launch(Dispatchers.IO) { refresh() }
@@ -159,34 +164,26 @@ class AudiobookStore(context: Context, private val dao: AudiobookDao) {
 
     fun savePos(bookId: String, path: String, posMs: Long) {
         scope.launch(Dispatchers.IO) {
-            val at = System.currentTimeMillis()
-            if (dao.progressOf(bookId) == null) {
-                dao.insertProgress(AudiobookProgressRow(bookId, path, posMs, 1f, 1f, at))
-            } else {
-                dao.savePos(bookId, path, posMs.coerceAtLeast(0L), at)
+            progressMutex.withLock {
+                dao.upsertPos(bookId, path, posMs.coerceAtLeast(0L), System.currentTimeMillis())
             }
             refreshRecentsOnly()
         }
     }
 
     suspend fun savePosSync(bookId: String, path: String, posMs: Long) = withContext(Dispatchers.IO) {
-        val at = System.currentTimeMillis()
-        if (dao.progressOf(bookId) == null) {
-            dao.insertProgress(AudiobookProgressRow(bookId, path, posMs, 1f, 1f, at))
-        } else {
-            dao.savePos(bookId, path, posMs.coerceAtLeast(0L), at)
+        progressMutex.withLock {
+            dao.upsertPos(bookId, path, posMs.coerceAtLeast(0L), System.currentTimeMillis())
         }
         refreshRecentsOnly()
     }
 
     suspend fun saveSpeed(bookId: String, speed: Float) = withContext(Dispatchers.IO) {
-        if (dao.progressOf(bookId) == null) dao.insertProgress(AudiobookProgressRow(bookId, "", 0L, speed, 1f, 0L))
-        else dao.saveSpeed(bookId, speed)
+        progressMutex.withLock { dao.upsertSpeed(bookId, speed) }
     }
 
     suspend fun saveGain(bookId: String, gain: Float) = withContext(Dispatchers.IO) {
-        if (dao.progressOf(bookId) == null) dao.insertProgress(AudiobookProgressRow(bookId, "", 0L, 1f, gain, 0L))
-        else dao.saveGain(bookId, gain)
+        progressMutex.withLock { dao.upsertGain(bookId, gain) }
     }
 
     suspend fun progressOf(bookId: String): AudiobookProgressRow? =

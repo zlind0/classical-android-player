@@ -223,7 +223,11 @@ fun Ios5App() {
             )
         }
         val savedPath = prog?.currentPath.orEmpty()
-        val idx = book.chapters.indexOfFirst { it.path == savedPath }.takeIf { it >= 0 } ?: 0
+        // 先按完整路径找回；书目录改名/大小小差异导致对不上时按文件名兜底，别静默从头开始。
+        val idx = book.chapters.indexOfFirst { it.path == savedPath }.takeIf { it >= 0 }
+            ?: savedPath.substringAfterLast('/').takeIf { it.isNotEmpty() }?.let { name ->
+                book.chapters.indexOfFirst { it.path.substringAfterLast('/') == name }
+            }?.takeIf { it >= 0 } ?: 0
         val pos = if (book.chapters.getOrNull(idx)?.path == savedPath) prog?.positionMs ?: 0L else 0L
         container.haptic()
         if (!playerVM.hasController()) confirm("正在连接播放服务，连上就播")

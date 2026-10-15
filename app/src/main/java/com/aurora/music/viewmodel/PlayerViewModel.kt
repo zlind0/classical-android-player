@@ -277,6 +277,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun stopPlayback() {
+        persistAbookNow()
         controller?.let { c ->
             runCatching { c.pause(); c.stop(); c.clearMediaItems() }
         }
@@ -596,6 +597,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         gain: Float,
     ) {
         viewModelScope.launch {
+            persistOutgoingAbook(bookId)
             val c = controller
             if (c == null) {
                 // 连接中：排队，连上即播（调用方负责 toast 提示）
@@ -705,10 +707,13 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     private fun onAbookChapterChanged(mediaId: String) {
-        val bookId = _state.value.abookId ?: return
         if (!isAbookSong(mediaId)) return
+        // bookId 必须从 mediaId 反解，不能读可变的 _state.value.abookId：
+        // 切书窗口期 state 里还是旧书、songById 已经换成新书，错配会把旧书进度洗成新书章节 + 0 位。
+        val bookId = abookBookIdOf(mediaId) ?: return
         val song = songById[mediaId] ?: return
-        container.abookSession.setCurrentPath(song.path)
+        // 迟到的旧书事件不再碰会话，避免污染当前书的增益/快进路径。
+        if (_state.value.abookId == bookId) container.abookSession.setCurrentPath(song.path)
         // 切章即记新章 0 位（ticker 随后会跟进精确位置）
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { container.audiobookStore.savePos(bookId, song.path, 0L) }
@@ -725,6 +730,20 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { container.audiobookStore.savePos(bookId, song.path, posMs) }
         }
+    }
+
+    // 切书/切音乐前同步落盘旧书：ticker 最多 2s 一次，不补这一下最后一段必丢。
+    private suspend fun persistOutgoingAbook(nextBookId: String?) {
+        val st = _state.value
+        val oldId = st.abookId ?: return
+        if (oldId == nextBookId) return
+        val c = controller
+        val song = c?.currentMediaItem?.mediaId?.let { songById[it] } ?: st.current
+        if (!isAbookSong(song.id) || song.path.isBlank()) return
+        // mediaId 反解必须和旧书一致，防止窗口期错配写到别的书上。
+        if (abookBookIdOf(song.id) != oldId) return
+        val posMs = ((c?.currentPosition ?: (st.positionSec * 1000).toLong())).coerceAtLeast(0L)
+        runCatching { container.audiobookStore.savePosSync(oldId, song.path, posMs) }
     }
 
     private fun clearAbook() {
@@ -943,6 +962,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun pause() {
+        persistAbookNow()
         controller?.pause()
     }
 
