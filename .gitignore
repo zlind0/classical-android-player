@@ -1,4 +1,5 @@
 # Classical fork: upstream ships no gitignore; keep build outputs out of the repo.
+tmp/
 *.iml
 .gradle/
 /local.properties
