@@ -141,9 +141,10 @@ fun defaultExportThreads(): Int =
 
 /**
  * 把段文本按块边界打包成 ≤[maxChars] 的合成批次（超长块先按句切分）。
- * 小批次让单次 PCM 恒小；打包（相对逐块调用）让系统 TTS binder 开销可接受。
+ * 小批次让单次 PCM 恒小（400 字 ≈ 6MB 上限，800 字在 256MB 堆上
+ * × 线程数直接 OOM）；打包（相对逐块调用）让系统 TTS binder 开销可接受。
  */
-internal fun batchExportTexts(texts: List<String>, maxChars: Int = 800): List<String> {
+internal fun batchExportTexts(texts: List<String>, maxChars: Int = 400): List<String> {
     val out = mutableListOf<String>()
     val cur = StringBuilder()
     fun flush() {

@@ -7,6 +7,7 @@ import com.microsoft.cognitiveservices.speech.ResultReason
 import com.microsoft.cognitiveservices.speech.SpeechSynthesisOutputFormat
 import com.microsoft.cognitiveservices.speech.SpeechSynthesizer
 import java.io.ByteArrayOutputStream
+import java.io.Closeable
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -151,6 +152,164 @@ class MsEmbeddedEngine(private val context: Context) {
         )
         if (pcm24.isEmpty()) return@withContext ByteArray(0)
         TtsWav.upsample24kTo48kMono(pcm24)
+    }
+
+    /** 打开复用式合成会话（调用方负责 close，实例线程独占，绝不跨线程共享）。 */
+    fun openSession(voice: MsVoice, rate: Float = 1f, pitch: Float = 1f): Session =
+        Session(voice, rate, pitch)
+
+    /**
+     * 复用式合成会话（导出管线用）：一个 SpeechSynthesizer 服务多批次，
+     * 整书结束才关。导出的高频建/关实例会让 MS SDK native 堆单调上涨
+     * 直至 OOM，所以这里建一次复用到底。
+     * 48k/24k 格式只在首批探测一次（跨导出记住决定），之后整会话沿用。
+     */
+    inner class Session(
+        val voice: MsVoice,
+        private val rate: Float = 1f,
+        private val pitch: Float = 1f,
+    ) : Closeable {
+        private var cfg: EmbeddedSpeechConfig? = null
+        private var synth: SpeechSynthesizer? = null
+        /** null = 首批待探测；true = 原生 48k；false = 24k 回落。 */
+        private var use48k: Boolean? = null
+        private var closed = false
+
+        init {
+            require(isInstalled(voice.code)) { "语音 ${voice.code} 尚未安装" }
+            // 跨导出已知的格式决定直接沿用，跳过首批探测。
+            if (native48k[voice.code] == true) {
+                use48k = true
+                openSynth(SpeechSynthesisOutputFormat.Raw48Khz16BitMonoPcm)
+            } else if (native48k[voice.code] == false) {
+                use48k = false
+                openSynth(SpeechSynthesisOutputFormat.Raw24Khz16BitMonoPcm)
+            }
+        }
+
+        /**
+         * 合成一批文本，返回 48kHz 单声道 16bit PCM。
+         * 原生 48k 路径按块回调 [onPcmChunk] 后只返回成功哨兵（非空即成功，
+         * 不攒全量包，省 10MB+ 级瞬时内存）；无回调时才返回完整 PCM。
+         * 24k 回落路径不回调，只有完整返回。
+         */
+        fun synthBatch(
+            text: String,
+            onPcmChunk: ((ByteArray) -> Unit)? = null,
+            isStopped: () -> Boolean = { false },
+        ): ByteArray {
+            check(!closed) { "会话已关闭" }
+            require(text.isNotBlank()) { "文本为空" }
+            val chunks = Chunker.split(text)
+            require(chunks.isNotEmpty()) { "文本为空" }
+            if (synth == null) {
+                // 首批：先试 48k，不行再 24k，之后整会话沿用，不再每批双试。
+                openSynth(SpeechSynthesisOutputFormat.Raw48Khz16BitMonoPcm)
+                val pcm48 = synthChunks(chunks, onPcmChunk, isStopped)
+                if (pcm48.isNotEmpty()) {
+                    use48k = true
+                    native48k[voice.code] = true
+                    return pcm48
+                }
+                if (isStopped()) return ByteArray(0)
+                closeSynth()
+                native48k[voice.code] = false
+                use48k = false
+                openSynth(SpeechSynthesisOutputFormat.Raw24Khz16BitMonoPcm)
+            }
+            return if (use48k == true) {
+                synthChunks(chunks, onPcmChunk, isStopped)
+            } else {
+                val pcm24 = synthChunks(chunks, null, isStopped)
+                if (pcm24.isEmpty()) ByteArray(0) else TtsWav.upsample24kTo48kMono(pcm24)
+            }
+        }
+
+        /**
+         * 故障后重建句柄（保留已探测的格式决定，不重探）。
+         * 下次 [synthBatch] 按需打开；use48k 已知时 [reset] 内直接打开。
+         */
+        fun reset() {
+            check(!closed) { "会话已关闭" }
+            closeSynth()
+            if (use48k == false) {
+                openSynth(SpeechSynthesisOutputFormat.Raw24Khz16BitMonoPcm)
+            }
+        }
+
+        private fun synthChunks(
+            chunks: List<String>,
+            onPcmChunk: ((ByteArray) -> Unit)?,
+            isStopped: () -> Boolean,
+        ): ByteArray {
+            val s = synth ?: throw IllegalStateException("合成器未打开")
+            // 流式回调路径只透传不攒包（一批 800 字 ≈ 12MB，攒包 × 线程数
+            // 在 256MB 堆上直接 OOM）；用字节计数代替，>0 即成功哨兵。
+            // 调用方只在 streamed==0 时用返回值，无回调路径才需要完整 PCM。
+            val streaming = onPcmChunk != null
+            val pcm = if (streaming) null else ByteArrayOutputStream()
+            var streamedBytes = 0
+            val buf = ByteArray(9600)
+            for (chunk in chunks) {
+                if (isStopped()) break
+                val ssml = SsmlBuilder.build(voice, chunk, rate, pitch)
+                val result = s.SpeakSsml(ssml)
+                try {
+                    if (result.reason != ResultReason.SynthesizingAudioCompleted) break
+                    val stream = AudioDataStream.fromResult(result)
+                    try {
+                        stream.setPosition(0)
+                        while (!isStopped()) {
+                            val n = stream.readData(buf).toInt()
+                            if (n <= 0) break
+                            val piece = buf.copyOf(n)
+                            if (streaming) {
+                                onPcmChunk?.invoke(piece)
+                                streamedBytes += n
+                            } else {
+                                pcm?.write(piece)
+                            }
+                        }
+                    } finally {
+                        runCatching { stream.close() }
+                    }
+                } finally {
+                    runCatching { result.close() }
+                }
+            }
+            return if (streaming) {
+                if (streamedBytes > 0) byteArrayOf(1) else ByteArray(0)
+            } else {
+                pcm?.toByteArray() ?: ByteArray(0)
+            }
+        }
+
+        private fun openSynth(format: SpeechSynthesisOutputFormat) {
+            closeSynth()
+            val c = EmbeddedSpeechConfig.fromPath(voiceDirOf(voice.code).absolutePath)
+            try {
+                c.setSpeechSynthesisVoice(voice.displayName, MsVoices.licenseFor(voice))
+                c.setSpeechSynthesisOutputFormat(format)
+                synth = SpeechSynthesizer(c, null)
+                cfg = c
+            } catch (t: Throwable) {
+                runCatching { c.close() }
+                throw t
+            }
+        }
+
+        private fun closeSynth() {
+            runCatching { synth?.close() }
+            synth = null
+            val c = cfg
+            cfg = null
+            runCatching { c?.close() }
+        }
+
+        override fun close() {
+            closed = true
+            closeSynth()
+        }
     }
 
     /** 指定输出格式合全部分块，返回该格式下的原始 PCM（空 = 被停止或该格式不支持）。 */

@@ -54,7 +54,9 @@ suspend fun ensureExportVoice(
     voice
 }
 
-/** 每工作线程一个内置引擎会话，实例永不共享。 */
+/** 每工作线程一个内置引擎会话：SpeechSynthesizer 建一次复用到底（多批次），
+ *  整书结束才关。高频建/关实例会让 MS SDK native 堆单调上涨直至 OOM。
+ *  一个实例独占一线程，永不共享。 */
 class InternalExportSession(
     context: Context,
     private val voice: MsVoice,
@@ -62,6 +64,7 @@ class InternalExportSession(
     private val pitch: Float,
 ) : ExportWorkerSession {
     private val engine = MsEmbeddedEngine(context.applicationContext)
+    private var session: MsEmbeddedEngine.Session = engine.openSession(voice, rate, pitch)
 
     override suspend fun synthOne(
         batch: String,
@@ -71,6 +74,7 @@ class InternalExportSession(
         var frames = 0L
         // 奇字节进位：PCM 块应为偶长，但不信任它。
         var carry = -1
+        var streamed = 0L
         fun writeMono(bytes: ByteArray, len: Int) {
             var start = 0
             var n = len
@@ -92,11 +96,8 @@ class InternalExportSession(
         }
         coroutineContext.ensureActive()
         if (cancelled.get()) return@withContext frames
-        var streamed = 0L
-        // 原生 48k 路径按块回调 onPcmChunk；24k 回落路径不回调，
-        // 直接返回整段 PCM（长度受批次上限约束）。
-        val full = engine.synthesizeStreaming(
-            batch, voice, rate, pitch,
+        fun once(): ByteArray = session.synthBatch(
+            batch,
             onPcmChunk = { chunk ->
                 if (chunk.isNotEmpty()) {
                     writeMono(chunk, chunk.size)
@@ -105,11 +106,27 @@ class InternalExportSession(
             },
             isStopped = { cancelled.get() },
         )
+        // 原生 48k 路径按块回调 onPcmChunk；24k 回落路径不回调，
+        // 直接返回整段 PCM（长度受批次上限约束）。
+        val full = try {
+            once()
+        } catch (e: Exception) {
+            if (cancelled.get()) throw e
+            coroutineContext.ensureActive()
+            // 合成器实例可能已坏：重建一次再试（保留已探测的 48k/24k 决定），
+            // 仍失败才上报。
+            runCatching { session.reset() }
+            once()
+        }
         if (streamed == 0L && full.isNotEmpty()) {
             writeMono(full, full.size)
             carry = -1 // 丢掉尾部奇字节，凑不成一个样点
         }
         frames
+    }
+
+    override fun close() {
+        runCatching { session.close() }
     }
 }
 

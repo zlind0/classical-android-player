@@ -18,7 +18,7 @@ import kotlin.coroutines.coroutineContext
 /**
  * 电子书转有声书导出器。
  *
- * 段间串行、段内分批（≤800 字）并行：每批独立合成 mono PCM 并独立编码为
+ * 段间串行、段内分批（≤400 字）并行：每批独立合成 mono PCM 并独立编码为
  * ADTS 分片（边合成边写临时文件，内存恒定）→ 完成的连续前缀即时增量合并
  * 为一段 M4A（PTS 连续、无重编码，最后一个分片落地即收尾）→ 写标签 →
  * 拷入输出根目录下自动新建的书名子目录。同名子目录已存在则复用
@@ -60,11 +60,9 @@ class EbookExporter(private val context: Context) {
         val appContext = context.applicationContext
         val rate = settings.rate.coerceIn(0.5f, 2f)
         val pitch = settings.pitch.coerceIn(0.5f, 2f)
-        // 批次划分是廉价字符串操作；预计算后按最大段定池大小（多余线程只会空转）。
-        val plans = segments.map { seg -> seg to batchExportTexts(seg.texts) }
-        val maxBatches = plans.maxOfOrNull { it.second.size } ?: 0
-        if (maxBatches == 0) return@withContext EbookExportResult(0, listOf("没有可导出的章节"), false)
-        val workers = clampExportThreads(threads, defaultExportThreads()).coerceAtMost(maxBatches)
+        // 池大小只按线程数定（多余线程空转，无成本）；批次逐段惰性划分，
+        // 合完一段就释放，不预计算全书（全书文本 ×2 常驻会压满 256MB 堆）。
+        val workers = clampExportThreads(threads, defaultExportThreads())
 
         // 串行准备：内置语音只装一次，再按工作线程数建会话。
         // （并发安装会互相踩文件；会话按设计线程独占。）
@@ -102,11 +100,13 @@ class EbookExporter(private val context: Context) {
         val exportRoot = File(appContext.cacheDir, "ebook_export_${System.currentTimeMillis()}")
         exportRoot.mkdirs()
         try {
-            plans.forEachIndexed { i, (seg, batches) ->
+            segments.forEachIndexed { i, seg ->
                 coroutineContext.ensureActive()
                 if (cancelled.get()) {
                     return@withContext EbookExportResult(done, failed.toList(), true, folderName, skipped)
                 }
+                // 逐段划分批次：本段结束即释放，不堆全书。
+                val batches = batchExportTexts(seg.texts)
                 if (batches.isEmpty()) {
                     failed.add("${seg.title}: 无可用音频")
                     return@forEachIndexed
