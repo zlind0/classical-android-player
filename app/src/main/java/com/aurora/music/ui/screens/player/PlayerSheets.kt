@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,12 +34,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.aurora.music.R
+import com.aurora.music.ui.ios5.Ios5CellDivider
+import com.aurora.music.ui.ios5.Ios5Colors
+import com.aurora.music.ui.ios5.Ios5Dimens
+import com.aurora.music.ui.ios5.Ios5Group
+import com.aurora.music.ui.ios5.Ios5Sans
+import com.aurora.music.ui.ios5.Ios5Type
 
 private data class OutputDevice(val id: Int, val label: String, val icon: ImageVector)
 
@@ -61,21 +71,42 @@ fun OutputDeviceSheet(currentId: Int, onSelect: (Int) -> Unit, onDismiss: () -> 
             .forEach { list.add(OutputDevice(it.id, deviceLabel(context, it), deviceIcon(it.type))) }
         list
     }
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp).padding(bottom = 28.dp)) {
-            Text(stringResource(R.string.sheet_play_on), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
-            devices.forEach { d ->
-                val selected = d.id == currentId
-                Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { onSelect(d.id); onDismiss() }.padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.size(40.dp).clip(CircleShape).background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh), contentAlignment = Alignment.Center) {
-                        Icon(d.icon, null, tint = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(20.dp))
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Ios5Colors.Linen, dragHandle = null) {
+        Column(Modifier.fillMaxWidth().background(Ios5Colors.linenBrush).padding(bottom = 28.dp)) {
+            Text(
+                stringResource(R.string.sheet_play_on),
+                color = Ios5Colors.TextPrimary,
+                fontSize = Ios5Type.NavTitle,
+                fontWeight = FontWeight.Bold,
+                fontFamily = Ios5Sans,
+                modifier = Modifier.padding(start = 20.dp, top = 16.dp, bottom = 12.dp),
+            )
+            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                Ios5Group {
+                    devices.forEachIndexed { index, d ->
+                        if (index > 0) Ios5CellDivider(startInset = 46.dp)
+                        val selected = d.id == currentId
+                        Row(
+                            Modifier.fillMaxWidth().clickable { onSelect(d.id); onDismiss() }.padding(horizontal = 12.dp, vertical = 6.dp).heightIn(min = Ios5Dimens.CellHeight),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(Modifier.size(32.dp).clip(CircleShape).background(if (selected) Ios5Colors.IosBlueBright else Color(0xFFD8DCE2)), contentAlignment = Alignment.Center) {
+                                Icon(d.icon, null, tint = if (selected) Color.White else Color(0xFF5A6068), modifier = Modifier.size(18.dp))
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                d.label,
+                                color = Ios5Colors.TextPrimary,
+                                fontSize = Ios5Type.CellTitle,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = Ios5Sans,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (selected) Text("✓", color = Ios5Colors.IosBlue, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
-                    Spacer(Modifier.width(14.dp))
-                    Text(d.label, style = MaterialTheme.typography.titleSmall, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium, color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-                    if (selected) Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary)
                 }
             }
         }

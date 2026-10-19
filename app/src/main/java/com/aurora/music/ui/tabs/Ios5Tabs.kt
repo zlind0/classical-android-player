@@ -1,5 +1,6 @@
 package com.aurora.music.ui.tabs
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -261,19 +262,20 @@ fun PlaylistsTab(
         }
     }
     if (showCreate) {
-        AlertDialog(
-            onDismissRequest = { showCreate = false },
-            title = { Text("新建歌单") },
-            text = { TextField(value = draft, onValueChange = { draft = it }, placeholder = { Text("歌单名称") }, singleLine = true) },
-            confirmButton = {
-                TextButton(onClick = {
+        com.aurora.music.ui.ios5.Ios5Dialog(onDismiss = { showCreate = false }) {
+            com.aurora.music.ui.ios5.Ios5ConfirmTextInput(                title = "新建歌单",
+                placeholder = "歌单名称",
+                value = draft,
+                onValueChange = { draft = it },
+                confirmText = "创建",
+                onConfirm = {
                     if (draft.isNotBlank()) onCreatePlaylist(draft.trim())
                     draft = ""
                     showCreate = false
-                }) { Text("创建") }
-            },
-            dismissButton = { TextButton(onClick = { showCreate = false }) { Text("取消") } },
-        )
+                },
+                onCancel = { showCreate = false },
+            )
+        }
     }
 }
 

@@ -52,6 +52,8 @@ import com.aurora.music.ui.components.formatTime
 import com.aurora.music.ui.ios5.Ios5ActionRow
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5Colors
+import com.aurora.music.ui.ios5.Ios5ConfirmTextInput
+import com.aurora.music.ui.ios5.Ios5Dialog
 import com.aurora.music.ui.ios5.Ios5Group
 import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.ui.ios5.Ios5NavBar
@@ -269,16 +271,16 @@ private fun QueueTrackRow(
 @Composable
 private fun SaveQueueDialog(onSave: (String) -> Unit, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.queue_save_title), fontWeight = FontWeight.Bold) },
-        text = {
-            OutlinedTextField(
-                value = name, onValueChange = { name = it },
-                label = { Text(stringResource(R.string.queue_playlist_name)) }, singleLine = true,
-            )
-        },
-        confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onSave(name.trim()) }, enabled = name.isNotBlank()) { Text(stringResource(R.string.queue_save)) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.queue_cancel)) } },
-    )
+    Ios5Dialog(onDismiss = onDismiss) {
+        Ios5ConfirmTextInput(
+            title = stringResource(R.string.queue_save_title),
+            value = name,
+            onValueChange = { name = it },
+            placeholder = stringResource(R.string.queue_playlist_name),
+            confirmText = stringResource(R.string.queue_save),
+            onConfirm = { if (name.isNotBlank()) onSave(name.trim()) },
+            onCancel = onDismiss,
+            cancelText = stringResource(R.string.queue_cancel),
+        )
+    }
 }

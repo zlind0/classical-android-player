@@ -45,6 +45,7 @@ import com.aurora.music.ui.ios5.Ios5GlossButton
 import com.aurora.music.ui.ios5.Ios5Group
 import com.aurora.music.ui.ios5.Ios5Loading
 import com.aurora.music.ui.ios5.Ios5NavBar
+import com.aurora.music.ui.ios5.Ios5SearchBar
 import com.aurora.music.ui.ios5.Ios5SectionTitle
 import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.ui.tabs.EbookRow
@@ -103,19 +104,10 @@ fun EbookLibraryScreen(
             }) else null,
         )
         if (searching) {
-            TextField(
+            Ios5SearchBar(
                 value = query,
                 onValueChange = { query = it },
-                placeholder = { Text("搜索书名 / 作者", fontSize = 15.sp) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
-                    .clip(RoundedCornerShape(10.dp)),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.White,
-                    unfocusedContainerColor = Color.White,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                ),
+                placeholder = "搜索书名 / 作者",
             )
         }
         if (isShelf) {
@@ -276,19 +268,10 @@ fun EbookSearchScreen(
     }
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "搜索电子书", onBack = onBack)
-        TextField(
+        Ios5SearchBar(
             value = query,
             onValueChange = { query = it },
-            placeholder = { Text("书名 / 作者", fontSize = 15.sp) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
-                .clip(RoundedCornerShape(10.dp)),
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = Color.White,
-                unfocusedContainerColor = Color.White,
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-            ),
+            placeholder = "书名 / 作者",
         )
         if (query.isBlank()) {
             Ios5Empty("输入书名或作者搜索")

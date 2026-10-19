@@ -9,8 +9,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -29,6 +27,7 @@ import com.aurora.music.ui.ios5.Ios5Empty
 import com.aurora.music.ui.ios5.Ios5Group
 import com.aurora.music.ui.ios5.Ios5Loading
 import com.aurora.music.ui.ios5.Ios5NavBar
+import com.aurora.music.ui.ios5.Ios5SearchBar
 import com.aurora.music.ui.ios5.Ios5SectionTitle
 import com.aurora.music.ui.ios5.Ios5SongRow
 import com.aurora.music.ui.ios5.ios5Rows
@@ -49,20 +48,7 @@ fun Ios5SearchPage(
     val recents by vm.recentSearches.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "搜索", onBack = onBack)
-        TextField(
-            value = st.query,
-            onValueChange = vm::onQuery,
-            placeholder = { Text("曲名 / 艺人 / 专辑", fontSize = 15.sp) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(12.dp)
-                .clip(RoundedCornerShape(10.dp)),
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = Color.White,
-                unfocusedContainerColor = Color.White,
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-            ),
-        )
+        Ios5SearchBar(value = st.query, onValueChange = vm::onQuery, placeholder = "曲名 / 艺人 / 专辑")
         if (st.loading) {
             Ios5Loading()
             return

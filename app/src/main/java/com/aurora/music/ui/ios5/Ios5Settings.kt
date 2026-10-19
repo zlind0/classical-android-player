@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -90,14 +91,15 @@ fun Ios5SwitchRow(
 ) {
     Row(
         Modifier.fillMaxWidth()
+            .heightIn(min = Ios5Dimens.CellHeight)
             .clickable { onCheckedChange(!checked) }
-            .padding(horizontal = 12.dp, vertical = 9.dp),
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, color = Ios5Colors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(title, color = Ios5Colors.TextPrimary, fontSize = Ios5Type.CellTitle, fontWeight = FontWeight.Bold, fontFamily = Ios5Sans, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (subtitle.isNotBlank()) {
-                Text(subtitle, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Text(subtitle, color = Ios5Colors.TextSecondary, fontSize = 13.sp, fontFamily = Ios5Sans, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
         }
         Spacer(Modifier.width(10.dp))
@@ -106,7 +108,8 @@ fun Ios5SwitchRow(
 }
 
 /**
- * iOS5 拨杆开关：银灰底 / 果冻蓝底 + 白色滑钮，滑钮带阴影，无 ON/OFF 字。
+ * iOS5 拨杆开关（PSD switch on/off, 156x56 @2x = 78x28pt）：
+ * 银灰 / 果冻蓝底 + 白色圆钮（贴边、满高），ON/OFF 字居中于露出的轨道区。
  */
 @Composable
 fun Ios5Switch(
@@ -115,11 +118,12 @@ fun Ios5Switch(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
 ) {
-    val trackW = 51.dp
-    val trackH = 31.dp
-    val thumb = 27.dp
+    val trackW = Ios5Dimens.SwitchWidth
+    val trackH = Ios5Dimens.SwitchHeight
+    val thumb = trackH - 1.dp
+    val exposed = trackW - thumb
     val thumbX by animateDpAsState(
-        targetValue = if (checked) trackW - thumb - 2.dp else 2.dp,
+        targetValue = if (checked) trackW - thumb - 0.5.dp else 0.5.dp,
         animationSpec = tween(200, easing = FastOutSlowInEasing),
         label = "ios5switch",
     )
@@ -128,18 +132,13 @@ fun Ios5Switch(
         animationSpec = tween(200),
         label = "ios5switchBlue",
     )
-    val shape = RoundedCornerShape(16.dp)
+    val shape = RoundedCornerShape(trackH / 2)
     Box(
         modifier
             .size(trackW, trackH)
             .clip(shape)
-            .background(
-                Brush.verticalGradient(
-                    0f to Color(0xFFD1D1D6),
-                    1f to Color(0xFFF2F2F7),
-                ),
-            )
-            .border(1.dp, Color(0xFF8E8E93), shape)
+            .background(Ios5Colors.switchOffBrush)
+            .border(1.dp, Color(0xFF1D2627), shape)
             .toggleable(
                 value = checked,
                 enabled = enabled,
@@ -151,38 +150,67 @@ fun Ios5Switch(
         Box(
             Modifier.fillMaxSize()
                 .graphicsLayer { alpha = blueAlpha }
-                .background(
-                    Brush.verticalGradient(
-                        0f to Color(0xFF53A7EB),
-                        1f to Color(0xFF0B6EDB),
-                    ),
-                ),
+                .background(Ios5Colors.switchOnBrush),
         )
-        // 顶部高光
+        // 顶部内阴影（PSD InSh #000 70% 2px blur6）
         Box(
             Modifier.fillMaxSize()
                 .background(
                     Brush.verticalGradient(
-                        0f to Color.White.copy(alpha = 0.35f),
-                        0.5f to Color.Transparent,
+                        0f to Color.Black.copy(alpha = 0.35f),
+                        0.45f to Color.Transparent,
                     ),
                 ),
         )
-        // 白色滑钮
+        // ON 字居中于露出蓝区 / OFF 字居中于露出灰区（PSD：字在轨道上，不在钮里）
+        Box(
+            Modifier.align(Alignment.CenterStart).size(exposed, trackH)
+                .graphicsLayer { alpha = blueAlpha },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "ON",
+                color = Color.White,
+                fontSize = Ios5Type.SwitchLabel,
+                fontWeight = FontWeight.Bold,
+                fontFamily = Ios5Sans,
+                style = androidx.compose.ui.text.TextStyle(
+                    shadow = androidx.compose.ui.graphics.Shadow(Color.Black.copy(alpha = 0.35f), Offset(0f, 1f)),
+                ),
+            )
+        }
+        Box(
+            Modifier.align(Alignment.CenterEnd).size(exposed, trackH)
+                .graphicsLayer { alpha = 1f - blueAlpha },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "OFF",
+                color = Color(0xFF8A8A8A),
+                fontSize = Ios5Type.SwitchLabel,
+                fontWeight = FontWeight.Bold,
+                fontFamily = Ios5Sans,
+            )
+        }
+        // 白色圆钮：贴边、满高（PSD handle 54x55）
         Box(
             Modifier.align(Alignment.CenterStart)
                 .offset(x = thumbX)
                 .size(thumb)
-                .shadow(2.dp, CircleShape)
+                .shadow(1.dp, CircleShape)
                 .clip(CircleShape)
-                .background(
+                .background(Ios5Colors.switchHandleBrush)
+                .border(1.dp, Color(0xFF7C7C7C), CircleShape),
+        ) {
+            Box(
+                Modifier.fillMaxSize().background(
                     Brush.verticalGradient(
-                        0f to Color.White,
-                        1f to Color(0xFFE8E8E8),
+                        0f to Color.White.copy(alpha = 0.85f),
+                        0.5f to Color.Transparent,
                     ),
-                )
-                .border(0.5.dp, Color(0xFFB0B0B0), CircleShape),
-        )
+                ),
+            )
+        }
     }
 }
 
@@ -199,8 +227,8 @@ fun Ios5SliderRow(
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(title, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            Text(valueLabel, color = Ios5Colors.TextSecondary, fontSize = 14.sp)
+            Text(title, color = Ios5Colors.TextPrimary, fontSize = Ios5Type.CellTitle, fontWeight = FontWeight.Bold, fontFamily = Ios5Sans, modifier = Modifier.weight(1f))
+            Text(valueLabel, color = Ios5Colors.TextSecondary, fontSize = Ios5Type.CellDetail, fontFamily = Ios5Sans)
         }
         Ios5Slider(
             value = value,
@@ -231,13 +259,13 @@ fun Ios5ActionRow(
     onClick: () -> Unit,
 ) {
     Box(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp),
+        Modifier.fillMaxWidth().heightIn(min = Ios5Dimens.CellHeight).clickable(onClick = onClick).padding(vertical = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             title,
             color = if (danger) Color(0xFFD63A3A) else Ios5Colors.IosBlue,
-            fontSize = 16.sp, fontWeight = FontWeight.Medium,
+            fontSize = Ios5Type.CellTitle, fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
         )
     }
 }
@@ -251,13 +279,16 @@ fun Ios5CheckRow(
     onClick: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth()
+            .heightIn(min = Ios5Dimens.CellHeight)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, color = Ios5Colors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, color = Ios5Colors.TextPrimary, fontSize = Ios5Type.CellTitle, fontWeight = FontWeight.Bold, fontFamily = Ios5Sans, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (subtitle.isNotBlank()) {
-                Text(subtitle, color = Ios5Colors.TextSecondary, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(subtitle, color = Ios5Colors.TextSecondary, fontSize = 13.sp, fontFamily = Ios5Sans, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
         if (checked) {
@@ -302,7 +333,7 @@ fun Ios5TextRow(
     }
 }
 
-/** iOS5 经典分段控件：颜色逐像素采自系统截图，无高光分层，选中蓝稳重平滑。 */
+/** iOS5 经典分段控件（PSD "grey tabs bar"：211x61 @2x = 105x30.5pt，R5）。 */
 @Composable
 fun Ios5SegmentRow(
     title: String,
@@ -311,28 +342,28 @@ fun Ios5SegmentRow(
     onSelect: (Int) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
-        Text(title, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text(title, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = Ios5Sans)
         Spacer(Modifier.height(8.dp))
         Row(
             Modifier.fillMaxWidth()
-                .height(36.dp)
-                .clip(RoundedCornerShape(9.dp))
-                .background(segmentOffBrush)
-                .border(1.dp, Color(0xFFB2B2B2), RoundedCornerShape(9.dp)),
+                .height(Ios5Dimens.SegmentHeight)
+                .clip(RoundedCornerShape(Ios5Dimens.CornerSegmented))
+                .background(Ios5Colors.segOffBrush)
+                .border(1.dp, Color(0xFF8E9AA6), RoundedCornerShape(Ios5Dimens.CornerSegmented)),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             options.forEachIndexed { i, opt ->
                 val active = i == selected
                 val shape = when {
-                    options.size == 1 -> RoundedCornerShape(8.dp)
-                    i == 0 -> RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp)
-                    i == options.lastIndex -> RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp)
+                    options.size == 1 -> RoundedCornerShape(4.dp)
+                    i == 0 -> RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp)
+                    i == options.lastIndex -> RoundedCornerShape(topEnd = 4.dp, bottomEnd = 4.dp)
                     else -> RectangleShape
                 }
                 Box(
                     Modifier.weight(1f).fillMaxHeight()
                         .clip(shape)
-                        .background(if (active) segmentOnBrush else Brush.verticalGradient(
+                        .background(if (active) Ios5Colors.segOnBrush else Brush.verticalGradient(
                             listOf(Color.Transparent, Color.Transparent),
                         ))
                         .clickable { onSelect(i) }
@@ -341,8 +372,10 @@ fun Ios5SegmentRow(
                 ) {
                     Text(
                         opt,
-                        fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                        color = if (active) Color.White else Color(0xFF727272),
+                        fontSize = Ios5Type.Segment,
+                        fontFamily = Ios5Sans,
+                        fontWeight = FontWeight.Bold,
+                        color = if (active) Ios5Colors.SegInkActive else Ios5Colors.SegInkIdle,
                         style = androidx.compose.ui.text.TextStyle(
                             shadow = Shadow(
                                 color = if (active) Color(0xFF2A4A94) else Color.White,
@@ -352,40 +385,21 @@ fun Ios5SegmentRow(
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
-                // 段间分隔线：只在两边都没选中时画灰线，挨着选中段画实测的深蓝边
+                // 段间分隔线：只在两边都没选中时画银灰线，挨着选中段画实测的深蓝边
                 if (i != options.lastIndex) {
                     val besideActive = active || i + 1 == selected
                     Box(
                         Modifier.width(1.dp).fillMaxHeight()
-                            .background(if (besideActive) Color(0xFF4868AF) else Color(0xFFBFBFBF)),
+                            .background(
+                                if (besideActive) Ios5Colors.segDividerBrush
+                                else Brush.verticalGradient(listOf(Color(0xFFBFBFBF), Color(0xFFBFBFBF))),
+                            ),
                     )
                 }
             }
         }
     }
 }
-
-/**
- * 未选中段底（实测中线中值）：顶部近白到底部浅灰，平滑无分层。
- * #FCFCFC → #E9E9E9 → #D1D1D1 → #CBCBCB
- */
-private val segmentOffBrush = Brush.verticalGradient(
-    0f to Color(0xFFFCFCFC),
-    0.4f to Color(0xFFE9E9E9),
-    0.7f to Color(0xFFD1D1D1),
-    1f to Color(0xFFCBCBCB),
-)
-
-/**
- * 选中段底（实测中线中值）：顶部深蓝藏青描边起，到底部亮蓝，平滑无高光带。
- * #334A89 → #405FAF → #4F76D6 → #7BA4F2
- */
-private val segmentOnBrush = Brush.verticalGradient(
-    0f to Color(0xFF334A89),
-    0.08f to Color(0xFF405FAF),
-    0.5f to Color(0xFF4E74D4),
-    1f to Color(0xFF7BA4F2),
-)
 
 /** Small gray explanatory footer. */
 fun LazyListScope.ios5FootNote(text: String) {

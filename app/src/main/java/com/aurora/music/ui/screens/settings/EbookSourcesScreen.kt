@@ -35,6 +35,7 @@ import com.aurora.music.data.ebook.EbookRoot
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5GlossButton
+import com.aurora.music.ui.ios5.Ios5IndeterminateBar
 import com.aurora.music.ui.ios5.Ios5MiniButton
 import com.aurora.music.ui.ios5.Ios5NavRow
 import com.aurora.music.ui.ios5.Ios5SettingsPage
@@ -198,7 +199,7 @@ private fun EbookRootCard(
             onCheckedChange = onToggle,
         )
         if (scanning.isNotBlank() || indeterminate) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp))
+            Ios5IndeterminateBar(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp))
             if (scanning.isNotBlank()) Ios5StaticText("扫描中…$scanning")
         }
         Ios5CellDivider()
