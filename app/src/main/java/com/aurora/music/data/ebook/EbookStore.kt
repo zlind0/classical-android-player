@@ -195,8 +195,9 @@ class EbookStore(context: Context, private val dao: EbookDao) {
     }
 
     private fun readParsedCache(md5: String): ParsedEbook? = runCatching {
-        // v2 起带超链接；v1 无该字段直接废弃重解析（分页断点按块字符区间，与此无关不受影响）
-        val f = File(cacheDirFor(md5), "parsed_v2.json")
+        // v3 起 linear=no 的 spine 页也参与目录/超链接定位（套装书总目录指向子书封面页）；
+        // v2 及更早的缓存缺这些条目，直接废弃重解析（分页断点按块字符区间，与此无关不受影响）
+        val f = File(cacheDirFor(md5), "parsed_v3.json")
         if (!f.exists()) return null
         gson.fromJson<ParsedEbook>(f.readText(), parsedType)
     }.getOrNull()
@@ -206,7 +207,8 @@ class EbookStore(context: Context, private val dao: EbookDao) {
             val dir = cacheDirFor(md5)
             dir.mkdirs()
             runCatching { File(dir, "parsed.json").delete() }
-            File(dir, "parsed_v2.json").writeText(gson.toJson(parsed))
+            runCatching { File(dir, "parsed_v2.json").delete() }
+            File(dir, "parsed_v3.json").writeText(gson.toJson(parsed))
         }
     }
 

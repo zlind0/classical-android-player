@@ -35,7 +35,7 @@ object EpubParser {
             val base = opfPath.substringBeforeLast('/', "")
             val opfBytes = zip.readText(opfPath) ?: return Meta("", "", null)
             val opf = parseOpf(opfBytes)
-            val spineHrefs = opf.spine.mapNotNull { opf.manifest[it]?.href }
+            val spineHrefs = opf.spine.filter { it.linear }.mapNotNull { opf.manifest[it.idref]?.href }
             val coverBytes = findCover(zip, base, opf, spineHrefs)?.let { zip.readBytes(it) }
             Meta(opf.title, opf.author, coverBytes)
         }
@@ -48,9 +48,14 @@ object EpubParser {
             val opfText = zip.readText(opfPath) ?: return emptyBook(file)
             val opf = parseOpf(opfText)
 
-            // 章节：spine 顺序，只读 linear（缺 linear 视为 yes）
-            val spineHrefs = opf.spine.mapNotNull { opf.manifest[it] }.map { it.href }
-            if (spineHrefs.isEmpty()) return emptyBook(file)
+            // 章节：spine 顺序。linear="no" 的页（封面图页/广告）不进阅读流，
+            // 但仍保留在 spine 下标里：套装书的「总目录」和各子书标题常指向子书封面页，
+            // 直接丢弃会让这些链接/目录条目整体消失，改为定位后回落到其后第一个可读章节。
+            val spineItems = opf.spine.mapNotNull { r ->
+                opf.manifest[r.idref]?.let { r.linear to it.href }
+            }
+            if (spineItems.isEmpty()) return emptyBook(file)
+            val spineHrefs = spineItems.map { it.second }
             // entry 路径 → spine 序号（与 resolveEntry 同一归一化口径，供超链接定位）
             val entryToSpine = spineHrefs.mapIndexed { i, h ->
                 val dec = runCatching { URLDecoder.decode(h.substringBefore('#'), "UTF-8") }
@@ -59,26 +64,39 @@ object EpubParser {
             }.toMap()
             val rawChapters = mutableListOf<List<RichBlock>>()
             val chapterEntries = mutableListOf<String>()
-            // 无文字 spine（封面页/纯图页）会被跳过，spine 序号 ≠ 章节序号，这里记映射
+            // 无文字 spine（封面页/纯图页）与 linear=no 页会被跳过，spine 序号 ≠ 章节序号，这里记映射
             val spineToChapter = mutableMapOf<Int, Int>()
             // (spineIndex, blockId) → blockIndex，供目录锚点/超链接定位
             val idIndex = mutableMapOf<Pair<Int, String>, Int>()
             spineHrefs.forEachIndexed { si, href ->
+                val linear = spineItems[si].first
                 runCatching {
                     val entry = resolveEntry(zip, base, href) ?: return@runCatching
                     val text = zip.readText(entry) ?: return@runCatching
                     val blocks = parseBodyBlocks(text)
-                    if (blocks.isNotEmpty()) {
-                        blocks.forEachIndexed { bi, b ->
-                            if (b.id.isNotBlank()) idIndex[si to b.id] = bi
-                        }
-                        spineToChapter[si] = rawChapters.size
-                        rawChapters.add(blocks)
-                        chapterEntries.add(entry)
+                    if (blocks.isEmpty() || !linear) return@runCatching
+                    blocks.forEachIndexed { bi, b ->
+                        if (b.id.isNotBlank()) idIndex[si to b.id] = bi
                     }
+                    spineToChapter[si] = rawChapters.size
+                    rawChapters.add(blocks)
+                    chapterEntries.add(entry)
                 }
             }
             if (rawChapters.isEmpty()) return emptyBook(file)
+            // 每个 spine 下标 → 可读章节下标；无正文的页回落到其后第一个章节，
+            // 末尾没有后续章节时归到最后一个章节（目录/超链接都走这张表）
+            val chapterAtSpine = IntArray(spineItems.size) { -1 }
+            var nextChapter = -1
+            for (si in spineItems.indices.reversed()) {
+                spineToChapter[si]?.let { nextChapter = it }
+                chapterAtSpine[si] = nextChapter
+            }
+            var lastChapter = -1
+            for (si in spineItems.indices) {
+                if (chapterAtSpine[si] >= 0) lastChapter = chapterAtSpine[si]
+                else chapterAtSpine[si] = lastChapter
+            }
             // 超链接解析（此时映射齐了）：站内 → 章/块下标，站外 → url，其余丢弃
             val chapters = rawChapters.mapIndexed { ci, blocks ->
                 val title = blocks.firstOrNull { it.level in 1..6 }?.text
@@ -89,14 +107,14 @@ object EpubParser {
                         EbookBlock(
                             b.text, b.level,
                             b.links.mapNotNull { l ->
-                                resolveEbookLink(l.href, chapterEntries[ci], entryToSpine, spineToChapter, idIndex, l.start, l.end)
+                                resolveEbookLink(l.href, chapterEntries[ci], entryToSpine, chapterAtSpine, idIndex, l.start, l.end)
                             },
                         )
                     },
                 )
             }
 
-            val toc = buildToc(zip, base, opf, spineHrefs, spineToChapter, idIndex, chapters)
+            val toc = buildToc(zip, base, opf, spineHrefs, chapterAtSpine, idIndex, chapters)
             return ParsedEbook(
                 title = opf.title.ifBlank { file.name.substringBeforeLast('.') },
                 author = opf.author,
@@ -111,7 +129,7 @@ object EpubParser {
         href: String,
         curEntry: String,
         entryToSpine: Map<String, Int>,
-        spineToChapter: Map<Int, Int>,
+        chapterAtSpine: IntArray,
         idIndex: Map<Pair<Int, String>, Int>,
         start: Int,
         end: Int,
@@ -138,7 +156,7 @@ object EpubParser {
             )
         }
         val si = entryToSpine[targetEntry] ?: return null
-        val ci = spineToChapter[si] ?: return null
+        val ci = chapterAtSpine.getOrNull(si)?.takeIf { it >= 0 } ?: return null
         val bi = if (frag.isBlank()) 0 else idIndex[si to frag] ?: 0
         return EbookLink(start, end, ci, bi)
     }
@@ -158,11 +176,12 @@ object EpubParser {
     }
 
     private data class ManifestItem(val href: String, val mediaType: String, val properties: String)
+    private data class SpineRef(val idref: String, val linear: Boolean)
     private data class Opf(
         val title: String,
         val author: String,
         val manifest: Map<String, ManifestItem>,
-        val spine: List<String>,
+        val spine: List<SpineRef>,
         val guideCover: String,
         val metaCoverId: String,
     )
@@ -173,7 +192,7 @@ object EpubParser {
         var guideCover = ""
         var metaCoverId = ""
         val manifest = mutableMapOf<String, ManifestItem>()
-        val spine = mutableListOf<String>()
+        val spine = mutableListOf<SpineRef>()
         try {
             val p: XmlPullParser = newPullParser()
             p.setInput(xml.reader())
@@ -201,7 +220,7 @@ object EpubParser {
                             "itemref" -> {
                                 val idref = p.getAttributeValue(null, "idref").orEmpty()
                                 val linear = p.getAttributeValue(null, "linear").orEmpty()
-                                if (idref.isNotBlank() && linear != "no") spine.add(idref)
+                                if (idref.isNotBlank()) spine.add(SpineRef(idref, linear != "no"))
                             }
                             "reference" -> {
                                 if (p.getAttributeValue(null, "type") == "cover") {
@@ -302,7 +321,7 @@ object EpubParser {
         base: String,
         opf: Opf,
         spineHrefs: List<String>,
-        spineToChapter: Map<Int, Int>,
+        chapterAtSpine: IntArray,
         idIndex: Map<Pair<Int, String>, Int>,
         chapters: List<EbookChapter>,
     ): List<EbookTocEntry> {
@@ -318,8 +337,9 @@ object EpubParser {
                 val frag = r.href.substringAfter('#', "")
                 val entry = resolveEntry(zip, base, file) ?: return@forEach
                 val si = spineIndexOf[entry] ?: return@forEach
-                // 跳过无文字 spine（封面页）：目录里不要指向不存在的章
-                val ci = spineToChapter[si] ?: return@forEach
+                // 目标页无正文（封面图页/linear=no）时回落到其后第一个有正文的章节，
+                // 目录里不要指向不存在的章
+                val ci = chapterAtSpine.getOrNull(si)?.takeIf { it >= 0 } ?: return@forEach
                 val blockCount = chapters.getOrNull(ci)?.blocks?.size ?: 0
                 val bi = (if (frag.isNotBlank()) idIndex[si to frag] ?: 0 else 0)
                     .coerceIn(0, (blockCount - 1).coerceAtLeast(0))

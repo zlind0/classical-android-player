@@ -132,6 +132,123 @@ class EpubParserTest {
         }
     }
 
+    // 套装书常见结构：子书封面页是纯图且 linear="no"，「总目录」链接和 NCX 顶级条目
+    // 都指向它。这类页不进阅读流，但必须保留 spine 下标，把目标回落到其后第一个可读章节，
+    // 否则整本书会出现「总目录链接点不动 + 目录里没有子书标题」。
+    @Test
+    fun full_nonLinearCoverTargetResolvesToNextChapter() {
+        val f = File.createTempFile("epub_nonlinear", ".epub")
+        try {
+            ZipOutputStream(f.outputStream()).use { z ->
+                fun add(name: String, text: String) {
+                    z.putNextEntry(ZipEntry(name))
+                    z.write(text.toByteArray(Charsets.UTF_8))
+                    z.closeEntry()
+                }
+                add(
+                    "META-INF/container.xml",
+                    """<?xml version="1.0"?>
+                    <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+                      <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+                    </container>""",
+                )
+                add(
+                    "OEBPS/content.opf",
+                    """<?xml version="1.0" encoding="utf-8"?>
+                    <package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+                      <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+                        <dc:title>套装测试书</dc:title>
+                      </metadata>
+                      <manifest>
+                        <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+                        <item id="subcover" href="text/sub-cover.xhtml" media-type="application/xhtml+xml"/>
+                        <item id="tocpage" href="text/toc.xhtml" media-type="application/xhtml+xml"/>
+                        <item id="ch1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/>
+                        <item id="ch2" href="text/ch2.xhtml" media-type="application/xhtml+xml"/>
+                      </manifest>
+                      <spine toc="ncx">
+                        <itemref idref="tocpage"/>
+                        <itemref idref="subcover" linear="no"/>
+                        <itemref idref="ch1"/>
+                        <itemref idref="ch2"/>
+                      </spine>
+                    </package>""",
+                )
+                add(
+                    "OEBPS/toc.ncx",
+                    """<?xml version="1.0" encoding="utf-8"?>
+                    <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+                      <navMap>
+                        <navPoint id="a"><navLabel><text>子书A</text></navLabel><content src="text/sub-cover.xhtml"/>
+                          <navPoint id="a1"><navLabel><text>第一章</text></navLabel><content src="text/ch1.xhtml"/></navPoint>
+                        </navPoint>
+                        <navPoint id="b"><navLabel><text>子书B</text></navLabel><content src="text/ch2.xhtml"/></navPoint>
+                      </navMap>
+                    </ncx>""",
+                )
+                add(
+                    "OEBPS/text/sub-cover.xhtml",
+                    """<html xmlns="http://www.w3.org/1999/xhtml"><body><div><img alt="" src="../images/c.jpg"/></div></body></html>""",
+                )
+                add(
+                    "OEBPS/text/toc.xhtml",
+                    """<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>总目录</h1><div class="c1"><a href="../text/sub-cover.xhtml">子书A</a></div></body></html>""",
+                )
+                add(
+                    "OEBPS/text/ch1.xhtml",
+                    """<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>第一章</h1><p>正文一。</p></body></html>""",
+                )
+                add(
+                    "OEBPS/text/ch2.xhtml",
+                    """<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>第二章</h1><p>正文二。</p></body></html>""",
+                )
+            }
+            val book = EpubParser.parseFull(f)
+            // linear=no 的封面页不进阅读流：3 章（总目录 + 两章）
+            assertEquals(3, book.chapters.size)
+            // 子书标题必须留在目录里，且回落到其后第一个可读章节
+            assertEquals(listOf("子书A", "第一章", "子书B"), book.toc.map { it.title })
+            assertEquals(listOf(1, 2, 1), book.toc.map { it.level })
+            assertEquals(1, book.toc[0].chapterIndex)
+            assertEquals(2, book.toc[2].chapterIndex)
+            // 「总目录」里的链接必须可点，同样回落到第一章
+            val linkBlock = book.chapters[0].blocks.first { it.text == "子书A" }
+            val link = linkBlock.links.single()
+            assertEquals(1, link.chapter)
+            assertEquals(0, link.block)
+        } finally {
+            f.delete()
+        }
+    }
+
+    // 手动回归（默认跳过）：用真实大书验证 linear=no 封面页的目录/链接回落。
+    // EBOOK_PROBE=/path/to/book.epub ./gradlew :app:testDebugUnitTest --tests '*realBookProbe'
+    @Test
+    fun realBookProbe() {
+        val path = System.getenv("EBOOK_PROBE") ?: return
+        val f = File(path)
+        if (!f.isFile) return
+        val book = EpubParser.parseFull(f)
+        val level1 = book.toc.filter { it.level == 1 }
+        println("probe: chapters=${book.chapters.size} toc=${book.toc.size} level1=${level1.size}")
+        println("probe: level1 titles=${level1.take(6).map { it.title }}")
+        val tocChapter = book.chapters.firstOrNull { c ->
+            c.blocks.any { b -> b.links.isNotEmpty() && b.text == "幸福" }
+        }
+        if (tocChapter != null) {
+            val items = tocChapter.blocks.filter { it.links.isNotEmpty() }
+            println("probe: toc page blocksWithLinks=${items.size}")
+            val first = items.first()
+            val l = first.links.first()
+            println("probe: first link '${first.text}' -> chapter=${l.chapter} block=${l.block} " +
+                "head='${book.chapters[l.chapter].blocks.firstOrNull()?.text}'")
+            println("probe: all links resolved=${items.count { it.links.isNotEmpty() }}/${items.size}")
+            assertEquals("幸福", first.text)
+        }
+        assertTrue(level1.size >= 2)
+        assertTrue(book.toc.any { it.title == "总目录" })
+    }
+
     @Test
     fun entities_unescaped() {
         val f = File.createTempFile("epub_ent", ".epub")
