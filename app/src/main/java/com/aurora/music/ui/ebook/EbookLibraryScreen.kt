@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,12 +70,15 @@ fun EbookLibraryScreen(
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val scope = rememberCoroutineScope()
-    var searching by remember { mutableStateOf(false) }
-    var query by remember { mutableStateOf("") }
-    var editing by remember { mutableStateOf(false) }
+    var searching by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var editing by rememberSaveable { mutableStateOf(false) }
     var selected by remember { mutableStateOf(setOf<String>()) }
 
     val shelfBooks by container.ebookStore.shelf.collectAsStateWithLifecycle()
+    val listState = com.aurora.music.ui.rememberPersistentLazyListState(
+        if (isShelf) "ebook_lib:shelf" else "ebook_lib:$rootPath|$dirPath",
+    )
 
     var listing by remember(dirPath) { mutableStateOf<Pair<List<File>, List<EbookBook>>?>(null) }
     LaunchedEffect(dirPath, isShelf) {
@@ -114,7 +118,11 @@ fun EbookLibraryScreen(
             if (shelfFiltered.isEmpty()) {
                 Ios5Empty(if (query.isBlank()) "默认书架是空的\n用其他应用打开 epub/mobi/azw3 就会存到这里" else "没有匹配的书")
             } else {
-                LazyColumn(Modifier.fillMaxSize().weight(1f), contentPadding = PaddingValues(bottom = 16.dp)) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize().weight(1f),
+                    contentPadding = PaddingValues(bottom = 16.dp),
+                ) {
                     item { Ios5SectionTitle("共 ${shelfFiltered.size} 本") }
                     ios5Rows(shelfFiltered, key = { it.path }) { _, b ->
                         val sel = b.path in selected
@@ -177,7 +185,11 @@ fun EbookLibraryScreen(
                 if (showDirs.isEmpty() && showBooks.isEmpty()) {
                     Ios5Empty("这个文件夹是空的")
                 } else {
-                    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 16.dp),
+                    ) {
                         if (showDirs.isNotEmpty()) {
                             item { Ios5SectionTitle("文件夹") }
                             ios5Rows(showDirs, key = { it.absolutePath }) { _, d ->
@@ -250,7 +262,7 @@ fun EbookSearchScreen(
     onOpenExport: (path: String) -> Unit,
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
     val shelf by container.ebookStore.shelf.collectAsStateWithLifecycle()
     var scanned by remember { mutableStateOf(emptyList<EbookBook>()) }
     val roots by container.ebookStore.roots.collectAsStateWithLifecycle()
@@ -266,6 +278,7 @@ fun EbookSearchScreen(
             it.displayTitle.contains(q, ignoreCase = true) || it.author.contains(q, ignoreCase = true)
         }.take(100)
     }
+    val listState = com.aurora.music.ui.rememberPersistentLazyListState("ebook_search")
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "搜索电子书", onBack = onBack)
         Ios5SearchBar(
@@ -278,7 +291,11 @@ fun EbookSearchScreen(
         } else if (results.isEmpty()) {
             Ios5Empty("没有找到匹配的书")
         } else {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 16.dp),
+            ) {
                 item { Ios5SectionTitle("找到 ${results.size} 本") }
                 item {
                     Ios5Group(Modifier.padding(horizontal = 12.dp)) {

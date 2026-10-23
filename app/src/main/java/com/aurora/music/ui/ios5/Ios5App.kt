@@ -13,6 +13,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -50,6 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,6 +69,8 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -77,6 +81,7 @@ import androidx.navigation.compose.rememberNavController
 import com.aurora.music.AuroraApplication
 import com.aurora.music.R
 import com.aurora.music.navigation.Ios5Routes
+import com.aurora.music.navigation.filledRoute
 import com.aurora.music.navigation.ios5TabRoutes
 import com.aurora.music.navigation.ios5Tabs
 import com.aurora.music.ui.browse.Ios5AlbumsBrowse
@@ -165,13 +170,92 @@ fun Ios5App() {
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
-    var lastTab by remember { mutableStateOf(Ios5Routes.HOME) }
-    LaunchedEffect(currentRoute) {
-        if (currentRoute in ios5TabRoutes) lastTab = currentRoute ?: Ios5Routes.HOME
+    // 冷启动恢复到退出前的返回栈（滑掉任务/被系统杀进程时 savedInstanceState 不一定存在）
+    var navRestored by rememberSaveable { mutableStateOf(false) }
+    var lastTab by rememberSaveable {
+        mutableStateOf(container.uiState.lastTab().ifBlank { Ios5Routes.HOME })
     }
-    val tabHighlight = if (currentRoute in ios5TabRoutes) currentRoute else lastTab
+    val initialNavRoutes = remember { container.uiState.navRoutes() }
+    // 当前所在 Tab（由返回栈推出），用于“再点同一个 Tab 回到根页”和详情页的高亮。
+    // 初值优先从保存的返回栈推，避免冷启动先亮首页再跳。
+    var currentTab by remember {
+        mutableStateOf(
+            initialNavRoutes.lastOrNull { it in ios5TabRoutes }
+                ?: container.uiState.lastTab().ifBlank { Ios5Routes.HOME },
+        )
+    }
+    LaunchedEffect(currentRoute, navRestored) {
+        if (navRestored && currentRoute in ios5TabRoutes) lastTab = currentRoute ?: Ios5Routes.HOME
+    }
+    LaunchedEffect(lastTab) { container.uiState.saveLastTab(lastTab) }
+    // 高亮跟着“当前页属于哪个 Tab”走：在艺人 Tab 的专辑详情上也要亮艺人，
+    // 所以详情页用 currentTab（从返回栈推出来的），不能用只在 Tab 根页更新的 lastTab
+    val tabHighlight = if (currentRoute in ios5TabRoutes) currentRoute else currentTab
     // 阅读器全屏独占：不带 tab/mini 条，不参与翻转动画
     val isEbookReader = currentRoute?.startsWith("ebook_reader") == true
+    // 是否真的有要重放的返回栈（只有首页时不用盖加载圈）
+    val hasNavToRestore = remember(initialNavRoutes) {
+        initialNavRoutes.size > 1 || initialNavRoutes.firstOrNull()?.let { it != Ios5Routes.HOME } == true
+    }
+    LaunchedEffect(navController) {
+        if (!navRestored) {
+            // 从外部“打开方式”直接进来的书优先：别先把旧阅读页恢复出来再叠一层
+            if (container.ebookStore.openRequest.value != null) {
+                navRestored = true
+                return@LaunchedEffect
+            }
+            val saved = initialNavRoutes
+            if (saved.isNotEmpty()) {
+                val tab = saved.first()
+                // 首页是 NavHost 起点；恢复的 Tab 不是首页时先补上它。
+                // 故意把首页留在栈底：Tab 切换靠 popUpTo(首页){saveState} 兜底，
+                // 栈底没有首页的话连续切 Tab 会把旧 Tab 越攒越多。
+                if (tab in ios5TabRoutes && tab != Ios5Routes.HOME) {
+                    runCatching { navController.navigate(tab) { launchSingleTop = true } }
+                }
+                saved.drop(1).forEach { route ->
+                    runCatching { navController.navigate(route) { launchSingleTop = true } }
+                }
+            }
+            navRestored = true
+        }
+    }
+    // 每次导航都记下完整返回栈（含参数），下次冷启动原样重建
+    LaunchedEffect(navController, navRestored) {
+        if (!navRestored) return@LaunchedEffect
+        navController.currentBackStack.collect { entries ->
+            val routes = entries.mapNotNull { it.filledRoute() }
+            if (routes.isNotEmpty()) container.uiState.saveNav(routes)
+            // 当前所在 Tab = 返回栈里最靠上的那个 Tab 页（详情页归它管）。
+            // 注意必须取最后一个：首页永远是栈底，取第一个会永远得到“首页”。
+            routes.lastOrNull { it in ios5TabRoutes }?.let { currentTab = it }
+            android.util.Log.i("AuroraNav", "stack=$routes tab=$currentTab last=$lastTab")
+        }
+    }
+    // 播放页是全屏翻转页，属于页面现场的一部分
+    var expandedRestored by remember { mutableStateOf(false) }
+    LaunchedEffect(playerState.expanded) {
+        if (expandedRestored) container.uiState.savePlayerExpanded(playerState.expanded)
+    }
+    // 冷启动恢复队列后再把播放页翻回来（只做一次）
+    LaunchedEffect(playerState.hasTrack, navRestored) {
+        if (!expandedRestored && navRestored && playerState.hasTrack) {
+            expandedRestored = true
+            if (container.uiState.playerExpanded()) playerVM.setExpanded(true)
+        }
+    }
+    // 退到后台/离开时强制刷盘（连续滚动/播放进度最多丢最后 1 秒内的变化）
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                container.uiState.flushNow()
+                playerVM.persistNow()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     var showQueue by remember { mutableStateOf(false) }
 
@@ -179,12 +263,23 @@ fun Ios5App() {
     val topBarHost = remember { TopBarHost() }
 
     fun navigateTopLevel(route: String) {
+        android.util.Log.i("AuroraNav", "tap $route cur=$currentRoute tab=$currentTab last=$lastTab")
         if (currentRoute == route) return
         container.haptic()
-        navController.navigate(route) {
-            popUpTo(navController.graph.findStartDestination().id)
-            launchSingleTop = true
+        // 再点当前 Tab 的图标：回到这个 Tab 的根页（而不是把刚存下的详情页又还原回来）
+        if (currentTab == route && runCatching { navController.popBackStack(route, inclusive = false) }.getOrDefault(false)) {
+            android.util.Log.i("AuroraNav", "tap $route -> pop to root, stack=${navController.currentBackStack.value.map { it.destination.route }}")
+            return
         }
+        // 每个 Tab 各留一份返回栈：切走时 saveState，切回来 restoreState
+        navController.navigate(route) {
+            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+            launchSingleTop = true
+            // 首页是 popUpTo 的目标：NavController 会把刚弹出的那个 Tab 栈映射到首页，
+            // 这时再对首页 restoreState，就会“还原”成原来的 Tab（点主页回不了主页）。
+            restoreState = route != Ios5Routes.HOME
+        }
+        android.util.Log.i("AuroraNav", "tap $route -> cur=${navController.currentBackStackEntry?.destination?.route} stack=${navController.currentBackStack.value.map { it.destination.route }}")
     }
     fun openDetail(kind: String, id: String, title: String = "") =
         navController.navigate(Ios5Routes.detail(kind, id, title))
@@ -794,14 +889,7 @@ fun Ios5App() {
             } // 内容 Box 结束
             } // ContentFace 内容面函数结束
 
-            if (isEbookReader) {
-                // ---- 阅读器：竖横屏一律全屏独占（自己的隐藏状态栏/底键逻辑在内部） ----
-                val epath = Uri.decode(backStackEntry?.arguments?.getString("epath").orEmpty())
-                com.aurora.music.ui.ebook.EbookReaderScreen(
-                    bookPath = epath,
-                    onClose = { navController.popBackStack() },
-                )
-            } else if (landscape) {
+            if (landscape) {
                 // ---- 横向：顶整条栏 + 中部（左主界面 + 右播放侧栏）+ 底整条栏 ----
                 // 系统三按钮控制条背后一律黑色：顶/底栏黑底延伸进 insets 区，内容避让
                 val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -1068,15 +1156,43 @@ fun Ios5App() {
             // 竖屏播放页开着时返回先关播放页，再按才作用于主页面。
             // 条件组合（而非常驻 enabled 开关），旋转后重开播放页时重新注册，
             // 保证永远排在 NavHost 的回调之后（最新注册最先收到返回键）。
-            if (!landscape && playerState.expanded) {
+            if (!landscape && playerState.expanded && !isEbookReader) {
                 BackHandler { playerVM.setExpanded(false) }
+            }
+
+            // ---- 阅读器：全屏覆盖在内容页之上 ----
+            // 不替换 ContentFace：NavHost、Tab 返回栈、列表滚动位置全部保活，
+            // 从阅读器返回时书库还停在原来的目录和位置。
+            if (isEbookReader) {
+                val epath = Uri.decode(backStackEntry?.arguments?.getString("epath").orEmpty())
+                Box(
+                    Modifier.fillMaxSize().clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) {},
+                )
+                Box(Modifier.fillMaxSize().background(Color.Black)) {
+                    com.aurora.music.ui.ebook.EbookReaderScreen(
+                        bookPath = epath,
+                        onClose = { navController.popBackStack() },
+                    )
+                }
+            }
+
+            // 恢复返回栈期间盖住首页，避免闪一下再跳到上次的页面（没有可恢复的栈就别闪加载圈）
+            if (!navRestored && hasNavToRestore) {
+                Ios5Backdrop {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        com.aurora.music.ui.components.LottieLoader(modifier = Modifier.size(90.dp))
+                    }
+                }
             }
         }
       } // BoxWithConstraints 横竖屏分支结束
     }
 
     // 队列浮层最顶，同样条件组合保证旋转后仍优先于 NavHost 和播放页
-    if (showQueue) {
+    if (showQueue && !isEbookReader) {
         BackHandler { showQueue = false }
     }
 

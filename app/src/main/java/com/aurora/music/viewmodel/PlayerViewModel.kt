@@ -248,7 +248,14 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
                 val c = controller ?: return@collect
                 playingAccountKey = container.currentAccountKey()
                 val saved = playingAccountKey.takeIf { it.isNotBlank() }?.let { container.queueStore.get(it) }
-                if (c.mediaItemCount == 0 && saved != null) restoreQueue(saved)
+                val forceResume = container.uiState.consumeResumeOnLaunch()
+                if (c.mediaItemCount == 0 && saved != null) {
+                    restoreQueue(saved, forceResume)
+                } else if (forceResume && c.mediaItemCount > 0) {
+                    // 服务没被杀（队列还在）：直接把上次的播放接着放
+                    runCatching { c.play() }
+                    _state.update { it.copy(isPlaying = true) }
+                }
             }
         }
 
@@ -276,11 +283,20 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** App 退到后台/被杀前主动落一次：队列、位置、是否在播。 */
+    fun persistNow() {
+        persistQueue()
+        persistAbookNow()
+        container.queueStore.requestFlush()
+    }
+
     fun stopPlayback() {
         persistAbookNow()
         controller?.let { c ->
             runCatching { c.pause(); c.stop(); c.clearMediaItems() }
         }
+        val key = playingAccountKey.ifBlank { container.currentAccountKey() }
+        if (key.isNotBlank()) container.queueStore.clear(key)
         container.abookSession.setActive(null, 1f)
         songById = emptyMap()
         lastRecordedId = null
@@ -305,11 +321,16 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             positionSec = (c.currentPosition / 1000).toInt().coerceAtLeast(0),
             shuffle = c.shuffleModeEnabled,
             repeat = when (c.repeatMode) { Player.REPEAT_MODE_ALL -> 1; Player.REPEAT_MODE_ONE -> 2; else -> 0 },
+            wasPlaying = c.playWhenReady,
+            speed = _state.value.speed,
+            pitch = _state.value.pitch,
+            matchPitch = _state.value.matchPitch,
         ))
     }
 
-    private suspend fun restoreQueue(sq: SavedQueue) {
+    private suspend fun restoreQueue(sq: SavedQueue, forcePlay: Boolean = false) {
         val c = controller ?: return
+        val resume = forcePlay || sq.wasPlaying
         val songs = sq.tracks.orEmpty().map { it.toSong() }.filter { it.id.isNotEmpty() && it.streamUrl.isNotEmpty() }
         if (songs.isEmpty()) return
         songById = songs.associateBy { it.id }
@@ -330,19 +351,26 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             container.abookSession.setCurrentPath(songs[idx].path)
             val delivery = deliverQueue(songs, idx, sq.positionSec.toLong() * 1000)
             c.repeatMode = when (sq.repeat) { 1 -> Player.REPEAT_MODE_ALL; 2 -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_OFF }
-            c.prepare()   // buffer at saved position but stay paused
+            c.prepare()   // buffer at saved position
+            if (resume) c.play()
             _state.update {
-                it.copy(queue = delivery.songs, current = songs[idx], positionSec = sq.positionSec.toFloat(), isPlaying = false, currentIndex = delivery.currentIndex, shuffle = sq.shuffle,
+                it.copy(queue = delivery.songs, current = songs[idx], positionSec = sq.positionSec.toFloat(), isPlaying = resume, currentIndex = delivery.currentIndex, shuffle = sq.shuffle,
                     repeat = when (sq.repeat) { 1 -> RepeatMode.ALL; 2 -> RepeatMode.ONE; else -> RepeatMode.OFF },
                     abookId = abookId, abookSpeed = speed, abookGain = gain)
             }
         } else {
-            c.playbackParameters = currentParams()
+            val speed = sq.speed.takeIf { it > 0f } ?: 1f
+            val pitch = sq.pitch
+            val matchPitch = sq.matchPitch
+            val pitchRatio = if (matchPitch) speed else 2f.pow(pitch / 12f)
+            c.playbackParameters = PlaybackParameters(speed, pitchRatio)
+            _state.update { it.copy(speed = speed, pitch = pitch, matchPitch = matchPitch) }
             val delivery = deliverQueue(songs, idx, sq.positionSec.toLong() * 1000)
             c.repeatMode = when (sq.repeat) { 1 -> Player.REPEAT_MODE_ALL; 2 -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_OFF }
-            c.prepare()   // buffer at saved position but stay paused
+            c.prepare()   // buffer at saved position
+            if (resume) c.play()
             _state.update {
-                it.copy(queue = delivery.songs, current = songs[idx], positionSec = sq.positionSec.toFloat(), isPlaying = false, currentIndex = delivery.currentIndex, shuffle = sq.shuffle,
+                it.copy(queue = delivery.songs, current = songs[idx], positionSec = sq.positionSec.toFloat(), isPlaying = resume, currentIndex = delivery.currentIndex, shuffle = sq.shuffle,
                     repeat = when (sq.repeat) { 1 -> RepeatMode.ALL; 2 -> RepeatMode.ONE; else -> RepeatMode.OFF })
             }
         }

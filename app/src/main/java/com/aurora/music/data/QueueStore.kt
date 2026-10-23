@@ -57,6 +57,11 @@ data class SavedQueue(
     val positionSec: Int = 0,
     val shuffle: Boolean = false,
     val repeat: Int = 0,           // 0 off 1 all 2 one
+    /** 退出/被杀前是否在播放：冷启动恢复时据此自动续播。 */
+    val wasPlaying: Boolean = false,
+    val speed: Float = 1f,
+    val pitch: Float = 0f,
+    val matchPitch: Boolean = true,
 )
 
 // per-account so queue survives swipe-away and server switch writes coalesced by periodic flush
@@ -65,6 +70,8 @@ class QueueStore(context: Context) {
     private val gson = Gson()
     private val lock = Any()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /** 串行化落盘：避免旧快照的写线程晚于新快照落地。 */
+    private val ioLock = Any()
 
     private val map: MutableMap<String, SavedQueue> = load()
     @Volatile private var dirty = false
@@ -98,7 +105,9 @@ class QueueStore(context: Context) {
     fun requestFlush() { scope.launch { flushNow() } }
 
     private fun flushNow() {
-        val snapshot = synchronized(lock) { dirty = false; HashMap(map) }
-        runCatching { file.writeText(gson.toJson(snapshot)) }
+        synchronized(ioLock) {
+            val snapshot = synchronized(lock) { dirty = false; HashMap(map) }
+            runCatching { file.writeText(gson.toJson(snapshot)) }
+        }
     }
 }

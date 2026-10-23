@@ -53,7 +53,11 @@ fun Ios5SearchPage(
             Ios5Loading()
             return
         }
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(
+            state = com.aurora.music.ui.rememberPersistentLazyListState("search:$scope"),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 16.dp),
+        ) {
             val r = st.results
             val showSongs = scope == "all" || scope == "songs"
             val showAlbums = scope == "all" || scope == "albums"

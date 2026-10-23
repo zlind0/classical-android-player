@@ -84,7 +84,11 @@ fun Ios5SongsBrowse(
         when {
             loading -> Ios5Loading()
             songs.isEmpty() -> Ios5Empty("没有歌曲")
-            else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            else -> LazyColumn(
+                state = com.aurora.music.ui.rememberPersistentLazyListState("browse:songs"),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 16.dp),
+            ) {
                 item { Ios5SectionTitle("全部歌曲（${songs.size}）") }
                 ios5Rows(songs, key = { it.id }) { i, s ->
                     Ios5SongRow(s, s.id == player.current.id, player.isPlaying) {
@@ -111,7 +115,11 @@ fun Ios5AlbumsBrowse(
         when {
             loading -> Ios5Loading()
             albums.isEmpty() -> Ios5Empty("没有专辑")
-            else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            else -> LazyColumn(
+                state = com.aurora.music.ui.rememberPersistentLazyListState("browse:albums"),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 16.dp),
+            ) {
                 item { Ios5SectionTitle("全部专辑（${albums.size}）") }
                 ios5Rows(albums, key = { it.id }) { _, a ->
                     Ios5Cell(
@@ -144,7 +152,11 @@ fun Ios5GroupsBrowse(
         when {
             loading -> Ios5Loading()
             groups.isEmpty() -> Ios5Empty("没有$title")
-            else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            else -> LazyColumn(
+                state = com.aurora.music.ui.rememberPersistentLazyListState("browse:groups:$title"),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 16.dp),
+            ) {
                 item { Ios5SectionTitle("$title（${groups.size}）") }
                 ios5Rows(groups, key = { it.name }) { _, g ->
                     Ios5Cell(
@@ -176,7 +188,11 @@ fun Ios5GroupDetail(
         if (songs.isEmpty()) {
             Ios5Empty("这里没有歌曲")
         } else {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            LazyColumn(
+                state = com.aurora.music.ui.rememberPersistentLazyListState("group_detail:$title"),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 16.dp),
+            ) {
                 item {
                     Ios5ActionsHeader(
                         title = "歌曲（${songs.size}）",
@@ -237,7 +253,11 @@ fun Ios5FolderLevel(
             st.content == null -> Ios5Empty("打不开这个文件夹")
             else -> {
                 val c = st.content!!
-                LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+                LazyColumn(
+                    state = com.aurora.music.ui.rememberPersistentLazyListState("browse:folder:$fid"),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 16.dp),
+                ) {
                     if (c.folders.isNotEmpty()) {
                         item { Ios5SectionTitle("文件夹（${c.folders.size}）") }
                         ios5Rows(c.folders, key = { it.id }) { _, f ->
@@ -304,14 +324,23 @@ fun Ios5Detail(
                         mapMergeRows(libMerges[id], d.tracks)
                     }
                 }
-                var mergeExpanded by remember(kind, id, d.tracks) { mutableStateOf(setOf<String>()) }
+                var mergeExpanded by remember("detail_expand:$kind|$id") {
+                    mutableStateOf(mergeContainer.uiState.expandedOf("detail_expand:$kind|$id"))
+                }
+                LaunchedEffect(mergeExpanded, kind, id) {
+                    mergeContainer.uiState.saveExpanded("detail_expand:$kind|$id", mergeExpanded)
+                }
                 val mergeKey: (AlbumRow) -> String = { row ->
                     when (row) {
                         is AlbumRow.Single -> "s:${row.song.id}"
                         is AlbumRow.Group -> "g:${row.items.first().index}:${row.major}"
                     }
                 }
-                LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+                LazyColumn(
+                    state = com.aurora.music.ui.rememberPersistentLazyListState("detail:$kind|$id"),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 16.dp),
+                ) {
                     item {
                         Spacer(Modifier.height(8.dp))
                         Ios5Group(Modifier.padding(horizontal = 12.dp)) {

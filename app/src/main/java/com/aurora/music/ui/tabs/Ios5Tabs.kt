@@ -75,7 +75,11 @@ fun HomeTab(
             return
         }
         val d = state.data
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(
+            state = com.aurora.music.ui.rememberPersistentLazyListState("tab:home"),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 16.dp),
+        ) {
             // 最近读过的 3 本电子书（电子书 Tab 最近阅读同款行）
             val recentBooks = ebookRecents.take(3)
             if (recentBooks.isNotEmpty()) {
@@ -220,7 +224,11 @@ fun PlaylistsTab(
     var draft by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "歌单", onSearch = onOpenSearch)
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(
+            state = com.aurora.music.ui.rememberPersistentLazyListState("tab:playlists"),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 16.dp),
+        ) {
             item {
                 Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
@@ -293,7 +301,11 @@ fun ArtistsTab(
         when {
             loading -> Ios5Loading()
             artists.isEmpty() -> Ios5Empty("没有艺人\n请先扫描音乐目录")
-            else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            else -> LazyColumn(
+                state = com.aurora.music.ui.rememberPersistentLazyListState("tab:artists"),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 16.dp),
+            ) {
                 item { Ios5SectionTitle("全部艺人（${artists.size}）") }
                 ios5Rows(artists, key = { it.id }) { _, a ->
                     Ios5Cell(
@@ -313,7 +325,11 @@ fun ArtistsTab(
 fun MoreTab(onOpenRoute: (String) -> Unit) {
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "更多")
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(
+            state = com.aurora.music.ui.rememberPersistentLazyListState("tab:more"),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 16.dp),
+        ) {
             item {
                 Ios5SectionTitle("浏览音乐")
                 Ios5Group(Modifier.padding(horizontal = 12.dp)) {
@@ -346,7 +362,11 @@ fun SettingsTab(
     val session by container.settingsStore.session.collectAsStateWithLifecycle(initialValue = null)
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "设置")
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(
+            state = com.aurora.music.ui.rememberPersistentLazyListState("tab:settings"),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 16.dp),
+        ) {
             item {
                 Ios5SectionTitle("我的音乐")
                 Ios5Group(Modifier.padding(horizontal = 12.dp)) {

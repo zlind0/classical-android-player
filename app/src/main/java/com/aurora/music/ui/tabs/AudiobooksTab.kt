@@ -54,7 +54,11 @@ fun AudiobooksTab(
 
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "有声书")
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(
+            state = com.aurora.music.ui.rememberPersistentLazyListState("tab:audiobooks"),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 16.dp),
+        ) {
             if (recents.isNotEmpty()) {
                 item { Ios5SectionTitle("在听") }
                 ios5Rows(recents, key = { it.id }) { _, b ->

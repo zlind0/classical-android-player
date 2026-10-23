@@ -57,7 +57,11 @@ fun EbooksTab(
 
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "电子书", onSearch = onOpenSearch)
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(
+            state = com.aurora.music.ui.rememberPersistentLazyListState("tab:ebooks"),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 16.dp),
+        ) {
             val recent = recents.value
             if (recent.isNotEmpty()) {
                 item { Ios5SectionTitle("最近阅读") }

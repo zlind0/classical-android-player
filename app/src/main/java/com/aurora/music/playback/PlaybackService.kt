@@ -1562,6 +1562,9 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onTaskRemoved(rootIntent: android.content.Intent?) {
         // swipe-away stops playback so music doesnt keep going
+        // 但先记住“刚才在播”：下次启动要接着播（暂停事件随后可能把队列里的 wasPlaying 写成 false）
+        val wasPlaying = runCatching { player.playWhenReady || player.isPlaying }.getOrDefault(false)
+        if (wasPlaying) runCatching { container.uiState.markResumeOnLaunch() }
         runCatching { fadePlayer?.run { pause(); clearMediaItems() } }
         player.pause()
         player.stop()
@@ -1570,6 +1573,9 @@ class PlaybackService : MediaLibraryService() {
         runCatching { container.ebookTts.stop() }
         dualArmed = false
         externalSnapshot = null
+        // 队列/位置已经在播放过程中持续落盘；这里再强制刷一次，保证下次冷启动能接上。
+        runCatching { container.queueStore.requestFlush() }
+        runCatching { container.uiState.requestFlush() }
         stopSelf()
     }
 

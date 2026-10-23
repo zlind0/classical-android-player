@@ -49,6 +49,9 @@ class AppContainer(context: Context) {
 
     val queueStore = QueueStore(appContext)
 
+    /** 页面现场：Tab/返回栈/滚动位置/展开项/播放页展开状态（冷启动恢复用）。 */
+    val uiState = UiStateStore(appContext)
+
     val replayGainStore = ReplayGainStore(appContext)
 
     // 两套独立 SQLite 库，一源一库，物理隔离、永不串台。
