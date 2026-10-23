@@ -402,6 +402,8 @@ fun SettingsTab(
                     Ios5CellDivider()
                     Ios5Cell(title = "电子书来源", subtitle = "目录 / 扫描", onClick = { onOpen(Ios5Routes.SETTINGS_EBOOK_SOURCES) })
                     Ios5CellDivider()
+                    Ios5Cell(title = "电子书设置", subtitle = "最近阅读数量", onClick = { onOpen(Ios5Routes.SETTINGS_EBOOK) })
+                    Ios5CellDivider()
                     Ios5Cell(title = "播放历史", onClick = { onOpen(Ios5Routes.HISTORY) })
                     Ios5CellDivider()
                     Ios5Cell(title = "听歌统计", onClick = { onOpen(Ios5Routes.STATS) })

@@ -65,6 +65,7 @@ object Ios5Routes {
     const val SETTINGS_BACKUP = "settings_backup"
     const val SETTINGS_SOURCES = "settings_sources"
     const val SETTINGS_EBOOK_SOURCES = "settings_ebook_sources"
+    const val SETTINGS_EBOOK = "settings_ebook"
     const val SETTINGS_AUDIOBOOK_SOURCES = "settings_audiobook_sources"
     const val SETTINGS_AUDIOBOOK = "settings_audiobook"
     const val SETTINGS_INTRO = "settings_intro"

@@ -39,8 +39,8 @@ import com.aurora.music.ui.ios5.Ios5SectionTitle
 import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.util.accentFor
 
-// 电子书 Tab：顶部 5 本最近阅读（最近的在最上），下面是书库入口：
-// 默认书架置顶，其次各文件夹按名称字母序。
+// 电子书 Tab：顶部最近阅读（最近的在最上，条数由 设置 → 电子书设置 控制，5..20），
+// 下面是书库入口：默认书架置顶，其次各文件夹按名称字母序。
 @Composable
 fun EbooksTab(
     onOpenShelf: () -> Unit,
@@ -51,6 +51,7 @@ fun EbooksTab(
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val recents = container.ebookStore.recents.collectAsStateWithLifecycle()
+    val recentLimit = container.ebookPrefs.recentLimit.collectAsStateWithLifecycle()
     val roots = container.ebookStore.roots.collectAsStateWithLifecycle()
     val counts = container.ebookStore.counts.collectAsStateWithLifecycle()
     val enabledRoots = roots.value.filter { it.enabled }.sortedBy { it.displayName.lowercase() }
@@ -62,7 +63,8 @@ fun EbooksTab(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 16.dp),
         ) {
-            val recent = recents.value
+            // recents 固定存上限 20 条，这里按用户设置截断（首页仍固定 3 本，互不影响）
+            val recent = recents.value.take(recentLimit.value)
             if (recent.isNotEmpty()) {
                 item { Ios5SectionTitle("最近阅读") }
                 ios5Rows(recent, key = { it.path }) { _, b ->

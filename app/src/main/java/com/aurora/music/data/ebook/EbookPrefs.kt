@@ -3,6 +3,7 @@ package com.aurora.music.data.ebook
 import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.google.gson.Gson
@@ -22,6 +23,10 @@ private val Context.ebookReadDataStore by preferencesDataStore(name = "ebook_rea
 /** 自定义字体最多保留最近选择的个数。 */
 const val MAX_RECENT_FONTS = 10
 
+/** 电子书 Tab「最近阅读」显示数量范围（首页固定 3 本，不受此设置影响）。 */
+const val MIN_RECENT_BOOKS = 5
+const val MAX_RECENT_BOOKS = 20
+
 // 阅读设置：页面风格 / 字体 / 字号。复用 DataStore 模式，与音乐设置互相独立。
 class EbookPrefs(context: Context) {
     private val appContext = context.applicationContext
@@ -32,6 +37,8 @@ class EbookPrefs(context: Context) {
         val FONT_SIZE = floatPreferencesKey("font_size_sp")
         val FONT_PATH = stringPreferencesKey("font_path")
         val FONT_RECENT = stringPreferencesKey("font_recent")
+        /** 电子书 Tab「最近阅读」显示的条数（5..20）。 */
+        val RECENT_LIMIT = intPreferencesKey("recent_limit")
         // 引擎/音色/语速/音调已统一存到主 DataStore（SettingsStore.unifiedTts），此处只留切片单位；
         // 旧四键保留仅供一次性迁移读取（migrateEbookTts），不再写入。
         val TTS_ENGINE = stringPreferencesKey("tts_engine")
@@ -53,6 +60,10 @@ class EbookPrefs(context: Context) {
     private val _recentFonts = MutableStateFlow<List<String>>(emptyList())
     val recentFonts: StateFlow<List<String>> = _recentFonts.asStateFlow()
 
+    /** 电子书 Tab「最近阅读」显示条数（5..20，默认 5，与旧行为一致）。 */
+    private val _recentLimit = MutableStateFlow(MIN_RECENT_BOOKS)
+    val recentLimit: StateFlow<Int> = _recentLimit.asStateFlow()
+
     init {
         scope.launch {
             appContext.ebookReadDataStore.data.map { p ->
@@ -73,6 +84,11 @@ class EbookPrefs(context: Context) {
                 runCatching { EbookTtsUnit.valueOf(p[Keys.TTS_UNIT] ?: "PARA") }
                     .getOrDefault(EbookTtsUnit.PARA)
             }.collect { _ttsUnit.value = it }
+        }
+        scope.launch {
+            appContext.ebookReadDataStore.data.map { p ->
+                (p[Keys.RECENT_LIMIT] ?: MIN_RECENT_BOOKS).coerceIn(MIN_RECENT_BOOKS, MAX_RECENT_BOOKS)
+            }.collect { _recentLimit.value = it }
         }
     }
 
@@ -148,5 +164,14 @@ class EbookPrefs(context: Context) {
 
     fun setTtsUnit(u: EbookTtsUnit) {
         scope.launch { appContext.ebookReadDataStore.edit { it[Keys.TTS_UNIT] = u.name } }
+    }
+
+    /** 设置电子书 Tab「最近阅读」条数；范围外的值直接夹到 5..20。 */
+    fun setRecentLimit(n: Int) {
+        scope.launch {
+            appContext.ebookReadDataStore.edit {
+                it[Keys.RECENT_LIMIT] = n.coerceIn(MIN_RECENT_BOOKS, MAX_RECENT_BOOKS)
+            }
+        }
     }
 }

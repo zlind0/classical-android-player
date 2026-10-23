@@ -706,6 +706,12 @@ fun Ios5App() {
                                 confirm = { confirm(it) },
                             )
                         }
+                        composable(Ios5Routes.SETTINGS_EBOOK) {
+                            com.aurora.music.ui.screens.settings.EbookSettingsScreen(
+                                contentPadding = PaddingValues(0.dp),
+                                onBack = { navController.popBackStack() },
+                            )
+                        }
                         composable(Ios5Routes.SETTINGS_AUDIOBOOK_SOURCES) {
                             com.aurora.music.ui.screens.settings.AudiobookSourcesScreen(
                                 contentPadding = PaddingValues(0.dp),

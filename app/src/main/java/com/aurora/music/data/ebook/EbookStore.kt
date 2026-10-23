@@ -66,7 +66,8 @@ class EbookStore(context: Context, private val dao: EbookDao) {
             EbookRoot(it.id, it.rootPath, it.displayName, storageTypeOf(it.storageType), it.enabled, it.lastScanTime)
         }
         _shelf.value = dao.shelfBooks().map { it.toBook() }
-        _recents.value = dao.recentBooks(5).map { it.toBook() }
+        // 固定取上限（20），Tab 按用户设置 take(n)：调小设置无需重查 DB，调大也立刻够用
+        _recents.value = dao.recentBooks(MAX_RECENT_BOOKS).map { it.toBook() }
         val map = mutableMapOf<Long, Int>()
         map[EBOOK_SHELF_ROOT_ID] = _shelf.value.size
         rows.forEach { r ->
@@ -98,8 +99,12 @@ class EbookStore(context: Context, private val dao: EbookDao) {
         }
 
     suspend fun removeRoot(id: Long) = withContext(Dispatchers.IO) {
+        // 书行和进度历史一起清：只删书行会留下孤儿历史（path 已不在库里），
+        // 以后同路径再加回来时会出现「进度已归零但历史还在」的错位。
+        val paths = dao.booksOfRoot(id).map { it.path }
         dao.deleteRoot(id)
         dao.deleteBooksOfRoot(id)
+        if (paths.isNotEmpty()) dao.deleteHistoryOf(paths)
         refresh()
     }
 
@@ -347,7 +352,7 @@ class EbookStore(context: Context, private val dao: EbookDao) {
             val at = System.currentTimeMillis()
             dao.saveProgress(path, spine, page, block, char, pct, EbookAnchorCode.encode(spine, block), at)
             recordHistory(path, spine, block, at)
-            _recents.value = dao.recentBooks(5).map { it.toBook() }
+            _recents.value = dao.recentBooks(MAX_RECENT_BOOKS).map { it.toBook() }
         }
 
     fun saveReadingPos(path: String, spine: Int, page: Int, block: Int, char: Int, pct: Float) {
@@ -355,7 +360,7 @@ class EbookStore(context: Context, private val dao: EbookDao) {
             val at = System.currentTimeMillis()
             dao.saveProgress(path, spine, page, block, char, pct, EbookAnchorCode.encode(spine, block), at)
             recordHistory(path, spine, block, at)
-            _recents.value = dao.recentBooks(5).map { it.toBook() }
+            _recents.value = dao.recentBooks(MAX_RECENT_BOOKS).map { it.toBook() }
         }
     }
 
