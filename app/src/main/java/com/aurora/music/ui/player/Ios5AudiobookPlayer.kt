@@ -561,7 +561,7 @@ private fun ChapterBubble(
                 state = listState,
                 modifier = Modifier.fillMaxWidth().height(540.dp),
             ) {
-                itemsIndexed(book.chapters, key = { _, c -> c.path }) { i, c ->
+                itemsIndexed(book.chapters, key = { i, c -> "$i:${c.path}" }) { i, c ->
                     Row(
                         Modifier.fillMaxWidth()
                             .clickable(onClick = { onSelect(i) })

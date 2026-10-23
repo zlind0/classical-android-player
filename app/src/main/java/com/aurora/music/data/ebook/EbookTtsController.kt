@@ -93,6 +93,13 @@ class EbookTtsController(context: Context) {
     private val _playing = MutableStateFlow(false)
     val playing: StateFlow<Boolean> = _playing.asStateFlow()
 
+    /**
+     * 用户亲手停止（阅读页底栏停止键）时回调播放服务：
+     * 服务据此快照并暂停站内音乐，实现「停止朗读 = 音乐 + 朗读一起暂停」。
+     * 其他停用点（换音色、离页、定时到点等）不会触发。
+     */
+    var onUserStop: (() -> Unit)? = null
+
     /** (chapter, block, char)：UI 翻到该字所在页。 */
     private val _turn = MutableStateFlow<Triple<Int, Int, Int>?>(null)
     val turnRequest: StateFlow<Triple<Int, Int, Int>?> = _turn.asStateFlow()
@@ -215,7 +222,7 @@ class EbookTtsController(context: Context) {
     /** 停止：什么都不读，高亮清除。没有暂停状态。睡眠定时是全局后台，手动停止不清定时。
      * @param savePos 是否把停在哪写盘。阅读页退出时由 UI 按眼睛位置全量落盘，
      *   这里传 false 只停音频，避免耳朵位置后写覆盖眼睛位置。 */
-    fun stop(savePos: Boolean = true) {
+    fun stop(savePos: Boolean = true, userInitiated: Boolean = false) {
         // 先把停在哪存下来：position 清掉后就没了，通知栏“继续播放”靠 bridge 的 lastPara，
         // 下次打开靠这里的 DB 行。
         val cur = _position.value
@@ -223,6 +230,8 @@ class EbookTtsController(context: Context) {
         if (savePos && cur != null && bp.isNotBlank()) {
             store?.saveTtsPos(bp, cur.chapter, cur.block, cur.startChar)
         }
+        // 用户亲手停：先通知服务快照并暂停音乐（此刻 playing/position 还在，服务能判断双播）。
+        if (userInitiated) runCatching { onUserStop?.invoke() }
         playJob?.cancel()
         playJob = null
         runCatching { tts.stop(TtsOwner.EBOOK) }

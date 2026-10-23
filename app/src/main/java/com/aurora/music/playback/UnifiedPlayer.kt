@@ -124,8 +124,11 @@ class UnifiedPlayer(
     /** DUAL 模式系统暂停：服务先快照 + 停音乐，本播放器再停书。BOOK 模式不设置。 */
     @Volatile var onDualSystemPause: (() -> Unit)? = null
 
-    /** DUAL 模式系统播放：服务先恢复音乐，本播放器再从断点续书。BOOK 模式不设置。 */
-    @Volatile var onDualSystemResume: (() -> Unit)? = null
+    /**
+     * DUAL 模式系统播放：服务先恢复音乐，并返回书是否也该续读
+     * （只有暂停前书确实在播才为 true；音乐单路暂停后不会偷偷开始朗读）。
+     */
+    @Volatile var onDualSystemResume: (() -> Boolean)? = null
 
     /** DUAL 模式下音乐侧是否在播（服务推送），用于会话 playing 态展示。 */
     @Volatile private var dualMusicPlaying = false
@@ -270,13 +273,15 @@ class UnifiedPlayer(
         val dual = dualControl
         if (playWhenReady) {
             if (dual != null) {
-                onDualSystemResume?.invoke()
+                val resumeBook = onDualSystemResume?.invoke() == true
                 val p = lastPara
-                if (p != null && !tts.playing.value) {
-                    bookPlaying = true
-                    tts.playFrom(p.chapter, p.block, p.startChar)
-                } else if (tts.playing.value) {
-                    bookPlaying = true
+                if (resumeBook) {
+                    if (p != null && !tts.playing.value) {
+                        bookPlaying = true
+                        tts.playFrom(p.chapter, p.block, p.startChar)
+                    } else if (tts.playing.value) {
+                        bookPlaying = true
+                    }
                 }
             } else {
                 if (tts.playing.value) {

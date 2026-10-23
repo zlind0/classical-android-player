@@ -352,7 +352,11 @@ class FloatingWindowManager(
 
     private fun togglePlay() {
         val c = controller ?: return
-        if (c.isPlaying) c.pause() else c.play()
+        // 与音乐选项卡同一语义：只动音乐，不停朗读（双播时书继续读）。
+        c.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_MUSIC_TOGGLE, Bundle.EMPTY),
+            Bundle.EMPTY,
+        )
     }
 
     private fun prev() {

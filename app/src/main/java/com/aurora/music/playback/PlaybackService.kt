@@ -291,6 +291,7 @@ class PlaybackService : MediaLibraryService() {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 // App 内开音乐时书正播着 → 进入双播。
                 if (isPlaying && ebookPlaying && !dualArmed) dualArmed = true
+                publishMusicPlaying()
                 unifiedPlayer?.setDualMusicPlaying(isPlaying)
                 refreshArbitration()
             }
@@ -399,11 +400,21 @@ class PlaybackService : MediaLibraryService() {
         up.onDualSystemPause = { noteExternalInterruption(autoResume = false, pauseMusic = true) }
         up.onDualSystemResume = {
             val snap = externalSnapshot
-            if (snap?.musicWasPlaying == true && !player.isPlaying) runCatching { player.play() }
-            // 书的续播由 UnifiedPlayer 按自身断点继续；快照在 playing 回来后由上面的 collector 清掉。
+            if (snap == null) {
+                // 没有联合暂停快照：系统播放键只恢复音乐（若在播），不偷偷开始朗读。
+                false
+            } else {
+                externalSnapshot = null
+                if (snap.musicWasPlaying && !player.isPlaying) runCatching { player.play() }
+                // 暂停前书确实在播 → 双恢复；只有音乐一路 → 书保持停止。
+                snap.bookPara != null
+            }
         }
         up.attach()
         unifiedPlayer = up
+        // 阅读页底栏亲手停朗读：快照并暂停音乐，两路一起停；快照保留 dualArmed，
+        // 阅读页播放键 / 系统播放键再按时双恢复。
+        container.ebookTts.onUserStop = { onBookUserStop() }
         container.ebookTtsPlayer.onAudioFocusChange = { change ->
             scope.launch { handleBookFocusChange(change) }
         }
@@ -647,7 +658,17 @@ class PlaybackService : MediaLibraryService() {
         )
     }
 
+    /** 推送站内音乐真实播放态（含缓冲期 playWhenReady，与 VM 以往的 effectivelyPlaying 同口径）。 */
+    private fun publishMusicPlaying() {
+        val v = runCatching {
+            player.isPlaying || (player.playWhenReady && player.playbackState == Player.STATE_BUFFERING)
+        }.getOrDefault(false)
+        if (container.musicPlaying.value != v) container.musicPlaying.value = v
+    }
+
     private fun tickAudio() {
+        // 站内音乐真实播放态（音乐选项卡/气泡的播放暂停图标用；双播时会话 player 是 UnifiedPlayer）
+        publishMusicPlaying()
         // v0.6 GR meters for the Dynamics UI (cheap volatile reads)
         container.dspMeters.value = com.aurora.music.data.DspMeters(auroraDsp.compGrDb, auroraDsp.limGrDb)
         abookActive = player.currentMediaItem?.mediaId?.startsWith(
@@ -729,6 +750,44 @@ class PlaybackService : MediaLibraryService() {
         }
         if (pauseMusic) runCatching { player.pause() }
         if (ebookPlaying) runCatching { container.ebookTts.stop() }
+    }
+
+    /**
+     * 阅读页底栏「停止朗读」（用户亲手停）：音乐一起暂停。
+     * 只在音乐真正在播时建快照：快照让 playing collector 保留 dualArmed，
+     * 之后阅读页播放键（collector）或系统播放键（UnifiedPlayer）能把两路一起恢复。
+     */
+    private fun onBookUserStop() {
+        if (externalSnapshot != null || !player.isPlaying) return
+        externalSnapshot = ExternalSnapshot(
+            musicWasPlaying = true,
+            bookPara = lastBookPara,
+            autoResume = false,
+        )
+        runCatching { player.pause() }
+    }
+
+    /**
+     * 音乐选项卡 / 阅读页音乐气泡的播放暂停：永远只动站内音乐，不开始也不停止朗读。
+     * - 听书时从音乐选项卡暂停 → 朗读继续；
+     * - 两路一起暂停后从音乐选项卡播放 → 只恢复音乐，朗读保持停止；
+     * - 书没在播时恢复音乐 → 退出双播态，会话切回音乐 player（列表/封面回到歌）。
+     */
+    private fun toggleMusicFromApp() {
+        // 与 UI 同口径：缓冲中且 playWhenReady 也算“在播”，这一下应是暂停。
+        val playing = player.isPlaying ||
+            (player.playWhenReady && player.playbackState == Player.STATE_BUFFERING)
+        if (playing) {
+            runCatching { player.pause() }
+        } else {
+            runCatching { player.play() }
+            if (!ebookPlaying) {
+                // 只恢复了音乐：释放联合暂停快照，书等阅读页/系统播放键再续。
+                externalSnapshot = null
+                dualArmed = false
+            }
+        }
+        refreshArbitration()
     }
 
     /** 外部瞬态结束（来电挂断）：按快照双恢复，一次性。 */
@@ -1089,6 +1148,7 @@ class PlaybackService : MediaLibraryService() {
                 .add(SessionCommand(CMD_SHUFFLE, Bundle.EMPTY))
                 .add(SessionCommand(CMD_REPEAT, Bundle.EMPTY))
                 .add(SessionCommand(CMD_SLEEP_FADE, Bundle.EMPTY))
+                .add(SessionCommand(CMD_MUSIC_TOGGLE, Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(sessionCommands)
@@ -1107,6 +1167,7 @@ class PlaybackService : MediaLibraryService() {
                     customCommand.customExtras.getStringArrayList("order"),
                 )
                 CMD_REPEAT -> cycleRepeat()
+                CMD_MUSIC_TOGGLE -> toggleMusicFromApp()
                 CMD_SLEEP_FADE -> {
                     val ms = customCommand.customExtras.getInt("fadeMs", 0)
                     if (ms > 0) { sleepFadeMs = ms; sleepFadeStartMs = android.os.SystemClock.elapsedRealtime(); sleepFadeActive = true }
@@ -1592,10 +1653,12 @@ class PlaybackService : MediaLibraryService() {
         abandonAbookDuckFocus()
         mediaSession?.release()
         mediaSession = null
+        runCatching { container.ebookTts.onUserStop = null }
         runCatching { unifiedPlayer?.release() }
         unifiedPlayer = null
         runCatching { fadePlayer?.release() }
         fadePlayer = null
+        runCatching { container.musicPlaying.value = false }
         runCatching { player.release() }
         super.onDestroy()
     }
@@ -1605,6 +1668,7 @@ class PlaybackService : MediaLibraryService() {
         const val CMD_REPEAT = "com.aurora.music.REPEAT"
         const val CMD_SLEEP_FADE = "com.aurora.music.SLEEP_FADE"
         const val CMD_ABOOK_START = "com.aurora.music.ABOOK_START"
+        const val CMD_MUSIC_TOGGLE = "com.aurora.music.MUSIC_TOGGLE"
         const val ACTION_PLAY_PAUSE = "com.aurora.music.action.PLAY_PAUSE"
         const val ACTION_NEXT = "com.aurora.music.action.NEXT"
         const val ACTION_PREV = "com.aurora.music.action.PREV"

@@ -291,6 +291,13 @@ class AppContainer(context: Context) {
 
     val dspMeters = MutableStateFlow(DspMeters())
 
+    /**
+     * 站内音乐 player 的实际播放态（PlaybackService 推送）：
+     * 双播时系统会话 player 是 UnifiedPlayer，音乐选项卡的播放/暂停图标必须看这一份，
+     * 否则书在朗读时会被误显示成“音乐正在播”。
+     */
+    val musicPlaying = MutableStateFlow(false)
+
     private val _sessionReady = MutableStateFlow<Boolean?>(null)
     val sessionReady: StateFlow<Boolean?> = _sessionReady.asStateFlow()
 

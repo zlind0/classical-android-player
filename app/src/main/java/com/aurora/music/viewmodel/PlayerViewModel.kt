@@ -281,6 +281,12 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             // 有声书快进/快退步长（全局，service 拦截与 VM 共用同一份）
             container.settingsStore.audiobookPrefs.collect { abookSeekSec = it.seekSec }
         }
+        viewModelScope.launch {
+            // 站内音乐真实播放态（双播时会话 player 是书，UI 图标仍要显示音乐的状态）
+            container.musicPlaying.collect { p ->
+                _state.update { if (it.isPlaying == p) it else it.copy(isPlaying = p) }
+            }
+        }
     }
 
     /** App 退到后台/被杀前主动落一次：队列、位置、是否在播。 */
@@ -499,7 +505,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         _state.update {
             it.copy(
                 current = cur,
-                isPlaying = c.effectivelyPlaying,
+                isPlaying = container.musicPlaying.value,
                 shuffle = c.shuffleModeEnabled,
                 repeat = when (c.repeatMode) {
                     Player.REPEAT_MODE_ONE -> RepeatMode.ONE
@@ -986,7 +992,14 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
     fun togglePlay() {
         val c = controller ?: return
         container.haptic()
-        if (c.isPlaying) c.pause() else c.play()
+        // 走服务自定义命令：只动站内音乐，绝不动朗读（双播时暂停音乐不会停书，
+        // 播放音乐也不会自动开始朗读）。
+        runCatching {
+            c.sendCustomCommand(
+                SessionCommand(PlaybackService.CMD_MUSIC_TOGGLE, android.os.Bundle.EMPTY),
+                android.os.Bundle.EMPTY,
+            )
+        }
     }
 
     fun pause() {

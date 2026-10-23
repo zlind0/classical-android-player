@@ -21,23 +21,32 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
@@ -62,6 +71,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -85,6 +95,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.ebook.EbookAnchorCode
 import com.aurora.music.data.ebook.EbookReadPrefs
@@ -97,9 +108,11 @@ import com.aurora.music.data.TTS_ENGINE_INTERNAL
 import com.aurora.music.data.UnifiedTtsPrefs
 import com.aurora.music.data.ebook.EbookTtsUnit
 import com.aurora.music.data.ebook.ParsedEbook
+import com.aurora.music.model.Song
 import com.aurora.music.tts.MsVoices
 import com.aurora.music.tts.TtsEngineInfo
 import com.aurora.music.ui.components.LottieLoader
+import com.aurora.music.ui.components.formatTime
 import com.aurora.music.ui.ios5.Ios5ActionRow
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5Colors
@@ -109,12 +122,19 @@ import com.aurora.music.ui.ios5.Ios5NavRow
 import com.aurora.music.ui.ios5.Ios5SectionTitle
 import com.aurora.music.ui.ios5.Ios5SegmentRow
 import com.aurora.music.ui.ios5.Ios5SettingsPage
+import com.aurora.music.ui.ios5.Ios5Slider
 import com.aurora.music.ui.ios5.Ios5SliderRow
 import com.aurora.music.ui.ios5.Ios5StaticText
 import com.aurora.music.ui.ios5.Ios5SwitchRow
 import com.aurora.music.ui.ios5.ios5FootNote
 import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.ui.ios5.ios5Section
+import com.aurora.music.viewmodel.PlayerUiState
+import com.aurora.music.viewmodel.PlayerViewModel
+import com.aurora.music.viewmodel.RepeatMode
+import com.aurora.titlemerge.MergeInput
+import com.aurora.titlemerge.MergedRow
+import com.aurora.titlemerge.mergeTracks
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -165,7 +185,12 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
     var tocOpen by remember { mutableStateOf(false) }
     var tocAnchor by remember(bookPath) { mutableStateOf(0 to 0) }
     var optionsOpen by remember { mutableStateOf(false) }
+    var musicOpen by remember { mutableStateOf(false) }
     var toast by remember { mutableStateOf<String?>(null) }
+
+    // 播放器与主界面共用同一 Activity 级 VM（此处 LocalViewModelStoreOwner 仍是 Activity）
+    val playerVM: PlayerViewModel = viewModel()
+    val playerState by playerVM.state.collectAsStateWithLifecycle()
 
     LaunchedEffect(toast) {
         if (toast != null) {
@@ -216,6 +241,7 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
 
     BackHandler {
         when {
+            musicOpen -> musicOpen = false
             tocOpen -> tocOpen = false
             optionsOpen -> optionsOpen = false
             else -> onClose()
@@ -259,6 +285,7 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
                 tocOpen = true
             },
             onOpenOptions = { optionsOpen = true },
+            onOpenMusic = { musicOpen = true },
         )
 
         if (tocOpen) {
@@ -295,6 +322,21 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
                 },
             )
         }
+
+        // 音乐气泡：盖在正文与目录/选项之上，点外部或返回键关闭
+        if (musicOpen) {
+            ReaderMusicBubble(
+                state = playerState,
+                onDismiss = { musicOpen = false },
+                onJump = { playerVM.jumpTo(it) },
+                onTogglePlay = { playerVM.togglePlay() },
+                onPrevious = { playerVM.previous() },
+                onNext = { playerVM.next() },
+                onSeek = { playerVM.seekTo(it) },
+                onToggleShuffle = { playerVM.toggleShuffle() },
+                onCycleRepeat = { playerVM.cycleRepeat() },
+            )
+        }
     }
 }
 
@@ -312,6 +354,7 @@ private fun ReaderBody(
     onToast: (String) -> Unit,
     onOpenToc: (chapter: Int, block: Int) -> Unit,
     onOpenOptions: () -> Unit,
+    onOpenMusic: () -> Unit,
 ) {
     val context = LocalContext.current
     val container = (context.applicationContext as AuroraApplication).container
@@ -667,7 +710,8 @@ private fun ReaderBody(
                 onTtsPrev = { tts.prev() },
                 onTtsToggle = {
                     if (ttsPlaying) {
-                        tts.stop()
+                        // 用户亲手停朗读：音乐一起暂停（服务侧快照，之后播放键可双恢复）
+                        tts.stop(userInitiated = true)
                     } else {
                         // 每次点播放都从当前页最顶上第一个字开始读
                         // （页顶可能是段落中间，带上块内字偏移）
@@ -683,7 +727,7 @@ private fun ReaderBody(
                     onOpenToc(c, blk)
                 },
                 onOptions = onOpenOptions,
-                onPlaceholder = { onToast("即将推出") },
+                onMusic = onOpenMusic,
             )
         }
 
@@ -915,7 +959,7 @@ private fun ReaderBottomBar(
     onTtsNext: () -> Unit,
     onToc: () -> Unit,
     onOptions: () -> Unit,
-    onPlaceholder: () -> Unit,
+    onMusic: () -> Unit,
 ) {
     // 背景盖住按钮区 + 底部导航键区，两者连成一条（播放界面同款做法）
     Column(Modifier.fillMaxWidth().background(barBrush)) {
@@ -927,7 +971,7 @@ private fun ReaderBottomBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ReaderButton("目录", Icons.AutoMirrored.Filled.List, barInk, 1f, onToc)
-            ReaderButton("音乐", Icons.Filled.MusicNote, barInk, 0.35f, onPlaceholder)
+            ReaderButton("音乐", Icons.Filled.MusicNote, barInk, 1f, onMusic)
             ReaderButton(if (sentenceMode) "上一句" else "上一首", Icons.Filled.SkipPrevious, barInk, 1f, onTtsPrev)
             ReaderButton(
                 if (isTtsPlaying) "停止" else "播放",
@@ -954,6 +998,358 @@ private fun ReaderButton(
     ) {
         Icon(icon, label, tint = ink.copy(alpha = alpha), modifier = Modifier.size(24.dp))
         Text(label, fontSize = 10.sp, color = ink.copy(alpha = alpha), maxLines = 1)
+    }
+}
+
+// ---- 阅读页音乐气泡：进度（循环/随机分居两侧）+ 当前播放总列表（同专辑合并大曲目）+ 走带键 ----
+
+// 与整页播放器同款材质：进度区银色渐变，走带键区深色渐变
+private val readerMusicGrayBrush = Brush.verticalGradient(
+    0f to Color(0xFFE8EAEE),
+    1f to Color(0xFFC6CBD3),
+)
+private val readerMusicBlackBrush = Brush.verticalGradient(
+    0f to Color(0xFF3D434C),
+    1f to Color(0xFF14161B),
+)
+
+// 列表行：GroupHeader = 合并后的大曲目（可收起），Track = 单曲或大曲目下的小曲目
+private sealed interface ReaderMusicRow {
+    val key: String
+
+    data class GroupHeader(
+        override val key: String,
+        val major: String,
+        val firstIndex: Int,
+        val memberIndices: List<Int>,
+    ) : ReaderMusicRow
+
+    data class Track(
+        override val key: String,
+        val index: Int,
+        val title: String,
+        val durationSec: Int,
+        val inGroup: Boolean,
+    ) : ReaderMusicRow
+}
+
+// 队列按连续同专辑切段，段内用与专辑视图相同的合并引擎收大曲目；
+// 当前曲所在的大曲目默认展开，其余默认收起（用户手动点过的以 expanded 为准）。
+private fun buildReaderMusicRows(
+    queue: List<Song>,
+    currentIndex: Int,
+    expanded: Map<String, Boolean>,
+): List<ReaderMusicRow> {
+    if (queue.isEmpty()) return emptyList()
+    val out = ArrayList<ReaderMusicRow>(queue.size)
+    var i = 0
+    while (i < queue.size) {
+        val albumId = queue[i].albumId
+        if (albumId.isBlank()) {
+            val s = queue[i]
+            out += ReaderMusicRow.Track("s:$i", i, s.title, s.durationSec, false)
+            i++
+            continue
+        }
+        var j = i + 1
+        while (j < queue.size && queue[j].albumId == albumId) j++
+        val base = i
+        val run = queue.subList(i, j)
+        if (run.size < 2) {
+            val s = run[0]
+            out += ReaderMusicRow.Track("s:$base", base, s.title, s.durationSec, false)
+        } else {
+            mergeTracks(run.map { MergeInput(it.id, it.title) }).forEach { row ->
+                when (row) {
+                    is MergedRow.Single -> {
+                        val s = run[row.index]
+                        out += ReaderMusicRow.Track("s:${base + row.index}", base + row.index, s.title, s.durationSec, false)
+                    }
+                    is MergedRow.Group -> {
+                        // key 里必须带组内第一首的全局序号：同一专辑里可能出现
+                        // 两个同名大曲目（中间夹了单曲），只用 base+major 会撞 key
+                        val gkey = "g:$base:${row.items.first().index}:${row.major}"
+                        val members = row.items.map { base + it.index }
+                        out += ReaderMusicRow.GroupHeader(
+                            key = gkey,
+                            major = row.major,
+                            firstIndex = members.first(),
+                            memberIndices = members,
+                        )
+                        val open = expanded[gkey] ?: (currentIndex in members)
+                        if (open) {
+                            row.items.forEach { item ->
+                                val s = run[item.index]
+                                out += ReaderMusicRow.Track(
+                                    key = "t:${base + item.index}",
+                                    index = base + item.index,
+                                    title = item.minor.ifBlank { s.title },
+                                    durationSec = s.durationSec,
+                                    inGroup = true,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i = j
+    }
+    return out
+}
+
+@Composable
+private fun ReaderMusicBubble(
+    state: PlayerUiState,
+    onDismiss: () -> Unit,
+    onJump: (Int) -> Unit,
+    onTogglePlay: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onSeek: (Float) -> Unit,
+    onToggleShuffle: () -> Unit,
+    onCycleRepeat: () -> Unit,
+) {
+    val density = LocalDensity.current
+    val context = LocalContext.current
+    val container = (context.applicationContext as AuroraApplication).container
+    val ttsPrefs by container.settingsStore.unifiedTts.collectAsStateWithLifecycle(initialValue = UnifiedTtsPrefs())
+    val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
+    // 用户手动展开/收起：缺省 = 当前曲所在大曲目展开，其余收起
+    val expanded = remember { mutableStateMapOf<String, Boolean>() }
+    val rows = remember(state.queue, state.currentIndex, expanded.toMap()) {
+        buildReaderMusicRows(state.queue, state.currentIndex, expanded)
+    }
+    var listHeightPx by remember { mutableStateOf(0) }
+    var bubbleHeightPx by remember { mutableStateOf(0) }
+    var headerHeightPx by remember { mutableStateOf(0) }
+    // 只在气泡刚打开时定位一次；之后点歌/切歌/展开都不再动列表
+    var positioned by remember { mutableStateOf(false) }
+
+    // 当前曲中心落在气泡总高度约 1/3 处（仅首次布局完成后执行一次）
+    LaunchedEffect(listHeightPx, bubbleHeightPx, headerHeightPx, rows.isNotEmpty()) {
+        if (positioned) return@LaunchedEffect
+        if (listHeightPx <= 0 || bubbleHeightPx <= 0 || rows.isEmpty()) return@LaunchedEffect
+        val target = rows.indexOfFirst { it is ReaderMusicRow.Track && it.index == state.currentIndex }
+            .takeIf { it >= 0 }
+            ?: rows.indexOfFirst { it is ReaderMusicRow.GroupHeader && state.currentIndex in it.memberIndices }
+        if (target >= 0) {
+            val rowPx = with(density) { 34.dp.toPx() }
+            // 气泡内 1/3 高度 - 头部高度 - 半个行高 = 列表内需要让目标行顶部停留的位置
+            val targetTop = (bubbleHeightPx / 3f - headerHeightPx - rowPx / 2f).toInt()
+            listState.scrollToItem(target, -targetTop)
+        }
+        positioned = true
+    }
+
+    val song = state.current
+    val hasQueue = state.queue.isNotEmpty()
+    val idxLabel = if (hasQueue) "${state.currentIndex + 1} / ${state.queue.size}" else ""
+    val titleInk = Color(0xFF1A1D22)
+    val subInk = Ios5Colors.TextSecondary
+
+    Box(
+        Modifier.fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.42f))
+            .clickable(
+                indication = null,
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                onClick = onDismiss,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier.fillMaxWidth(0.9f).fillMaxHeight(0.7f)
+                .onSizeChanged { bubbleHeightPx = it.height }
+                .shadow(18.dp, RoundedCornerShape(16.dp))
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color.White)
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    onClick = {},
+                ),
+        ) {
+            // ---- 顶部：银色渐变区（当前曲目 + 进度；循环在左、随机在右） ----
+            Column(
+                Modifier.fillMaxWidth().background(readerMusicGrayBrush)
+                    .onSizeChanged { headerHeightPx = it.height }
+                    .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 6.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            song.title.ifBlank { if (hasQueue) "未在播放" else "播放列表为空" },
+                            fontSize = 14.sp, lineHeight = 17.sp, fontWeight = FontWeight.Bold,
+                            color = titleInk, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                        val sub = listOf(song.artist, song.album).filter { it.isNotBlank() }.joinToString(" — ")
+                        if (sub.isNotBlank()) {
+                            Text(
+                                sub, fontSize = 11.sp, lineHeight = 13.sp, color = subInk,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    if (idxLabel.isNotBlank()) {
+                        Text(idxLabel, fontSize = 11.sp, color = subInk, maxLines = 1)
+                    }
+                }
+                Spacer(Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        when (state.repeat) {
+                            RepeatMode.ONE -> Icons.Filled.RepeatOne
+                            else -> Icons.Filled.Repeat
+                        },
+                        "循环", tint = if (state.repeat == RepeatMode.OFF) Color(0xFF8E8E93) else Ios5Colors.IosBlueBright,
+                        modifier = Modifier.size(34.dp).clip(RoundedCornerShape(17.dp))
+                            .clickable(onClick = onCycleRepeat).padding(7.dp),
+                    )
+                    Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
+                        Ios5Slider(
+                            value = state.progress.coerceIn(0f, 1f),
+                            onValueChange = onSeek,
+                            modifier = Modifier.fillMaxWidth(),
+                            compact = true,
+                        )
+                        Row(Modifier.fillMaxWidth()) {
+                            Text(
+                                formatTime(state.positionSec.toInt()), fontSize = 10.sp,
+                                color = Color(0xFF3E444D), maxLines = 1,
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                formatTime(state.durationSec), fontSize = 10.sp,
+                                color = Color(0xFF3E444D), maxLines = 1,
+                            )
+                        }
+                    }
+                    Icon(
+                        Icons.Filled.Shuffle, "随机",
+                        tint = if (state.shuffle) Ios5Colors.IosBlueBright else Color(0xFF8E8E93),
+                        modifier = Modifier.size(34.dp).clip(RoundedCornerShape(17.dp))
+                            .clickable(onClick = onToggleShuffle).padding(7.dp),
+                    )
+                }
+            }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0xFF9AA0A8)))
+
+            // ---- 中部：正在播放的总列表（紧凑行，按专辑视图合并大曲目） ----
+            if (rows.isEmpty()) {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text("还没有正在播放的曲目", fontSize = 13.sp, color = subInk)
+                }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.weight(1f).fillMaxWidth()
+                        .onSizeChanged { listHeightPx = it.height },
+                ) {
+                    itemsIndexed(rows, key = { _, row -> row.key }) { rowIdx, row ->
+                        when (row) {
+                            is ReaderMusicRow.GroupHeader -> {
+                                val open = expanded[row.key] ?: (state.currentIndex in row.memberIndices)
+                                val containsCurrent = state.currentIndex in row.memberIndices
+                                Row(
+                                    Modifier.fillMaxWidth().height(34.dp)
+                                        .clickable { onJump(row.firstIndex) }
+                                        .padding(start = 12.dp, end = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        row.major,
+                                        fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                                        color = if (containsCurrent) Ios5Colors.IosBlueBright else titleInk,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    Icon(
+                                        if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                                        if (open) "收起" else "展开",
+                                        tint = subInk,
+                                        modifier = Modifier.size(32.dp).clip(RoundedCornerShape(16.dp))
+                                            .clickable {
+                                                expanded[row.key] = !open
+                                            }.padding(7.dp),
+                                    )
+                                }
+                            }
+                            is ReaderMusicRow.Track -> {
+                                val current = row.index == state.currentIndex
+                                Row(
+                                    Modifier.fillMaxWidth().height(32.dp)
+                                        .clickable { onJump(row.index) }
+                                        .padding(start = if (row.inGroup) 24.dp else 12.dp, end = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        row.title,
+                                        fontSize = 13.sp,
+                                        fontWeight = if (current) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (current) Ios5Colors.IosBlueBright else titleInk,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    if (current) {
+                                        Text("♪", fontSize = 12.sp, color = Ios5Colors.IosBlueBright)
+                                        Spacer(Modifier.width(5.dp))
+                                    }
+                                    Text(formatTime(row.durationSec), fontSize = 11.sp, color = subInk, maxLines = 1)
+                                }
+                            }
+                        }
+                        if (rowIdx != rows.lastIndex) {
+                            val inset = when (row) {
+                                is ReaderMusicRow.Track -> if (row.inGroup) 24.dp else 12.dp
+                                else -> 12.dp
+                            }
+                            Box(Modifier.fillMaxWidth().padding(start = inset).height(1.dp).background(Color(0xFFE6E8EB)))
+                        }
+                    }
+                }
+            }
+
+            // ---- 底部：深色渐变走带键区（上一首 / 播放暂停 / 下一首 + 站内音乐音量） ----
+            Column(
+                Modifier.fillMaxWidth().background(readerMusicBlackBrush)
+                    .padding(top = 6.dp, bottom = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 54.dp).padding(horizontal = 28.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    Icon(
+                        Icons.Filled.SkipPrevious, "上一首", tint = Color.White,
+                        modifier = Modifier.size(46.dp).clip(RoundedCornerShape(23.dp))
+                            .clickable(onClick = onPrevious).padding(9.dp),
+                    )
+                    Icon(
+                        if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        if (state.isPlaying) "暂停" else "播放", tint = Color.White,
+                        modifier = Modifier.size(54.dp).clip(RoundedCornerShape(27.dp))
+                            .clickable(onClick = onTogglePlay).padding(9.dp),
+                    )
+                    Icon(
+                        Icons.Filled.SkipNext, "下一首", tint = Color.White,
+                        modifier = Modifier.size(46.dp).clip(RoundedCornerShape(23.dp))
+                            .clickable(onClick = onNext).padding(9.dp),
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                // 与整页播放器同款音量条；数值就是选项里的“站内音乐音量”
+                Ios5Slider(
+                    value = ttsPrefs.ownMusicLevel.coerceIn(0.05f, 1f),
+                    onValueChange = { v -> scope.launch { container.settingsStore.setOwnMusicLevel(v) } },
+                    range = 0.05f..1f,
+                    steps = 18,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                )
+            }
+        }
     }
 }
 
@@ -1234,6 +1630,42 @@ private fun EbookOptionsPage(
     }
     Box(Modifier.fillMaxSize().background(th.bg)) {
         Ios5SettingsPage(title = "阅读设置", onBack = onBack) {
+            ios5Section(sleepTitle) {
+                val timer = sleepTimerState
+                val countOptions = listOf(0, 5, 10, 20, 30, 45, 60, 90, 120, 240)
+                val selIdx = timer?.totalMinutes?.let { countOptions.indexOf(it) }?.takeIf { it >= 0 } ?: 0
+                // 拖动只改本地预览，抬手才落盘，避免反复重设定时
+                var draftIdx by remember(timer) { mutableFloatStateOf(selIdx.toFloat()) }
+                val draftInt = draftIdx.toInt().coerceIn(countOptions.indices)
+                Ios5SliderRow(
+                    title = "倒计时",
+                    valueLabel = if (draftInt == 0) "关闭" else "${countOptions[draftInt]}分钟",
+                    value = draftIdx,
+                    range = 0f..(countOptions.size - 1).toFloat(),
+                    steps = countOptions.size - 2,
+                    onValueChange = { draftIdx = it },
+                    onValueChangeFinished = {
+                        val m = countOptions[draftIdx.toInt().coerceIn(countOptions.indices)]
+                        if (m == 0) container.ebookTts.cancelSleepTimer()
+                        else container.ebookTts.setSleepMinutes(m)
+                    },
+                )
+                Ios5CellDivider()
+                Ios5NavRow(
+                    title = "定时停止",
+                    subtitle = timer?.clockLabel?.let { "$it（读完当前再停）" } ?: "未设置",
+                    onClick = {
+                        val c = Calendar.getInstance()
+                        TimePickerDialog(
+                            context,
+                            { _, h, m -> container.ebookTts.setSleepAt(h, m) },
+                            c.get(Calendar.HOUR_OF_DAY),
+                            c.get(Calendar.MINUTE),
+                            true,
+                        ).show()
+                    },
+                )
+            }
             ios5Section("进度跳转") {
                 var draft by remember(bookPath) { mutableStateOf("") }
                 fun doJump() {
@@ -1416,16 +1848,7 @@ private fun EbookOptionsPage(
                 onCheckedChange = { scope.launch { container.settingsStore.setDuckOthers(it) } },
             )
             Ios5CellDivider()
-            Ios5SliderRow(
-                title = "站内音乐音量",
-                valueLabel = "${(ttsPrefs.ownMusicLevel * 100).toInt()}%",
-                value = ttsPrefs.ownMusicLevel,
-                range = 0.05f..1f,
-                steps = 18,
-                onValueChange = { scope.launch { container.settingsStore.setOwnMusicLevel(it) } },
-            )
-            Ios5CellDivider()
-            Ios5StaticText("一边听书一边听本站的歌时，音乐压到该比例，下一首即生效。")
+            Ios5StaticText("一边听书一边听本站的歌时，音乐压到“站内音乐音量”，可在阅读页的音乐气泡里调节，下一首即生效。")
             Ios5CellDivider()
             Ios5SliderRow(
                 title = "听书音量",
@@ -1440,58 +1863,6 @@ private fun EbookOptionsPage(
                 Ios5StaticText("系统语音超过 100% 的部分无效（设置保留，切回内置离线即生效）。")
             }
             Ios5StaticText("与歌曲介绍的语音为同一设置，音量与压低开关两处互通。")
-        }
-        ios5Section(sleepTitle) {
-            val timer = sleepTimerState
-            val countOptions = listOf(0, 5, 10, 20, 30, 45, 60, 90, 120, 240)
-            val selIdx = timer?.totalMinutes?.let { countOptions.indexOf(it) }?.takeIf { it >= 0 } ?: 0
-            // 拖动只改本地预览，抬手才落盘，避免反复重设定时
-            var draftIdx by remember(timer) { mutableFloatStateOf(selIdx.toFloat()) }
-            val draftInt = draftIdx.toInt().coerceIn(countOptions.indices)
-            Ios5SliderRow(
-                title = "倒计时",
-                valueLabel = if (draftInt == 0) "关闭" else "${countOptions[draftInt]}分钟",
-                value = draftIdx,
-                range = 0f..(countOptions.size - 1).toFloat(),
-                steps = countOptions.size - 2,
-                onValueChange = { draftIdx = it },
-                onValueChangeFinished = {
-                    val m = countOptions[draftIdx.toInt().coerceIn(countOptions.indices)]
-                    if (m == 0) container.ebookTts.cancelSleepTimer()
-                    else container.ebookTts.setSleepMinutes(m)
-                },
-            )
-            Ios5CellDivider()
-            Ios5NavRow(
-                title = "定时停止",
-                subtitle = timer?.clockLabel?.let { "$it（读完当前再停）" } ?: "未设置",
-                onClick = {
-                    val c = Calendar.getInstance()
-                    TimePickerDialog(
-                        context,
-                        { _, h, m -> container.ebookTts.setSleepAt(h, m) },
-                        c.get(Calendar.HOUR_OF_DAY),
-                        c.get(Calendar.MINUTE),
-                        true,
-                    ).show()
-                },
-            )
-            val cur = timer
-            if (cur != null) {
-                Ios5CellDivider()
-                var nowMs by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
-                LaunchedEffect(Unit) {
-                    while (container.ebookTts.sleepTimer.value != null) {
-                        delay(20_000)
-                        nowMs = android.os.SystemClock.elapsedRealtime()
-                    }
-                }
-                val remainMin = ((cur.deadlineElapsed - nowMs + 59_999) / 60_000).coerceAtLeast(1)
-                val unitName = if (ttsUnit == EbookTtsUnit.SENTENCE) "句" else "段"
-                Ios5StaticText("约 $remainMin 分钟后到点：听书读完当前${unitName}再停，音乐与站外媒体到点即停。手动停止朗读不清定时（后台一直记着），与音乐页月亮共用同一后台。")
-            } else {
-                Ios5StaticText("到点后听书读完当前再停，音乐与站外媒体到点即停。倒计时与定时二选一，后设的生效；倒计时滑到关闭可清除定时。")
-            }
         }
     }
     if (engineOpen) EbookTtsEnginePage(engines = engines, onBack = { engineOpen = false })
