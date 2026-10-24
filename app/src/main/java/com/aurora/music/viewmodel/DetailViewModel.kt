@@ -41,10 +41,24 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
 
     fun reload(kind: String, id: String) = fetch(kind, id)
 
-    private fun fetch(kind: String, id: String) {
+    /**
+     * 冷启动恢复深页（专辑/艺人/歌单）时曲库可能还没就绪，先渲染出来会是空列表。
+     * 曲库源/重载计数变化时用这个重取；同 key 重取保留旧数据，避免闪空。
+     */
+    fun loadOrReload(kind: String, id: String) {
+        if ("$kind/$id" == loadedKey) fetch(kind, id, keepData = true) else load(kind, id)
+    }
+
+    private fun fetch(kind: String, id: String, keepData: Boolean = false) {
         curKind = kind; curId = id
         viewModelScope.launch {
-            _state.update { it.copy(loading = true, data = null, loadingMore = false, canLoadMore = false, artistInfo = null) }
+            _state.update {
+                it.copy(
+                    loading = !(keepData && it.data != null),
+                    data = if (keepData) it.data else null,
+                    loadingMore = false, canLoadMore = false, artistInfo = null,
+                )
+            }
             // 艺人详情要过滤聚合全库曲目，大库放后台（报障：滚到歌曲区卡死）
             val data = withContext(Dispatchers.Default) { container.repository.detail(kind, id) }
             val canMore = data != null && data.tracks.size < data.info.songCount

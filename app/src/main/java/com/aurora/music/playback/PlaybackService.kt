@@ -42,6 +42,7 @@ import com.aurora.music.R
 import com.aurora.music.data.AudioEffectsController
 import com.aurora.music.data.AudioPrefs
 import com.aurora.music.data.DspMode
+import com.aurora.music.data.MusicPlaybackState
 import com.aurora.music.data.SignalPath
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -107,6 +108,8 @@ class PlaybackService : MediaLibraryService() {
     @Volatile private var abookPlayingNow = false
     private var abookPlaybackCb: AudioManager.AudioPlaybackCallback? = null
     @Volatile private var lastReduckMs = 0L
+    @Volatile private var lastMusicStatePublishMs = 0L
+    @Volatile private var musicQueueIds: List<String> = emptyList()
 
     // ---- 统一会话（单服务单会话）：音乐 + 听书共用一个系统会话 ----
     // 双播一旦进入（dualArmed）就保持，直到用户亲手停掉其中一路；
@@ -274,6 +277,7 @@ class PlaybackService : MediaLibraryService() {
                             }
                     }
                 }
+                publishMusicState(force = true)
             }
 
             override fun onPlaybackSuppressionReasonChanged(suppressionReason: Int) {
@@ -291,7 +295,7 @@ class PlaybackService : MediaLibraryService() {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 // App 内开音乐时书正播着 → 进入双播。
                 if (isPlaying && ebookPlaying && !dualArmed) dualArmed = true
-                publishMusicPlaying()
+                publishMusicState(force = true)
                 unifiedPlayer?.setDualMusicPlaying(isPlaying)
                 refreshArbitration()
             }
@@ -300,6 +304,12 @@ class PlaybackService : MediaLibraryService() {
                 if (events.contains(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED) ||
                     events.contains(Player.EVENT_REPEAT_MODE_CHANGED)
                 ) updateCustomLayout()
+                // 序号/随机/循环变化立即推送，音乐 UI 不等节流
+                if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION) ||
+                    events.contains(Player.EVENT_TIMELINE_CHANGED) ||
+                    events.contains(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED) ||
+                    events.contains(Player.EVENT_REPEAT_MODE_CHANGED)
+                ) publishMusicState(force = true)
                 if (events.contains(Player.EVENT_TIMELINE_CHANGED)) maybeNeutralize()
                 if (events.contains(Player.EVENT_TRACKS_CHANGED) ||
                     events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION) ||
@@ -658,17 +668,48 @@ class PlaybackService : MediaLibraryService() {
         )
     }
 
-    /** 推送站内音乐真实播放态（含缓冲期 playWhenReady，与 VM 以往的 effectivelyPlaying 同口径）。 */
-    private fun publishMusicPlaying() {
+    /**
+     * 推送站内音乐 player 的真实状态（时间线序号/进度/播放态/随机/循环）。
+     * 双播时系统会话 player 是 UnifiedPlayer（书的三窗占位时间线），
+     * 音乐 UI 只能靠这份快照区分“我播到歌单第几首”。
+     * 非强制调用按 ~150ms 节流，位置随 tick 更新；序号/播放态变化走 [force] 立即推。
+     */
+    private fun publishMusicState(force: Boolean = false) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!force && now - lastMusicStatePublishMs < 150) return
+        lastMusicStatePublishMs = now
+        // 时间线顺序只在换队列/随机重排时变，force 推送时刷新一次缓存，tick 复用。
+        if (force || musicQueueIds.size != runCatching { player.mediaItemCount }.getOrDefault(0)) {
+            refreshMusicQueueIds()
+        }
         val v = runCatching {
-            player.isPlaying || (player.playWhenReady && player.playbackState == Player.STATE_BUFFERING)
-        }.getOrDefault(false)
-        if (container.musicPlaying.value != v) container.musicPlaying.value = v
+            val md = player.currentMediaItem?.mediaMetadata
+            MusicPlaybackState(
+                mediaId = player.currentMediaItem?.mediaId.orEmpty(),
+                queueIds = musicQueueIds,
+                title = md?.title?.toString().orEmpty(),
+                artist = md?.artist?.toString().orEmpty(),
+                artUri = md?.artworkUri?.toString().orEmpty(),
+                index = if (player.mediaItemCount > 0) player.currentMediaItemIndex.coerceAtLeast(0) else 0,
+                positionMs = player.currentPosition.coerceAtLeast(0),
+                playing = player.isPlaying || (player.playWhenReady && player.playbackState == Player.STATE_BUFFERING),
+                shuffle = player.shuffleModeEnabled,
+                repeatMode = player.repeatMode,
+            )
+        }.getOrDefault(MusicPlaybackState())
+        if (container.musicState.value != v) container.musicState.value = v
+    }
+
+    /** 缓存音乐 player 时间线的 mediaId 顺序（含随机后的真实顺序）。 */
+    private fun refreshMusicQueueIds() {
+        musicQueueIds = runCatching {
+            List(player.mediaItemCount) { i -> player.getMediaItemAt(i).mediaId }
+        }.getOrDefault(emptyList())
     }
 
     private fun tickAudio() {
-        // 站内音乐真实播放态（音乐选项卡/气泡的播放暂停图标用；双播时会话 player 是 UnifiedPlayer）
-        publishMusicPlaying()
+        // 站内音乐真实状态（音乐选项卡/气泡的序号、进度、播放暂停都用它；双播时会话 player 是书）
+        publishMusicState()
         // v0.6 GR meters for the Dynamics UI (cheap volatile reads)
         container.dspMeters.value = com.aurora.music.data.DspMeters(auroraDsp.compGrDb, auroraDsp.limGrDb)
         abookActive = player.currentMediaItem?.mediaId?.startsWith(
@@ -787,7 +828,68 @@ class PlaybackService : MediaLibraryService() {
                 dualArmed = false
             }
         }
+        musicSoloIfBookIdle()
         refreshArbitration()
+    }
+
+    /**
+     * App 要从控制器下发音乐队列（点歌/开有声书）前的接管：
+     * 停书后会话按“粘滞”策略还停在 [UnifiedPlayer]（书的占位时间线），
+     * 此时 setMediaItems 会落到书上、随后的 play 还会被当成“继续朗读”而开口读书。
+     * 先把会话切回音乐 player，命令随之落到真正的音乐 ExoPlayer；
+     * 若书在播（双播），保留 dualArmed，起播后 onIsPlayingChanged 会仲裁回 UnifiedPlayer。
+     */
+    private fun takeSessionForMusic() {
+        val session = mediaSession ?: return
+        if (!container.ebookTts.playing.value) {
+            // 书没在播：音乐独占语义，退出双播态并释放联合暂停快照（按播放键不再带起朗读）。
+            dualArmed = false
+            externalSnapshot = null
+        }
+        if (runCatching { session.player }.getOrNull() === player) return
+        runCatching { session.setPlayer(player) }
+        updateCustomLayout()
+    }
+
+    /** 书没在播时的音乐操作：会话回音乐 player（书在播就保持双播，交给仲裁）。 */
+    private fun musicSoloIfBookIdle() {
+        if (container.ebookTts.playing.value) return
+        takeSessionForMusic()
+    }
+
+    // ---- 音乐 UI（选项卡/阅读页音乐气泡）的走带键：永远操作站内音乐 player ----
+    // 双播时会话 player 是 UnifiedPlayer（书），直接下发 seek/next 会被路由到朗读上。
+
+    private fun musicJumpTo(index: Int) {
+        if (index !in 0 until player.mediaItemCount) return
+        runCatching {
+            player.seekTo(index, 0)
+            player.play()
+        }
+        musicSoloIfBookIdle()
+        publishMusicState(force = true)
+    }
+
+    private fun musicNext() {
+        runCatching { player.seekToNextMediaItem() }
+        musicSoloIfBookIdle()
+        publishMusicState(force = true)
+    }
+
+    private fun musicPrevious() {
+        runCatching {
+            if (player.currentPosition > 4000) player.seekTo(0) else player.seekToPreviousMediaItem()
+        }
+        musicSoloIfBookIdle()
+        publishMusicState(force = true)
+    }
+
+    private fun musicSeekTo(fraction: Float) {
+        val dur = player.duration
+        if (fraction < 0f || dur <= 0) return
+        runCatching { player.seekTo((fraction.coerceIn(0f, 1f) * dur).toLong()) }
+        musicSoloIfBookIdle()
+        publishMusicState(force = true)
     }
 
     /** 外部瞬态结束（来电挂断）：按快照双恢复，一次性。 */
@@ -1149,6 +1251,13 @@ class PlaybackService : MediaLibraryService() {
                 .add(SessionCommand(CMD_REPEAT, Bundle.EMPTY))
                 .add(SessionCommand(CMD_SLEEP_FADE, Bundle.EMPTY))
                 .add(SessionCommand(CMD_MUSIC_TOGGLE, Bundle.EMPTY))
+                .add(SessionCommand(CMD_MUSIC_PAUSE, Bundle.EMPTY))
+                .add(SessionCommand(CMD_MUSIC_PLAY, Bundle.EMPTY))
+                .add(SessionCommand(CMD_MUSIC_SOLO, Bundle.EMPTY))
+                .add(SessionCommand(CMD_MUSIC_JUMP, Bundle.EMPTY))
+                .add(SessionCommand(CMD_MUSIC_NEXT, Bundle.EMPTY))
+                .add(SessionCommand(CMD_MUSIC_PREV, Bundle.EMPTY))
+                .add(SessionCommand(CMD_MUSIC_SEEK, Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(sessionCommands)
@@ -1168,6 +1277,22 @@ class PlaybackService : MediaLibraryService() {
                 )
                 CMD_REPEAT -> cycleRepeat()
                 CMD_MUSIC_TOGGLE -> toggleMusicFromApp()
+                CMD_MUSIC_PAUSE -> {
+                    runCatching { player.pause() }
+                    publishMusicState(force = true)
+                }
+                CMD_MUSIC_PLAY -> {
+                    runCatching { player.play() }
+                    musicSoloIfBookIdle()
+                    publishMusicState(force = true)
+                }
+                CMD_MUSIC_SOLO -> takeSessionForMusic()
+                CMD_MUSIC_JUMP ->
+                    musicJumpTo(customCommand.customExtras.getInt("index", -1))
+                CMD_MUSIC_NEXT -> musicNext()
+                CMD_MUSIC_PREV -> musicPrevious()
+                CMD_MUSIC_SEEK ->
+                    musicSeekTo(customCommand.customExtras.getFloat("fraction", -1f))
                 CMD_SLEEP_FADE -> {
                     val ms = customCommand.customExtras.getInt("fadeMs", 0)
                     if (ms > 0) { sleepFadeMs = ms; sleepFadeStartMs = android.os.SystemClock.elapsedRealtime(); sleepFadeActive = true }
@@ -1658,7 +1783,7 @@ class PlaybackService : MediaLibraryService() {
         unifiedPlayer = null
         runCatching { fadePlayer?.release() }
         fadePlayer = null
-        runCatching { container.musicPlaying.value = false }
+        runCatching { container.musicState.value = MusicPlaybackState() }
         runCatching { player.release() }
         super.onDestroy()
     }
@@ -1669,6 +1794,13 @@ class PlaybackService : MediaLibraryService() {
         const val CMD_SLEEP_FADE = "com.aurora.music.SLEEP_FADE"
         const val CMD_ABOOK_START = "com.aurora.music.ABOOK_START"
         const val CMD_MUSIC_TOGGLE = "com.aurora.music.MUSIC_TOGGLE"
+        const val CMD_MUSIC_PAUSE = "com.aurora.music.MUSIC_PAUSE"
+        const val CMD_MUSIC_PLAY = "com.aurora.music.MUSIC_PLAY"
+        const val CMD_MUSIC_SOLO = "com.aurora.music.MUSIC_SOLO"
+        const val CMD_MUSIC_JUMP = "com.aurora.music.MUSIC_JUMP"
+        const val CMD_MUSIC_NEXT = "com.aurora.music.MUSIC_NEXT"
+        const val CMD_MUSIC_PREV = "com.aurora.music.MUSIC_PREV"
+        const val CMD_MUSIC_SEEK = "com.aurora.music.MUSIC_SEEK"
         const val ACTION_PLAY_PAUSE = "com.aurora.music.action.PLAY_PAUSE"
         const val ACTION_NEXT = "com.aurora.music.action.NEXT"
         const val ACTION_PREV = "com.aurora.music.action.PREV"

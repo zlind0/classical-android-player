@@ -297,7 +297,11 @@ fun Ios5Detail(
     onShuffleCollection: (kind: String, id: String) -> Unit,
 ) {
     val vm: DetailViewModel = viewModel()
-    LaunchedEffect(kind, id) { vm.load(kind, id) }
+    // 冷启动恢复深页时曲库可能还没就绪：曲库源/重载计数一变就重取，避免停在空列表。
+    val detailContainer = (LocalContext.current.applicationContext as AuroraApplication).container
+    val activeSource by detailContainer.librarySource.collectAsStateWithLifecycle(initialValue = LibrarySource.MEDIastore)
+    val libraryReload by detailContainer.libraryReload.collectAsStateWithLifecycle(initialValue = 0)
+    LaunchedEffect(kind, id, activeSource, libraryReload) { vm.loadOrReload(kind, id) }
     val st by vm.state.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = title.ifBlank { st.data?.info?.title ?: "" }, onBack = onBack, onSearch = onSearch)

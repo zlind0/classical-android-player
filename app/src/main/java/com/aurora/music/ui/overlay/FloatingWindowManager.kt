@@ -28,6 +28,7 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
+import com.aurora.music.AuroraApplication
 import com.aurora.music.MainActivity
 import com.aurora.music.data.FloatingPrefs
 import com.aurora.music.data.MusicRepository
@@ -59,6 +60,7 @@ class FloatingWindowManager(
     private val repository: MusicRepository,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val container by lazy { (app as AuroraApplication).container }
     private val wm: WindowManager = app.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val density: Float get() = app.resources.displayMetrics.density
 
@@ -87,6 +89,10 @@ class FloatingWindowManager(
     }
 
     init {
+        scope.launch {
+            // 双播/停书粘滞时音乐状态不走会话 player，跟随服务快照刷新（标题/播放态/随机循环）。
+            container.musicState.collect { if (view != null) syncState() }
+        }
         scope.launch {
             settings.floatingPrefs.collect { prefs ->
                 val prev = lastPrefs
@@ -145,7 +151,8 @@ class FloatingWindowManager(
             )
             if (!inBackground || view != null || dismissed) return@launch
             if (c == null) return@launch
-            if (c.currentMediaItem == null && c.mediaItemCount == 0) return@launch
+            // 以站内音乐 player 为准：停书粘滞时会话时间线是书，别把电子书当成正在播的歌。
+            if (container.musicState.value.mediaId.isBlank()) return@launch
             show(prefs)
         }
     }
@@ -178,28 +185,31 @@ class FloatingWindowManager(
 
     private fun syncState() {
         val c = controller ?: return
+        // 双播/停书粘滞时会话 player 是 UnifiedPlayer（书），音乐信息以服务快照为准。
+        val ms = container.musicState.value
+        val fromMusic = ms.mediaId.isNotBlank()
         val item = c.currentMediaItem
         // 后台时队列被清空 → 关窗
-        if (item == null && view != null) {
+        if (!fromMusic && item == null && view != null) {
             hide()
             return
         }
         val md = item?.mediaMetadata
-        val repeat = when (c.repeatMode) {
+        val repeat = when (if (fromMusic) ms.repeatMode else c.repeatMode) {
             Player.REPEAT_MODE_ONE -> RepeatMode.ONE
             Player.REPEAT_MODE_ALL -> RepeatMode.ALL
             else -> RepeatMode.OFF
         }
-        val id = item?.mediaId.orEmpty()
+        val id = if (fromMusic) ms.mediaId else item?.mediaId.orEmpty()
         _ui.update {
             it.copy(
-                title = md?.title?.toString().orEmpty(),
-                artist = md?.artist?.toString().orEmpty(),
-                artUri = md?.artworkUri?.toString().orEmpty(),
-                isPlaying = c.isPlaying,
-                shuffle = c.shuffleModeEnabled,
+                title = if (fromMusic) ms.title else md?.title?.toString().orEmpty(),
+                artist = if (fromMusic) ms.artist else md?.artist?.toString().orEmpty(),
+                artUri = if (fromMusic) ms.artUri else md?.artworkUri?.toString().orEmpty(),
+                isPlaying = if (fromMusic) ms.playing else c.isPlaying,
+                shuffle = if (fromMusic) ms.shuffle else c.shuffleModeEnabled,
                 repeat = repeat,
-                hasTrack = item != null,
+                hasTrack = fromMusic || item != null,
             )
         }
         if (id != lastSongId) {
@@ -264,7 +274,7 @@ class FloatingWindowManager(
                     onZoom = { factor -> zoomBy(factor) },
                     onZoomEnd = { persistSize() },
                     onTogglePlay = { togglePlay() },
-                    onNext = { controller?.seekToNextMediaItem() },
+                    onNext = { next() },
                     onPrevious = { prev() },
                     onToggleLike = { toggleLike() },
                     onToggleShuffle = { toggleShuffle() },
@@ -360,8 +370,18 @@ class FloatingWindowManager(
     }
 
     private fun prev() {
-        val c = controller ?: return
-        if (c.currentPosition > 4000) c.seekTo(0) else c.seekToPreviousMediaItem()
+        // 只动站内音乐：双播时会话 player 是书，直接 seekToPrevious 会跳朗读段落。
+        controller?.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_MUSIC_PREV, Bundle.EMPTY),
+            Bundle.EMPTY,
+        )
+    }
+
+    private fun next() {
+        controller?.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_MUSIC_NEXT, Bundle.EMPTY),
+            Bundle.EMPTY,
+        )
     }
 
     private fun toggleShuffle() {

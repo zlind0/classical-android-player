@@ -282,9 +282,37 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             container.settingsStore.audiobookPrefs.collect { abookSeekSec = it.seekSec }
         }
         viewModelScope.launch {
-            // 站内音乐真实播放态（双播时会话 player 是书，UI 图标仍要显示音乐的状态）
-            container.musicPlaying.collect { p ->
-                _state.update { if (it.isPlaying == p) it else it.copy(isPlaying = p) }
+            // 站内音乐真实状态（双播时会话 player 是书，音乐 UI 的当前曲/序号/进度/播放态都看这份）
+            container.musicState.collect { ms ->
+                if (ms.mediaId.isBlank()) return@collect
+                val cur = songById[ms.mediaId]
+                if (cur != null && cur.id != lastKeyInfoId) {
+                    lastKeyInfoId = cur.id
+                    lastKeyInfo = runCatching { container.sonicEngine.keyInfo(cur.id) }.getOrNull()
+                }
+                val ki = lastKeyInfo
+                val abookIdx = _state.value.abookId?.let { abookOrder.indexOf(ms.mediaId).takeIf { i -> i >= 0 } }
+                // 队列顺序以音乐 player 时间线为准（随机是物理重排，双播时会话时间线是书的占位，不能拿来用）
+                val mq = ms.queueIds.mapNotNull { songById[it] }
+                val queue = if (ms.queueIds.isNotEmpty() && mq.size == ms.queueIds.size) mq else null
+                _state.update {
+                    it.copy(
+                        current = cur ?: it.current,
+                        isPlaying = ms.playing,
+                        positionSec = (ms.positionMs / 1000f).coerceAtLeast(0f),
+                        queue = queue ?: it.queue,
+                        currentIndex = abookIdx ?: ms.index,
+                        shuffle = ms.shuffle,
+                        repeat = when (ms.repeatMode) {
+                            Player.REPEAT_MODE_ONE -> RepeatMode.ONE
+                            Player.REPEAT_MODE_ALL -> RepeatMode.ALL
+                            else -> RepeatMode.OFF
+                        },
+                        bpm = ki?.bpm ?: 0,
+                        camelot = ki?.camelot ?: "",
+                        keyName = ki?.name ?: "",
+                    )
+                }
             }
         }
     }
@@ -478,6 +506,23 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             while (true) {
                 delay(200)
                 val c = controller ?: continue
+                // 双播时会话 c 是书：进度只能取音乐快照，否则会被书的占位 0 位覆盖。
+                val ms = container.musicState.value
+                if (ms.mediaId.isNotBlank()) {
+                    if (ms.playing) {
+                        val posSec = (ms.positionMs / 1000f).coerceAtLeast(0f)
+                        _state.update { it.copy(positionSec = posSec) }
+                        maybeNowPlaying()
+                        recordIfPlayed(posSec)
+                        val now = System.currentTimeMillis()
+                        if (now - lastPersistMs > 2000) {
+                            lastPersistMs = now
+                            persistQueue()
+                            persistAbookNow()
+                        }
+                    }
+                    continue
+                }
                 if (c.effectivelyPlaying) {
                     val posSec = (c.currentPosition / 1000f).coerceAtLeast(0f)
                     _state.update { it.copy(positionSec = posSec) }
@@ -496,8 +541,13 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun syncFromController() {
         val c = controller ?: return
+        // 双播时会话 player 是 UnifiedPlayer（书的三窗占位），音乐侧的真实序号/进度看服务快照。
+        val ms = container.musicState.value
+        val hasMusic = ms.mediaId.isNotBlank()
         val mediaId = c.currentMediaItem?.mediaId
-        val cur = mediaId?.let { songById[it] } ?: _state.value.current
+        val cur = (if (hasMusic) songById[ms.mediaId] else null)
+            ?: mediaId?.let { songById[it] }
+            ?: _state.value.current
         val q = (0 until c.mediaItemCount).mapNotNull { i -> songById[c.getMediaItemAt(i).mediaId] }
         if (cur.id != lastKeyInfoId) { lastKeyInfoId = cur.id; lastKeyInfo = runCatching { container.sonicEngine.keyInfo(cur.id) }.getOrNull() }
         val ki = lastKeyInfo
@@ -505,16 +555,17 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         _state.update {
             it.copy(
                 current = cur,
-                isPlaying = container.musicPlaying.value,
-                shuffle = c.shuffleModeEnabled,
-                repeat = when (c.repeatMode) {
+                isPlaying = if (hasMusic) ms.playing else c.effectivelyPlaying,
+                shuffle = if (hasMusic) ms.shuffle else c.shuffleModeEnabled,
+                repeat = when (if (hasMusic) ms.repeatMode else c.repeatMode) {
                     Player.REPEAT_MODE_ONE -> RepeatMode.ONE
                     Player.REPEAT_MODE_ALL -> RepeatMode.ALL
                     else -> RepeatMode.OFF
                 },
-                positionSec = (c.currentPosition / 1000f).coerceAtLeast(0f),
+                positionSec = if (hasMusic) (ms.positionMs / 1000f).coerceAtLeast(0f)
+                    else (c.currentPosition / 1000f).coerceAtLeast(0f),
                 queue = if (q.isNotEmpty()) q else it.queue,
-                currentIndex = abookIdx ?: c.currentMediaItemIndex.coerceAtLeast(0),
+                currentIndex = abookIdx ?: if (hasMusic) ms.index else c.currentMediaItemIndex.coerceAtLeast(0),
                 bpm = ki?.bpm ?: 0,
                 camelot = ki?.camelot ?: "",
                 keyName = ki?.name ?: "",
@@ -603,6 +654,9 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         val c = controller ?: return
         if (songs.isEmpty()) return
         container.haptic()
+        // 先把会话切回音乐 player：停书后会话可能还粘在 UnifiedPlayer（书的占位时间线）上，
+        // 直接 setMediaItems 会落到书上，随后的 play 还会被当成“继续朗读”而开口读书。
+        takeSessionForMusic(c)
         clearAbook()
         playingAccountKey = container.currentAccountKey()
         songById = songs.associateBy { it.id }
@@ -645,6 +699,8 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             pendingAbook = null
             if (songs.isEmpty()) return@launch
             container.haptic()
+            // 同上：有声书也走音乐 player，先把会话从书的占位时间线切回来。
+            takeSessionForMusic(c)
             playingAccountKey = container.currentAccountKey()
             songById = songs.associateBy { it.id }
             abookOrder = songs.map { it.id }
@@ -900,6 +956,8 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
     fun shufflePlay(songs: List<Song>) {
         val c = controller ?: return
         if (songs.isEmpty()) return
+        // 同 playAll：先把会话切回音乐 player，队列命令才不会落到书的占位时间线。
+        takeSessionForMusic(c)
         clearAbook()
         playingAccountKey = container.currentAccountKey()
         songById = songs.associateBy { it.id }
@@ -939,12 +997,13 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun jumpTo(index: Int) {
         val c = controller ?: return
+        if (index < 0) return
         container.haptic()
-        if (index in 0 until c.mediaItemCount) {
-            c.seekTo(index, 0)
-            c.play()
-            syncFromController()
-        }
+        // 走服务：双播时会话 player 是书，直接 seek 会跳到朗读占位时间线上。
+        c.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_MUSIC_JUMP, android.os.Bundle().apply { putInt("index", index) }),
+            android.os.Bundle.EMPTY,
+        )
     }
 
     fun removeFromQueue(index: Int) {
@@ -1002,30 +1061,64 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 只暂停站内音乐（歌曲介绍朗读时压低音乐用；会话可能正承载着书，不能直接下发 pause）。 */
     fun pause() {
         persistAbookNow()
-        controller?.pause()
+        controller?.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_MUSIC_PAUSE, android.os.Bundle.EMPTY),
+            android.os.Bundle.EMPTY,
+        )
     }
 
+    /** 只恢复站内音乐（绝不带起电子书朗读）。 */
     fun play() {
-        controller?.play()
+        controller?.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_MUSIC_PLAY, android.os.Bundle.EMPTY),
+            android.os.Bundle.EMPTY,
+        )
+    }
+
+    /**
+     * 让会话先切回音乐 player 再下发队列命令。
+     * 停书后会话可能还粘在承载朗读的 UnifiedPlayer 上，此时 setMediaItems 会落到书的
+     * 三窗占位时间线，随后的 play 还会被当成“继续朗读”而开始朗读。
+     */
+    private fun takeSessionForMusic(c: MediaController) {
+        runCatching {
+            c.sendCustomCommand(
+                SessionCommand(PlaybackService.CMD_MUSIC_SOLO, android.os.Bundle.EMPTY),
+                android.os.Bundle.EMPTY,
+            )
+        }
     }
 
     fun seekTo(fraction: Float) {
         val c = controller ?: return
-        val dur = _state.value.durationSec
-        if (dur > 0) c.seekTo((fraction.coerceIn(0f, 1f) * dur * 1000).toLong())
+        // 服务侧按音乐 player 的真实时长定位（会话是书时不能用书的占位时长）
+        c.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_MUSIC_SEEK, android.os.Bundle().apply {
+                putFloat("fraction", fraction.coerceIn(0f, 1f))
+            }),
+            android.os.Bundle.EMPTY,
+        )
     }
 
     fun next() {
         container.haptic()
-        controller?.seekToNextMediaItem()
+        controller?.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_MUSIC_NEXT, android.os.Bundle.EMPTY),
+            android.os.Bundle.EMPTY,
+        )
     }
 
     fun previous() {
         val c = controller ?: return
         container.haptic()
-        if (c.currentPosition > 4000) c.seekTo(0) else c.seekToPreviousMediaItem()
+        // 4 秒内重播本曲的判定在服务侧按音乐 player 的真实进度做
+        c.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_MUSIC_PREV, android.os.Bundle.EMPTY),
+            android.os.Bundle.EMPTY,
+        )
     }
 
     fun toggleShuffle() = sendShuffle(-1)
@@ -1041,11 +1134,11 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun cycleRepeat() {
         val c = controller ?: return
-        c.repeatMode = when (c.repeatMode) {
-            Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
-            Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
-            else -> Player.REPEAT_MODE_OFF
-        }
+        // 双播时会话是书；循环模式必须改站内音乐 player（服务侧 CMD_REPEAT）。
+        c.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_REPEAT, android.os.Bundle.EMPTY),
+            android.os.Bundle.EMPTY,
+        )
     }
 
     fun toggleLikeCurrent() = toggleLike(_state.value.current.id)

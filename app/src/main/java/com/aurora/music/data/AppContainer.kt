@@ -25,6 +25,26 @@ import java.io.File
 // v0.6 gain-reduction meters (plan §36), polled from the DSP each tick
 data class DspMeters(val compGrDb: Float = 0f, val limGrDb: Float = 0f)
 
+/**
+ * 站内音乐 player 的真实播放状态（PlaybackService 推送）。
+ * 双播时系统会话 player 会被换成 UnifiedPlayer 承载朗读，它的时间线/序号都是书的占位，
+ * 音乐选项卡与阅读页音乐气泡必须看这一份，否则会把书的占位序号当成歌单序号。
+ */
+data class MusicPlaybackState(
+    val mediaId: String = "",
+    /** 音乐 player 时间线的 mediaId 全表（顺序即播放顺序；双播时 UI 队列以此为准）。 */
+    val queueIds: List<String> = emptyList(),
+    val title: String = "",
+    val artist: String = "",
+    val artUri: String = "",
+    val index: Int = 0,
+    val positionMs: Long = 0,
+    val playing: Boolean = false,
+    val shuffle: Boolean = false,
+    /** androidx.media3.common.Player.REPEAT_MODE_* */
+    val repeatMode: Int = 0,
+)
+
 // bitPerfect true only when samples reach output untouched float passthrough no dsp/mixing
 data class SignalPath(
     val active: Boolean = false,
@@ -291,12 +311,8 @@ class AppContainer(context: Context) {
 
     val dspMeters = MutableStateFlow(DspMeters())
 
-    /**
-     * 站内音乐 player 的实际播放态（PlaybackService 推送）：
-     * 双播时系统会话 player 是 UnifiedPlayer，音乐选项卡的播放/暂停图标必须看这一份，
-     * 否则书在朗读时会被误显示成“音乐正在播”。
-     */
-    val musicPlaying = MutableStateFlow(false)
+    /** 站内音乐 player 的时间线位置/播放态（见 [MusicPlaybackState]）。 */
+    val musicState = MutableStateFlow(MusicPlaybackState())
 
     private val _sessionReady = MutableStateFlow<Boolean?>(null)
     val sessionReady: StateFlow<Boolean?> = _sessionReady.asStateFlow()
