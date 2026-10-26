@@ -64,7 +64,7 @@ class InternalExportSession(
     private val pitch: Float,
 ) : ExportWorkerSession {
     private val engine = MsEmbeddedEngine(context.applicationContext)
-    private var session: MsEmbeddedEngine.Session = engine.openSession(voice, rate, pitch)
+    private var session: MsEmbeddedEngine.Session = engine.openSession(voice)
 
     override suspend fun synthOne(
         batch: String,
@@ -98,6 +98,8 @@ class InternalExportSession(
         if (cancelled.get()) return@withContext frames
         fun once(): ByteArray = session.synthBatch(
             batch,
+            rate,
+            pitch,
             onPcmChunk = { chunk ->
                 if (chunk.isNotEmpty()) {
                     writeMono(chunk, chunk.size)

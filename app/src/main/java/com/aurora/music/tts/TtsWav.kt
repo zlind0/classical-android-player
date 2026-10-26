@@ -64,6 +64,23 @@ object TtsWav {
     }
 
     /**
+     * 前置静音（毫秒，16bit）。
+     *
+     * ExoPlayer 的 DefaultAudioSink 每次 flush 之后会把输出流的前 20ms 线性淡入
+     * （`maybeRampUpVolume` / `PcmAudioUtil.rampUpVolume`，防爆音）；听书每句是一个独立
+     * media item，必然 flush，于是每句开头都被削一个斜坡，听起来就是「每句都有淡入」。
+     * 给每段 PCM 前置 25ms 静音，让斜坡正好吃掉静音，语音从满幅度开始。
+     */
+    fun prependSilence16(pcm: ByteArray, sampleRate: Int, channels: Int, ms: Int): ByteArray {
+        if (ms <= 0) return pcm
+        val bytes = sampleRate * ms / 1000 * channels * 2
+        if (bytes <= 0) return pcm
+        val out = ByteArray(bytes + pcm.size)
+        pcm.copyInto(out, bytes)
+        return out
+    }
+
+    /**
      * 归一化到 48kHz 立体声 16bit（播放链 DSP 只吃这个格式）：
      * 8bit 无符号→16bit；单声道→双声道复制；任意采样率→线性插值重采样。
      */

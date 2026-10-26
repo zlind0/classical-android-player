@@ -325,7 +325,7 @@ class EbookTtsController(context: Context) {
                 idx++
                 continue
             }
-            val stream = tts.openStream(TtsOwner.EBOOK)
+            val stream = tts.openStream(TtsOwner.EBOOK, restartPlayer = first)
             _position.value = para
             positionIdx = idx
             _sectionTitle.value = sectionTitleFor(para.chapter, para.block)

@@ -61,6 +61,12 @@ fun ttsEffectiveGain(prefs: UnifiedTtsPrefs): Float =
     if (prefs.isInternal) prefs.volume.coerceIn(0.2f, 2f)
     else prefs.volume.coerceIn(0.2f, 2f).coerceAtMost(1f)
 
+/**
+ * 每段 TTS WAV 前置静音毫秒数：吃掉 ExoPlayer DefaultAudioSink 每次 flush 后的 20ms 淡入斜坡
+ * （见 [TtsWorker.encodeWav48kStereo]）。留 5ms 余量给重采样/整数帧取整。
+ */
+private const val LEAD_IN_MS = 25
+
 /** 系统音色精简描述（脱离 Android Voice 类型，纯函数可单测）。 */
 data class VoiceId(val name: String, val language: String, val country: String)
 
@@ -188,13 +194,17 @@ class TtsWorker(
 
     // ---- 对外：流 ----
 
-    /** 开新流：废掉同 owner 旧流并停其播放器。调用方切段/换句/重播时调它，旧流的 append/await 自动失效。 */
-    suspend fun openStream(owner: TtsOwner): TtsStream {
+    /**
+     * 开新流：废掉同 owner 旧流。调用方切段/换句/重播时调它，旧流的 append/await 自动失效。
+     * @param restartPlayer 是否顺带停播放器。连续朗读的后续句子传 false：
+     *   队列由 [EbookTtsPlayer.appendWav] 续接，AudioTrack / DSP 链不重建（Phase 2）。
+     */
+    suspend fun openStream(owner: TtsOwner, restartPlayer: Boolean = true): TtsStream {
         val gen = gens.next(owner)
         stopFlags[owner]?.set(false)
-        withContext(Dispatchers.Main) { playerOf(owner).stop() }
+        if (restartPlayer) withContext(Dispatchers.Main) { playerOf(owner).stop() }
         synchronized(waitLock) { playerGen[owner] = gen }
-        return TtsStream(owner, gen, this)
+        return TtsStream(owner, gen, this, restartPlayer)
     }
 
     /** 停指定 owner（null = 全停）：代际作废 + 引擎急停 + 播放器停 + 唤醒等待者。任意线程可调。 */
@@ -205,6 +215,8 @@ class TtsWorker(
             stopFlags[o]?.set(true)
             sysSlots[o]?.let { runCatching { it.tts.stop() } }
         }
+        // 内置引擎：同时打断 native 侧正在阻塞的 SpeakSsml，停止键不必等当前块合完
+        msEngine.requestStop()
         scope.launch {
             targets.forEach { o ->
                 runCatching { playerOf(o).stop() }
@@ -246,6 +258,9 @@ class TtsWorker(
 
     fun clearMemory() = cache.clear()
 
+    /** 释放内置引擎的常驻模型（导出抢内存 / 切回系统引擎时用）。 */
+    fun releaseSynthSession() = msEngine.releaseSession()
+
     /** 预热内存缓存（下一段后台合成，只写缓存不进播放器）。 */
     suspend fun warmCache(text: String, prefs: UnifiedTtsPrefs, owner: TtsOwner, gen: Long) {
         if (!isSpeakable(text)) return
@@ -262,6 +277,7 @@ class TtsWorker(
         owner: TtsOwner,
         gen: Long,
         streamStarted: Boolean,
+        restartPlayer: Boolean,
         text: String,
         prefs: UnifiedTtsPrefs,
     ): Pair<TtsAppendResult, Boolean> {
@@ -287,7 +303,9 @@ class TtsWorker(
                 if (!isCurrent(owner, gen)) throw CancellationException("tts superseded")
                 val p = playerOf(owner)
                 if (!started) {
-                    p.startWavStream(wav)
+                    // 只有「重新开播」（用户点播放/换段跳转）才 stop+重建队列；
+                    // 连续朗读的下一句直接续接队列，避免每句销毁/重建 AudioTrack 与 DSP 链。
+                    if (restartPlayer) p.startWavStream(wav) else p.appendWav(wav)
                     started = true
                     startedAt = SystemClock.elapsedRealtime()
                     synchronized(waitLock) { playerGen[owner] = gen }
@@ -353,19 +371,37 @@ class TtsWorker(
             }
         }
         val flag = stopFlags[owner] ?: AtomicBoolean(false)
-        // 内置引擎恒返回 48k 单声道（原生 48k；老模型回落 24k+带限内插），此处只做单声道→立体声
-        val mono48k = msEngine.synthesizeStreaming(
+        val gain = ttsEffectiveGain(prefs)
+        // 内置引擎恒返回 48k 单声道（原生 48k；老模型回落 24k+带限内插），此处只做单声道→立体声。
+        // 合成跑在引擎的专用单线程上（会话复用，不再每句建/销 SpeechSynthesizer）。
+        val mono48k = msEngine.synth(
             text, voice,
             prefs.rate.coerceIn(0.5f, 2f),
             prefs.pitch.coerceIn(0.5f, 2f),
             isStopped = { flag.get() },
         )
         if (mono48k.isEmpty() || flag.get()) return null
-        var stereo48k = TtsWav.mono48kToStereo48k(mono48k)
-        if (stereo48k.isEmpty()) return null
-        stereo48k = TtsWav.applyGainStereo16(stereo48k, ttsEffectiveGain(prefs))
-        return TtsWav.encodeWav(48000, 2, 16, stereo48k)
+        // 后处理（转换/增益/封头）留在公共线程池：压到 tts-synth 那条单线程上会把下一句合成挡住。
+        return withContext(Dispatchers.Default) {
+            val stereo48k = TtsWav.mono48kToStereo48k(mono48k)
+            if (stereo48k.isEmpty()) return@withContext null
+            val gained = TtsWav.applyGainStereo16(stereo48k, gain)
+            encodeWav48kStereo(gained)
+        }
     }
+
+    /**
+     * 48k 立体声 16bit PCM → WAV，并前置 [LEAD_IN_MS] 静音。
+     *
+     * 前置静音是给 ExoPlayer 的：DefaultAudioSink 每次 flush 后会把前 20ms 线性淡入
+     * （`maybeRampUpVolume`），听书每句一个 media item 必然 flush，于是每句开头都被削一下，
+     * 听感就是「每句都有淡入」。静音垫在前面，斜坡只作用在静音上。
+     */
+    private fun encodeWav48kStereo(pcm48: ByteArray): ByteArray =
+        TtsWav.encodeWav(
+            48000, 2, 16,
+            TtsWav.prependSilence16(pcm48, 48000, 2, LEAD_IN_MS),
+        )
 
     private suspend fun synthSystem(text: String, prefs: UnifiedTtsPrefs, owner: TtsOwner): ByteArray? {
         val tts = ensureSysTts(owner, prefs.systemEnginePkg) ?: throw IllegalStateException("系统 TTS 不可用")
@@ -419,7 +455,7 @@ class TtsWorker(
             if (norm.isEmpty()) return null
             // 系统引擎无音量参数：>100% 部分砍掉（ttsEffectiveGain 已钳位），设置值保留
             norm = TtsWav.applyGainStereo16(norm, ttsEffectiveGain(prefs))
-            return TtsWav.encodeWav(48000, 2, 16, norm)
+            return encodeWav48kStereo(norm)
         } finally {
             withContext(Dispatchers.IO) { runCatching { tmp.delete() } }
         }
@@ -455,11 +491,13 @@ class TtsWorker(
  * 同 owner 的一次播报流：首个 append 首块即开播，后续追块；
  * [append] 只等合成+入队（不等播完，播与合流水），[awaitDone] 等播完。
  * 切段/换句时调用方丢掉旧流、[TtsWorker.openStream] 开新流，旧流自动失效。
+ * [restartPlayer] = false 表示接在上一条流后面播（连续朗读的下一句），播放器队列不重建。
  */
 class TtsStream internal constructor(
     private val owner: TtsOwner,
     private val gen: Long,
     private val worker: TtsWorker,
+    private val restartPlayer: Boolean = true,
 ) {
     private var started = false
     private var enqueued = false
@@ -468,7 +506,7 @@ class TtsStream internal constructor(
     val generation: Long get() = gen
 
     suspend fun append(text: String, prefs: UnifiedTtsPrefs): TtsAppendResult {
-        val (res, st) = worker.appendInternal(owner, gen, started, text, prefs)
+        val (res, st) = worker.appendInternal(owner, gen, started, restartPlayer, text, prefs)
         started = st
         if (res.totalMs > 0) enqueued = true
         return res

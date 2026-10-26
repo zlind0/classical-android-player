@@ -62,6 +62,14 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Debug 与手机上正在用的 release 共存：独立 package（com.zlind0.ipodmusic.debug）、
+            // 独立数据目录、独立桌面图标名，避免 INSTALL_FAILED_UPDATE_INCOMPATIBLE /
+            // signature mismatch 这类「包名冲突」。
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            resValue("string", "app_name", "iPod Debug")
+        }
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("release")

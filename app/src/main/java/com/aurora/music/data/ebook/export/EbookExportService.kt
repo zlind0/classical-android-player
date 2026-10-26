@@ -65,6 +65,12 @@ object EbookExportRunner {
         _progress.value = null
         _doneRootId.value = null
         cancelled.set(false)
+        // 导出自己会按线程数各开一份内置语音模型；先把听书那条常驻会话放掉，
+        // 免得「103MB 常驻 + N 份导出模型」叠在一起。
+        runCatching {
+            (context.applicationContext as? com.aurora.music.AuroraApplication)
+                ?.container?.ttsWorker?.releaseSynthSession()
+        }
         try {
             val res = EbookExporter(context).export(
                 job.bookTitle, job.segments, job.settings, job.outRoot,

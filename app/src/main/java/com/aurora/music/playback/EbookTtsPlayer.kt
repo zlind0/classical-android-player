@@ -276,17 +276,38 @@ class EbookTtsPlayer(
         updateDuckFocus()
     }
 
-    /** 内存 WAV 流追块：首块播着时后续块边合边加；代际由调用方（TtsWorker）保证。 */
+    /**
+     * 内存 WAV 续播：队列里还有内容就直接排队（不打断播放、不重建 AudioTrack）；
+     * 队列已播完（ENDED）或还没起来（IDLE）时从末尾续上再起播。
+     * 连续朗读的下一句走这里，所以整段听书只有「用户点播放」那一次会重建播放器。
+     */
     fun appendWav(bytes: ByteArray) {
+        ensurePlayer()
         val p = player ?: return
-        p.addMediaSource(memSource(bytes))
-        // 已播到 ENDED 后又追块：回到尾块重备继续（LLM 供句抖动时会出现）
-        if (p.playbackState == Player.STATE_ENDED) {
-            runCatching {
-                p.seekTo(p.mediaItemCount - 1, 0)
+        when (p.playbackState) {
+            Player.STATE_IDLE -> {
+                p.addMediaSource(memSource(bytes))
                 p.prepare()
                 p.play()
+                streamActive = true
+                updateDuckFocus()
             }
+
+            Player.STATE_ENDED -> {
+                // 只留最后一个已播完的 item 当锚点：playlist 变空会触发 ExoPlayer 内部 reset，
+                // 又得重建 AudioTrack；同时扔掉播完的 WAV，长听不涨内存。
+                while (p.mediaItemCount > 1) p.removeMediaItem(0)
+                p.addMediaSource(memSource(bytes))
+                runCatching {
+                    p.seekTo(p.mediaItemCount - 1, 0)
+                    p.prepare()
+                    p.play()
+                }
+                streamActive = true
+                updateDuckFocus()
+            }
+
+            else -> p.addMediaSource(memSource(bytes))
         }
     }
 
