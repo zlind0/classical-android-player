@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 // 电子书仓库：书库/书架 CRUD、扫描落盘、解析缓存、外部打开导入、阅读进度。
@@ -346,41 +348,85 @@ class EbookStore(context: Context, private val dao: EbookDao) {
         dao.pruneHistory(path)
     }
 
-    /** 完整保存：页 + 块/字锚点 + 百分比 + 唯一编码 + 历史。同步版本供 onPause/onDispose 兜底直写。 */
-    suspend fun saveProgressSync(path: String, spine: Int, page: Int, block: Int, char: Int, pct: Float) =
-        withContext(Dispatchers.IO) {
-            val at = System.currentTimeMillis()
-            dao.saveProgress(path, spine, page, block, char, pct, EbookAnchorCode.encode(spine, block), at)
-            recordHistory(path, spine, block, at)
-            _recents.value = dao.recentBooks(MAX_RECENT_BOOKS).map { it.toBook() }
-        }
+    /**
+     * 进度写串行化：翻页、投屏锚点、朗读推进、onPause 兜底是四个独立来源，
+     * 并发 `launch` 到 IO 池时落地顺序不确定，旧快照可能后到。
+     */
+    private val progressLock = Mutex()
 
-    fun saveReadingPos(path: String, spine: Int, page: Int, block: Int, char: Int, pct: Float) {
+    /**
+     * 完整保存：页 + 块/字锚点 + 百分比 + 唯一编码 + 历史。
+     *
+     * `at` 是该位置被**观测**到的时刻（翻页/朗读推进的那一刻），不是提交时刻：
+     * DAO 用 `lastReadAt <= :at` 做单调保护，比库里更旧的快照直接丢弃、也不记历史。
+     * 锁屏时阅读页的“眼睛”是冻结的旧位置，靠这条才不会把后台听书推进的新进度洗回去。
+     */
+    fun saveReadingPos(
+        path: String,
+        spine: Int,
+        page: Int,
+        block: Int,
+        char: Int,
+        pct: Float,
+        at: Long = System.currentTimeMillis(),
+    ) {
         scope.launch(Dispatchers.IO) {
-            val at = System.currentTimeMillis()
-            dao.saveProgress(path, spine, page, block, char, pct, EbookAnchorCode.encode(spine, block), at)
-            recordHistory(path, spine, block, at)
-            _recents.value = dao.recentBooks(MAX_RECENT_BOOKS).map { it.toBook() }
+            progressLock.withLock {
+                runCatching {
+                    val n = dao.saveProgress(path, spine, page, block, char, pct, EbookAnchorCode.encode(spine, block), at)
+                    if (n > 0) {
+                        recordHistory(path, spine, block, at)
+                        _recents.value = dao.recentBooks(MAX_RECENT_BOOKS).map { it.toBook() }
+                    }
+                }
+            }
         }
     }
 
-    /** TTS 推进时的轻量保存：只更新章/块/字偏移 + 唯一编码 + 历史。UI 不在前台（锁屏仍在读）时靠它续命。 */
-    suspend fun saveTtsPosSync(path: String, spine: Int, block: Int, char: Int) =
+    /** [saveReadingPos] 的挂起版本（需要等落盘完成时用，比如退出阅读页前）。 */
+    suspend fun saveProgressSync(
+        path: String,
+        spine: Int,
+        page: Int,
+        block: Int,
+        char: Int,
+        pct: Float,
+        at: Long = System.currentTimeMillis(),
+    ) = progressLock.withLock {
         withContext(Dispatchers.IO) {
-            if (path.isBlank()) return@withContext
-            val at = System.currentTimeMillis()
-            dao.saveTtsPos(path, spine, block, char, EbookAnchorCode.encode(spine, block), at)
-            recordHistory(path, spine, block, at)
+            val n = dao.saveProgress(path, spine, page, block, char, pct, EbookAnchorCode.encode(spine, block), at)
+            if (n > 0) {
+                recordHistory(path, spine, block, at)
+                _recents.value = dao.recentBooks(MAX_RECENT_BOOKS).map { it.toBook() }
+            }
         }
+    }
 
-    fun saveTtsPos(path: String, spine: Int, block: Int, char: Int) {
+    /**
+     * TTS 推进时的轻量保存：只更新章/块/字偏移 + 唯一编码 + 历史。
+     * UI 不在前台（锁屏仍在读）时靠它续命；`at` 语义同 [saveReadingPos]。
+     */
+    fun saveTtsPos(path: String, spine: Int, block: Int, char: Int, at: Long = System.currentTimeMillis()) {
         if (path.isBlank()) return
         scope.launch(Dispatchers.IO) {
-            val at = System.currentTimeMillis()
-            dao.saveTtsPos(path, spine, block, char, EbookAnchorCode.encode(spine, block), at)
-            recordHistory(path, spine, block, at)
+            progressLock.withLock {
+                runCatching {
+                    val n = dao.saveTtsPos(path, spine, block, char, EbookAnchorCode.encode(spine, block), at)
+                    if (n > 0) recordHistory(path, spine, block, at)
+                }
+            }
         }
     }
+
+    /** [saveTtsPos] 的挂起版本。 */
+    suspend fun saveTtsPosSync(path: String, spine: Int, block: Int, char: Int, at: Long = System.currentTimeMillis()) =
+        progressLock.withLock {
+            withContext(Dispatchers.IO) {
+                if (path.isBlank()) return@withContext
+                val n = dao.saveTtsPos(path, spine, block, char, EbookAnchorCode.encode(spine, block), at)
+                if (n > 0) recordHistory(path, spine, block, at)
+            }
+        }
 
     /** 该书的进度历史（按自然分钟倒序，最多 30 条有记录的分钟）。 */
     suspend fun progressHistory(path: String): List<EbookProgressItem> =

@@ -86,6 +86,12 @@ class EbookTtsController(context: Context) {
     private val _position = MutableStateFlow<Para?>(null)
     val position: StateFlow<Para?> = _position.asStateFlow()
 
+    /**
+     * [position] 最近一次被推进的时刻（wall clock）：
+     * 阅读页落盘时用它和“眼睛”的观测时间比较，谁更新就用谁，避免冻结的旧位置覆盖新进度。
+     */
+    @Volatile var positionAt: Long = 0L
+
     /** 当前朗读位置所在的目录标题（目录页 currentEntry 同口径，供通知栏作者栏；无目录时为空，由调用方回退书名）。 */
     private val _sectionTitle = MutableStateFlow("")
     val sectionTitle: StateFlow<String> = _sectionTitle.asStateFlow()
@@ -228,7 +234,9 @@ class EbookTtsController(context: Context) {
         val cur = _position.value
         val bp = bookPath
         if (savePos && cur != null && bp.isNotBlank()) {
-            store?.saveTtsPos(bp, cur.chapter, cur.block, cur.startChar)
+            // 停在哪就按它被推进的那一刻落盘：比这更新的位置（用户手动翻页/后台已推进）不会被这次停播洗掉
+            val at = positionAt.takeIf { it > 0 } ?: System.currentTimeMillis()
+            store?.saveTtsPos(bp, cur.chapter, cur.block, cur.startChar, at)
         }
         // 用户亲手停：先通知服务快照并暂停音乐（此刻 playing/position 还在，服务能判断双播）。
         if (userInitiated) runCatching { onUserStop?.invoke() }
@@ -239,6 +247,7 @@ class EbookTtsController(context: Context) {
         _playing.value = false
         _paraTiming.value = null
         _position.value = null
+        positionAt = 0L
         // turn 跨书不保留：旧书残留的翻页请求绝不能在新书打开时执行
         //（新书 handledTurn 会重置为 null，会把旧值当成有效导航）。
         _turn.value = null
@@ -326,11 +335,14 @@ class EbookTtsController(context: Context) {
                 continue
             }
             val stream = tts.openStream(TtsOwner.EBOOK, restartPlayer = first)
+            val seenAt = System.currentTimeMillis()
             _position.value = para
+            positionAt = seenAt
             positionIdx = idx
             _sectionTitle.value = sectionTitleFor(para.chapter, para.block)
-            // 每推进一段/一句就直存章/块/字：锁屏后 UI 没了、pager 动不了时靠这行续命
-            store?.saveTtsPos(bookPath, para.chapter, para.block, para.startChar)
+            // 每推进一段/一句就直存章/块/字：锁屏后 UI 没了、pager 动不了时靠这行续命。
+            // 带观测时间戳，比它更旧的快照（比如阅读页手里冻结的旧位置）落盘时会被 DB 丢弃。
+            store?.saveTtsPos(bookPath, para.chapter, para.block, para.startChar, seenAt)
             if (first && movePage || !first) _turn.value = Triple(para.chapter, para.block, para.startChar)
             first = false
             // 每段现读一次设置：音量/语速等滑杆下一段即生效，不用停播重进

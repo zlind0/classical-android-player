@@ -545,31 +545,49 @@ private fun ReaderBody(
         val totalChars = remember(chapterChars) { chapterChars.sum().coerceAtLeast(1) }
         fun charsBeforeChapter(ci: Int): Int = chapterChars.take(ci).sum()
 
+        // “眼睛”最后一次真正移动的时刻：锁屏/切后台期间 activity 到 STOPPED，
+        // win.center 冻在旧页不动，这个时间戳也冻着——落盘时据此判定它是旧快照。
+        var eyeAt by remember(bookPath) { mutableLongStateOf(0L) }
+        LaunchedEffect(win.center) { eyeAt = System.currentTimeMillis() }
+
         // 每翻一页立刻存档（无防抖）：进设置、进程被杀都不丢。
-        // 眼睛与耳朵取更靠后的一个落盘（见 persistTargetOf）：锁屏听书越章后
-        // 耳朵超前，退出时不能用冻结的眼睛旧值覆盖。
+        // 眼睛与耳朵取**更新**的一个落盘（见 persistTargetOf）：锁屏听书时眼睛是冻结的旧值，
+        // 不能覆盖控制器推进的耳朵进度；反过来用户手动翻页后，耳朵的旧锚点也不能把眼睛拽回去。
         // 窗口落定只存一次（旧双通道 currentPage + settledPage 已合并）。
         fun persist(gp: GlobalPage) {
             val ear = tts.position.value?.takeIf { tts.bookPath == bookPath }
-            val t = persistTargetOf(book, breaks, chapterChars, totalChars, gp, ear)
-            store.saveReadingPos(bookPath, t.spine, t.page, t.block, t.char, t.pct)
+            val t = persistTargetOf(book, breaks, chapterChars, totalChars, gp, ear, tts.positionAt, eyeAt)
+            store.saveReadingPos(bookPath, t.spine, t.page, t.block, t.char, t.pct, t.at)
         }
 
-        // 锁屏/切后台兜底：ON_PAUSE 时把最新位置同步刷盘（fire-and-forget 在被杀时可能来不及）。
-        // 同样眼睛与耳朵取更靠后的一个（见 persistTargetOf）。
+        /**
+         * 以 DB 为准把窗口往前追：锁屏听书、大屏投屏都会在阅读页“看不见”的时候推进 DB，
+         * 而本页的眼睛是冻结的。只在 DB 明显更靠后时才动，绝不拿内存里的旧位置盖回去。
+         * 返回是否真的跳了（调用方可决定要不要回正 pager）。
+         */
+        suspend fun pullForwardFromDb(): Boolean {
+            val row = store.bookByPath(bookPath) ?: return false
+            val cur = win.center
+            val curSl = breaks[cur.chapter]?.filter { it.isNotEmpty() }?.getOrNull(cur.page)?.firstOrNull()
+            val ahead = cmpAnchor(
+                row.spineIndex, row.blockIndex, row.charOffset,
+                cur.chapter, curSl?.block ?: 0, curSl?.start ?: 0,
+            ) > 0
+            if (!ahead) return false
+            win.jumpToChar(row.spineIndex, row.blockIndex, row.charOffset)
+            // 眼睛此刻真的被更新到这里了：落盘时间戳要跟着走，否则会被 DB 当旧快照丢弃
+            eyeAt = System.currentTimeMillis()
+            persist(win.center)
+            return true
+        }
+
+        // 锁屏/切后台兜底：ON_PAUSE 时把最新位置刷盘。
+        // 故意走 store 的 app 级 scope（saveReadingPos），不用 rememberCoroutineScope：
+        // 后者在 activity 随即 destroy（投屏/旋转重建、锁屏后回收）时会被取消，那次落盘直接丢失。
         val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
         DisposableEffect(lifecycleOwner, bookPath) {
             val obs = androidx.lifecycle.LifecycleEventObserver { _, ev ->
-                if (ev == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) {
-                    scope.launch {
-                        val gp = win.center
-                        val ear = tts.position.value?.takeIf { tts.bookPath == bookPath }
-                        val t = persistTargetOf(book, breaks, chapterChars, totalChars, gp, ear)
-                        runCatching {
-                            store.saveProgressSync(bookPath, t.spine, t.page, t.block, t.char, t.pct)
-                        }
-                    }
-                }
+                if (ev == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) persist(win.center)
             }
             lifecycleOwner.lifecycle.addObserver(obs)
             onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
@@ -658,6 +676,7 @@ private fun ReaderBody(
                     container.ebookCast.remoteAnchors.collect { a ->
                         if (container.ebookCast.state.value.mode == EbookCastMode.OFF) return@collect
                         if (a.chapter !in book.chapters.indices) return@collect
+                        val at = System.currentTimeMillis()
                         win.jumpToChar(a.chapter, a.block, a.char)
                         runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
                         val pages = breaks[a.chapter]?.filter { it.isNotEmpty() }.orEmpty()
@@ -665,9 +684,28 @@ private fun ReaderBody(
                         val chars = chapterChars.take(a.chapter).sum() +
                             charsOfPage(book, a.chapter, pages, page)
                         val pct = (chars.toFloat() / totalChars).coerceIn(0f, 1f)
-                        store.saveReadingPos(bookPath, a.chapter, page, a.block, a.char, pct)
-                        store.saveTtsPos(bookPath, a.chapter, a.block, a.char)
+                        // 只写完整进度：saveTtsPos 会把 pageIndex 清零，这里跟着写会把刚算好的页抹掉
+                        store.saveReadingPos(bookPath, a.chapter, page, a.block, a.char, pct, at)
                     }
+                }
+
+                // 解锁/回前台：本页的眼睛在 STOPPED 期间是冻结的（ttsPos/turnReq/paraTiming 都是
+                // collectAsStateWithLifecycle），而后台朗读已经把 DB 推进了。以 DB 为准往上追。
+                DisposableEffect(lifecycleOwner, bookPath) {
+                    val obs = androidx.lifecycle.LifecycleEventObserver { _, ev ->
+                        if (ev != androidx.lifecycle.Lifecycle.Event.ON_RESUME) return@LifecycleEventObserver
+                        scope.launch {
+                            if (pullForwardFromDb()) runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(obs)
+                    onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+                }
+
+                // 投屏结束回到阅读页：大屏最后一页可能没追上（锚点丢失/跳页失败），同样按 DB 补一次
+                LaunchedEffect(castActive) {
+                    if (castActive) return@LaunchedEffect
+                    if (pullForwardFromDb()) runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
                 }
 
                 // 目录按块跳：与 TTS/链接同一调用，跨章也是它
@@ -720,16 +758,19 @@ private fun ReaderBody(
                             if (pos.chapter != win.center.chapter &&
                                 lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
                             ) return@LaunchedEffect
+                            // 观测时间取耳朵被推进的那一刻：后台推过很多段时，这里补写的
+                            // 是一个旧快照，DB 的 lastReadAt 保护会按它丢弃，不会盖掉更新的进度
+                            val at = tts.positionAt.takeIf { it > 0 } ?: System.currentTimeMillis()
                             val cps = breaks[pos.chapter]?.filter { it.isNotEmpty() }.orEmpty()
                             if (cps.isEmpty()) {
-                                store.saveTtsPos(bookPath, pos.chapter, pos.block, pos.startChar)
+                                store.saveTtsPos(bookPath, pos.chapter, pos.block, pos.startChar, at)
                             } else {
                                 val p = pageForChar(cps, pos.block, pos.startChar)
                                 val chars = charsBeforeChapter(pos.chapter) +
                                     charsOfPage(book, pos.chapter, cps, p)
                                 store.saveReadingPos(
                                     bookPath, pos.chapter, p, pos.block, pos.startChar,
-                                    (chars.toFloat() / totalChars).coerceIn(0f, 1f),
+                                    (chars.toFloat() / totalChars).coerceIn(0f, 1f), at,
                                 )
                             }
                         }
@@ -750,10 +791,12 @@ private fun ReaderBody(
                             }
                             handledTurn = t
                             val (c, b, ch) = t
+                            // 同 ttsPos：这条 turn 可能是后台积压的旧请求，按它被推进的时刻落盘
+                            val at = tts.positionAt.takeIf { it > 0 } ?: System.currentTimeMillis()
                             val cps = breaks[c]?.filter { it.isNotEmpty() }.orEmpty()
                             if (cps.isEmpty()) {
                                 // 该章没排好：先把锚点落盘，再 ensure 后精确定位
-                                store.saveTtsPos(bookPath, c, b, ch)
+                                store.saveTtsPos(bookPath, c, b, ch, at)
                                 win.jumpToChar(c, b, ch)
                                 runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
                                 persist(win.center)
@@ -765,7 +808,7 @@ private fun ReaderBody(
                                 val chars = charsBeforeChapter(c) + charsOfPage(book, c, cps, p)
                                 store.saveReadingPos(
                                     bookPath, c, p, b, ch,
-                                    (chars.toFloat() / totalChars).coerceIn(0f, 1f),
+                                    (chars.toFloat() / totalChars).coerceIn(0f, 1f), at,
                                 )
                                 goToPage(GlobalPage(c, p))
                             }
@@ -952,12 +995,23 @@ private fun countVisible(toc: List<com.aurora.music.data.ebook.EbookTocEntry>, e
     return n
 }
 
-// ---- 进度落盘目标：眼睛（窗口 center）与耳朵（TTS 位置）取全局更靠后的一个 ----
-// 锁屏听书越过章节后，窗口 center 是冻结的旧值；退出/onPause 时若按旧值全量覆盖，
-// DB 里已超前的耳朵进度会被洗回锁屏前。下次打开就回到锁屏前，这正是要修的 bug。
-// 比较键为 (chapter, block, char) 三元组（章节/段落天然有序，无需字符统计）。
+// ---- 进度落盘目标：眼睛（窗口 center）与耳朵（TTS 位置）取**更新**的一个 ----
+// 旧实现取“锚点更靠后”的一个，但锚点顺序不等于先后：锁屏听书时眼睛是冻结的旧页
+// （activity 在 STOPPED，win.center 与它的观测时间都不再更新），而耳朵由控制器不断推进；
+// 反过来，用户手动翻到更后面再开始朗读，耳朵反而落在眼睛后面。
+// 真正的先后只能看“谁最后一次被更新”，所以这里比时间而不是比锚点，
+// 并把 at 一起带给 DB（lastReadAt <= at，过期快照直接丢弃）。
+// 眼睛的观测时间见 ReaderBody 的 eyeAt，耳朵的见 EbookTtsController.positionAt。
 
-private data class PersistTarget(val spine: Int, val page: Int, val block: Int, val char: Int, val pct: Float)
+private data class PersistTarget(
+    val spine: Int,
+    val page: Int,
+    val block: Int,
+    val char: Int,
+    val pct: Float,
+    /** 该位置被观测到的时刻，落盘时作为 lastReadAt 与单调保护依据。 */
+    val at: Long,
+)
 
 private fun cmpAnchor(c1: Int, b1: Int, h1: Int, c2: Int, b2: Int, h2: Int): Int {
     if (c1 != c2) return c1.compareTo(c2)
@@ -972,24 +1026,27 @@ private fun persistTargetOf(
     totalChars: Int,
     gp: GlobalPage,
     ear: EbookTtsController.Para?,
+    earAt: Long,
+    eyeAt: Long,
 ): PersistTarget {
     fun charsBefore(ci: Int): Int = chapterChars.take(ci).sum()
     fun pctOf(spine: Int, pages: List<List<PageSlice>>, page: Int): Float {
         val chars = charsBefore(spine) + charsOfPage(book, spine, pages, page)
         return (chars.toFloat() / totalChars).coerceIn(0f, 1f)
     }
-    val eyePages = breaks[gp.chapter]?.filter { it.isNotEmpty() }.orEmpty()
-    val eyeAnchorSameChapter = ear?.takeIf { it.chapter == gp.chapter }
-    val eyeSl = eyePages.getOrNull(gp.page)?.firstOrNull()
-    val eyeBlock = eyeAnchorSameChapter?.block ?: (eyeSl?.block ?: 0)
-    val eyeChar = eyeAnchorSameChapter?.startChar ?: (eyeSl?.start ?: 0)
-    if (ear != null && cmpAnchor(ear.chapter, ear.block, ear.startChar, gp.chapter, eyeBlock, eyeChar) > 0) {
-        // 耳朵超前：把耳朵锚点换算成页再全量存（含 pct），不能只存眼睛旧值
+    val eyeAtSafe = eyeAt.takeIf { it > 0 } ?: System.currentTimeMillis()
+    if (ear != null && earAt > eyeAtSafe) {
+        // 耳朵更新（后台/锁屏朗读推进过）：把耳朵锚点换算成页再全量存（含 pct），不能只存眼睛旧值
         val earPages = breaks[ear.chapter]?.filter { it.isNotEmpty() }.orEmpty()
         val earPage = if (earPages.isEmpty()) 0 else pageForChar(earPages, ear.block, ear.startChar)
-        return PersistTarget(ear.chapter, earPage, ear.block, ear.startChar, pctOf(ear.chapter, earPages, earPage))
+        return PersistTarget(ear.chapter, earPage, ear.block, ear.startChar, pctOf(ear.chapter, earPages, earPage), earAt)
     }
-    return PersistTarget(gp.chapter, gp.page, eyeBlock, eyeChar, pctOf(gp.chapter, eyePages, gp.page))
+    val eyePages = breaks[gp.chapter]?.filter { it.isNotEmpty() }.orEmpty()
+    val eyeSl = eyePages.getOrNull(gp.page)?.firstOrNull()
+    return PersistTarget(
+        gp.chapter, gp.page, eyeSl?.block ?: 0, eyeSl?.start ?: 0,
+        pctOf(gp.chapter, eyePages, gp.page), eyeAtSafe,
+    )
 }
 
 private fun charsOfPage(book: ParsedEbook, spine: Int, pages: List<List<PageSlice>>, page: Int): Int {

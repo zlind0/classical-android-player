@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -133,8 +134,15 @@ class EbookCastController(
     private val _state = MutableStateFlow(EbookCastState())
     val state: StateFlow<EbookCastState> = _state.asStateFlow()
 
-    /** 大屏端上报的进度锚点：阅读页收集后跳页并落盘。 */
-    private val _remoteAnchors = MutableSharedFlow<EbookCastAnchor>(extraBufferCapacity = 16)
+    /**
+     * 大屏端上报的进度锚点：阅读页收集后跳页并落盘。
+     * 采集端要等整章分页，大屏连翻时缓冲会满；必须丢最旧的、保最新的一条，
+     * 否则手机进度会停在更早的页（投屏结束回到阅读页就退回旧位置）。
+     */
+    private val _remoteAnchors = MutableSharedFlow<EbookCastAnchor>(
+        extraBufferCapacity = 16,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
     val remoteAnchors: SharedFlow<EbookCastAnchor> = _remoteAnchors.asSharedFlow()
 
     @Volatile private var server: EbookCastHttpServer? = null

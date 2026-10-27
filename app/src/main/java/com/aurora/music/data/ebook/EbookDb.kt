@@ -106,14 +106,16 @@ interface EbookDao {
     @Query("SELECT * FROM ebooks")
     suspend fun allBooks(): List<EbookRow>
 
-    @Query("UPDATE ebooks SET spineIndex = :spine, pageIndex = :page, blockIndex = :block, charOffset = :charOff, progressPct = :pct, anchorCode = :code, lastReadAt = :at WHERE path = :path")
-    suspend fun saveProgress(path: String, spine: Int, page: Int, block: Int, charOff: Int, pct: Float, code: String, at: Long)
+    /** 进度写带单调保护：`at` 是该位置被观测到的时刻，比库里更旧的快照直接丢弃（返回 0）。
+     * 没有这一条，锁屏/重建时阅读页手里冻结的旧位置会把后台听书推进的新进度洗回去。 */
+    @Query("UPDATE ebooks SET spineIndex = :spine, pageIndex = :page, blockIndex = :block, charOffset = :charOff, progressPct = :pct, anchorCode = :code, lastReadAt = :at WHERE path = :path AND lastReadAt <= :at")
+    suspend fun saveProgress(path: String, spine: Int, page: Int, block: Int, charOff: Int, pct: Float, code: String, at: Long): Int
 
     /** TTS 推进时的轻量保存：更新章/块/字偏移 + 最近阅读；页码归零等 UI 侧按块锚点推导回填。
      * 页码必须一起写（不能留旧章的页），否则 DB 出现“新章 + 旧页”的杂交行，
      * 下次打开时块锚点为章首（0,0）不触发推导，就会落在错页。 */
-    @Query("UPDATE ebooks SET spineIndex = :spine, pageIndex = 0, blockIndex = :block, charOffset = :charOff, anchorCode = :code, lastReadAt = :at WHERE path = :path")
-    suspend fun saveTtsPos(path: String, spine: Int, block: Int, charOff: Int, code: String, at: Long)
+    @Query("UPDATE ebooks SET spineIndex = :spine, pageIndex = 0, blockIndex = :block, charOffset = :charOff, anchorCode = :code, lastReadAt = :at WHERE path = :path AND lastReadAt <= :at")
+    suspend fun saveTtsPos(path: String, spine: Int, block: Int, charOff: Int, code: String, at: Long): Int
 
     @Query("DELETE FROM ebooks WHERE rootId = :rootId")
     suspend fun deleteBooksOfRoot(rootId: Long)
