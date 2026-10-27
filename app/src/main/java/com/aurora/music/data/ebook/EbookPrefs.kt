@@ -1,6 +1,7 @@
 package com.aurora.music.data.ebook
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -46,6 +47,22 @@ class EbookPrefs(context: Context) {
         val TTS_RATE = floatPreferencesKey("tts_rate")
         val TTS_PITCH = floatPreferencesKey("tts_pitch")
         val TTS_UNIT = stringPreferencesKey("tts_unit")
+        /** 投屏底片（网页端与 HDMI 共用）。 */
+        val CAST_THEME = stringPreferencesKey("cast_theme")
+        /** 旧版共用的字号/栏宽，仅作为迁移默认值读取，不再写入。 */
+        val CAST_FONT_PX = intPreferencesKey("cast_font_px")
+        val CAST_COLUMN_WIDTH = intPreferencesKey("cast_column_width_px")
+        // 网页投屏 / HDMI 投屏各自的画面设置（字号、栏宽、音乐条、翻页单位，分开存储）。
+        val WEB_CAST_FONT_PX = intPreferencesKey("web_cast_font_px")
+        val WEB_CAST_COLUMN_WIDTH = intPreferencesKey("web_cast_column_width_px")
+        val WEB_CAST_SHOW_MUSIC = booleanPreferencesKey("web_cast_show_music")
+        val WEB_CAST_TURN_UNIT = stringPreferencesKey("web_cast_turn_unit")
+        val WEB_CAST_MUSIC_ON_CAST = booleanPreferencesKey("web_cast_music_on_cast")
+        val HDMI_CAST_FONT_PX = intPreferencesKey("hdmi_cast_font_px")
+        val HDMI_CAST_COLUMN_WIDTH = intPreferencesKey("hdmi_cast_column_width_px")
+        val HDMI_CAST_SHOW_MUSIC = booleanPreferencesKey("hdmi_cast_show_music")
+        val HDMI_CAST_TURN_UNIT = stringPreferencesKey("hdmi_cast_turn_unit")
+        val HDMI_CAST_MUSIC_ON_CAST = booleanPreferencesKey("hdmi_cast_music_on_cast")
     }
 
     private val gson = Gson()
@@ -63,6 +80,10 @@ class EbookPrefs(context: Context) {
     /** 电子书 Tab「最近阅读」显示条数（5..20，默认 5，与旧行为一致）。 */
     private val _recentLimit = MutableStateFlow(MIN_RECENT_BOOKS)
     val recentLimit: StateFlow<Int> = _recentLimit.asStateFlow()
+
+    /** 投屏画面设置：底色共用，字号/栏宽网页端与 HDMI 各存一份，遥控端改完即落盘。 */
+    private val _castPrefs = MutableStateFlow(EbookCastDisplayPrefs())
+    val castPrefs: StateFlow<EbookCastDisplayPrefs> = _castPrefs.asStateFlow()
 
     init {
         scope.launch {
@@ -89,6 +110,33 @@ class EbookPrefs(context: Context) {
             appContext.ebookReadDataStore.data.map { p ->
                 (p[Keys.RECENT_LIMIT] ?: MIN_RECENT_BOOKS).coerceIn(MIN_RECENT_BOOKS, MAX_RECENT_BOOKS)
             }.collect { _recentLimit.value = it }
+        }
+        scope.launch {
+            appContext.ebookReadDataStore.data.map { p ->
+                // 旧版只有一个共用值：迁移时把它作为网页/HDMI 两侧的初始值
+                val legacyFont = (p[Keys.CAST_FONT_PX] ?: 32).coerceIn(MIN_CAST_FONT_PX, MAX_CAST_FONT_PX)
+                val legacyWidth = (p[Keys.CAST_COLUMN_WIDTH] ?: 640)
+                    .coerceIn(MIN_CAST_COLUMN_WIDTH_PX, MAX_CAST_COLUMN_WIDTH_PX)
+                EbookCastDisplayPrefs(
+                    theme = runCatching { EbookTheme.valueOf(p[Keys.CAST_THEME] ?: "WHITE") }
+                        .getOrDefault(EbookTheme.WHITE),
+                    webFontSizePx = (p[Keys.WEB_CAST_FONT_PX] ?: legacyFont)
+                        .coerceIn(MIN_CAST_FONT_PX, MAX_CAST_FONT_PX),
+                    webMaxColumnWidthPx = (p[Keys.WEB_CAST_COLUMN_WIDTH] ?: legacyWidth)
+                        .coerceIn(MIN_CAST_COLUMN_WIDTH_PX, MAX_CAST_COLUMN_WIDTH_PX),
+                    webShowMusic = p[Keys.WEB_CAST_SHOW_MUSIC] ?: true,
+                    webTurnUnit = turnUnitOf(p[Keys.WEB_CAST_TURN_UNIT]),
+                    // 网页投屏默认由网页出声（老行为）；HDMI 默认手机出声
+                    webMusicOnCast = p[Keys.WEB_CAST_MUSIC_ON_CAST] ?: true,
+                    hdmiFontSizePx = (p[Keys.HDMI_CAST_FONT_PX] ?: legacyFont)
+                        .coerceIn(MIN_CAST_FONT_PX, MAX_CAST_FONT_PX),
+                    hdmiMaxColumnWidthPx = (p[Keys.HDMI_CAST_COLUMN_WIDTH] ?: legacyWidth)
+                        .coerceIn(MIN_CAST_COLUMN_WIDTH_PX, MAX_CAST_COLUMN_WIDTH_PX),
+                    hdmiShowMusic = p[Keys.HDMI_CAST_SHOW_MUSIC] ?: true,
+                    hdmiTurnUnit = turnUnitOf(p[Keys.HDMI_CAST_TURN_UNIT]),
+                    hdmiMusicOnCast = p[Keys.HDMI_CAST_MUSIC_ON_CAST] ?: false,
+                )
+            }.collect { _castPrefs.value = it }
         }
     }
 
@@ -174,4 +222,59 @@ class EbookPrefs(context: Context) {
             }
         }
     }
+
+    fun setCastTheme(t: EbookTheme) {
+        scope.launch { appContext.ebookReadDataStore.edit { it[Keys.CAST_THEME] = t.name } }
+    }
+
+    /** 改投屏字号；web = true 存网页投屏的一份，false 存 HDMI 的一份。 */
+    fun setCastFontSize(web: Boolean, px: Int) {
+        scope.launch {
+            appContext.ebookReadDataStore.edit {
+                it[if (web) Keys.WEB_CAST_FONT_PX else Keys.HDMI_CAST_FONT_PX] =
+                    px.coerceIn(MIN_CAST_FONT_PX, MAX_CAST_FONT_PX)
+            }
+        }
+    }
+
+    private fun turnUnitOf(v: String?): EbookCastTurnUnit =
+        runCatching { EbookCastTurnUnit.valueOf(v ?: "SCREEN") }.getOrDefault(EbookCastTurnUnit.SCREEN)
+
+    /** 改“投屏画面上是否显示音乐播放条”；web = true 存网页投屏的一份，false 存 HDMI 的一份。 */
+    fun setCastShowMusic(web: Boolean, show: Boolean) {
+        scope.launch {
+            appContext.ebookReadDataStore.edit {
+                it[if (web) Keys.WEB_CAST_SHOW_MUSIC else Keys.HDMI_CAST_SHOW_MUSIC] = show
+            }
+        }
+    }
+
+    /** 改“音乐在投屏设备上播 / 在手机上播”；web = true 存网页投屏的一份，false 存 HDMI 的一份。 */
+    fun setCastMusicOnCast(web: Boolean, onCast: Boolean) {
+        scope.launch {
+            appContext.ebookReadDataStore.edit {
+                it[if (web) Keys.WEB_CAST_MUSIC_ON_CAST else Keys.HDMI_CAST_MUSIC_ON_CAST] = onCast
+            }
+        }
+    }
+
+    /** 改翻页单位（一屏 / 一栏）；web = true 存网页投屏的一份，false 存 HDMI 的一份。 */
+    fun setCastTurnUnit(web: Boolean, unit: EbookCastTurnUnit) {
+        scope.launch {
+            appContext.ebookReadDataStore.edit {
+                it[if (web) Keys.WEB_CAST_TURN_UNIT else Keys.HDMI_CAST_TURN_UNIT] = unit.name
+            }
+        }
+    }
+
+    /** 改投屏一栏最大宽度；web = true 存网页投屏的一份，false 存 HDMI 的一份。 */
+    fun setCastColumnWidth(web: Boolean, px: Int) {
+        scope.launch {
+            appContext.ebookReadDataStore.edit {
+                it[if (web) Keys.WEB_CAST_COLUMN_WIDTH else Keys.HDMI_CAST_COLUMN_WIDTH] =
+                    px.coerceIn(MIN_CAST_COLUMN_WIDTH_PX, MAX_CAST_COLUMN_WIDTH_PX)
+            }
+        }
+    }
+
 }

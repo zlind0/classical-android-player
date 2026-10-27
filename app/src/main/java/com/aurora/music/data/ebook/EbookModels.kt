@@ -109,6 +109,54 @@ data class EbookReadPrefs(
     val fontPath: String = "",
 )
 
+/** 翻页一次滚动的距离：一屏 = 整个可视宽度（含同屏所有栏），一栏 = 只前进一栏。 */
+enum class EbookCastTurnUnit { SCREEN, COLUMN }
+
+/** 投屏画面（网页 / HDMI）专用设置：与手机阅读页分开，遥控时即时生效并持久保存。 */
+data class EbookCastDisplayPrefs(
+    val theme: EbookTheme = EbookTheme.WHITE,
+    /** 网页投屏字号（px），16..64 */
+    val webFontSizePx: Int = 32,
+    /** 网页投屏一栏的最大宽度（px）；按可用宽度自动决定分几栏 */
+    val webMaxColumnWidthPx: Int = 640,
+    /** 网页投屏是否在画面上显示音乐播放条 */
+    val webShowMusic: Boolean = true,
+    /** 网页投屏翻页一次滚多少：一屏 / 一栏 */
+    val webTurnUnit: EbookCastTurnUnit = EbookCastTurnUnit.SCREEN,
+    /** 网页投屏时音乐是否由网页出声（false = 手机本地播放） */
+    val webMusicOnCast: Boolean = true,
+    /** HDMI 投屏字号（px），16..64 */
+    val hdmiFontSizePx: Int = 32,
+    /** HDMI 投屏一栏的最大宽度（px）；按可用宽度自动决定分几栏 */
+    val hdmiMaxColumnWidthPx: Int = 640,
+    /** HDMI 投屏是否在画面上显示音乐播放条 */
+    val hdmiShowMusic: Boolean = true,
+    /** HDMI 投屏翻页一次滚多少：一屏 / 一栏 */
+    val hdmiTurnUnit: EbookCastTurnUnit = EbookCastTurnUnit.SCREEN,
+    /** HDMI 投屏时音乐是否由 HDMI 设备出声（false = 手机本地播放） */
+    val hdmiMusicOnCast: Boolean = false,
+) {
+    /** 按投屏方式取字号：网页和 HDMI 各自独立保存（屏幕尺寸差很多）。 */
+    fun fontSizePx(web: Boolean): Int = if (web) webFontSizePx else hdmiFontSizePx
+
+    /** 按投屏方式取一栏最大宽度。 */
+    fun maxColumnWidthPx(web: Boolean): Int = if (web) webMaxColumnWidthPx else hdmiMaxColumnWidthPx
+
+    /** 按投屏方式取“是否显示音乐播放条”。 */
+    fun showMusic(web: Boolean): Boolean = if (web) webShowMusic else hdmiShowMusic
+
+    /** 按投屏方式取翻页单位。 */
+    fun turnUnit(web: Boolean): EbookCastTurnUnit = if (web) webTurnUnit else hdmiTurnUnit
+
+    /** 按投屏方式取“音乐在投屏设备上播”还是“在手机上播”。 */
+    fun musicOnCast(web: Boolean): Boolean = if (web) webMusicOnCast else hdmiMusicOnCast
+}
+
+const val MIN_CAST_FONT_PX = 16
+const val MAX_CAST_FONT_PX = 64
+const val MIN_CAST_COLUMN_WIDTH_PX = 240
+const val MAX_CAST_COLUMN_WIDTH_PX = 1200
+
 /** 朗读切片单位：PARA = 按段落（<p>块），SENTENCE = 按句子（中英文标点切分）。 */
 enum class EbookTtsUnit { PARA, SENTENCE }
 

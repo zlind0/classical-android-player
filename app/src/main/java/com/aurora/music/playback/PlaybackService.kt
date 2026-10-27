@@ -729,8 +729,9 @@ class PlaybackService : MediaLibraryService() {
         maybeBeginXfade()
     }
 
-    /** 音量基数：replaygain × 听书压低 × 有声书本书增益。 */
-    private fun volBase(): Float = replayGainMultiplier() * ebookDuckApplied * abookGainApplied
+    /** 音量基数：replaygain × 听书压低 × 有声书本书增益；网页投屏时本地静音（声音由浏览器出）。 */
+    private fun volBase(): Float = replayGainMultiplier() * ebookDuckApplied * abookGainApplied *
+        if (container.castMute.value) 0f else 1f
 
     /**
      * 统一会话仲裁：单服务单会话，按模式换会话 player。

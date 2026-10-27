@@ -1,0 +1,1024 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="WHITE">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>阅读投屏</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --ink: #1a1a1a;
+    --muted: rgba(26, 26, 26, .55);
+    --card: rgba(0, 0, 0, .045);
+    --track: rgba(0, 0, 0, .12);
+    --rule: rgba(0, 0, 0, .10);
+  }
+  html[data-theme="SEPIA"] {
+    --bg: #f4ecd8;
+    --ink: #5b4636;
+    --muted: rgba(91, 70, 54, .60);
+    --card: rgba(91, 70, 54, .07);
+    --track: rgba(91, 70, 54, .18);
+    --rule: rgba(91, 70, 54, .14);
+  }
+  html[data-theme="DARK"] {
+    --bg: #1c1c1e;
+    --ink: #e8e8e8;
+    --muted: rgba(232, 232, 232, .58);
+    --card: rgba(255, 255, 255, .06);
+    --track: rgba(255, 255, 255, .16);
+    --rule: rgba(255, 255, 255, .12);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC",
+      "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    touch-action: none;
+  }
+  .top {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: baseline;
+    gap: 2.4vmin;
+    padding: 1.7vmin 2.6vmin 1.2vmin;
+    border-bottom: 1px solid var(--rule);
+    color: var(--muted);
+    font-size: 1.9vmin;
+    letter-spacing: .02em;
+    min-height: 0;
+  }
+  .top .book {
+    max-width: 34%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--ink);
+    opacity: .78;
+    font-weight: 600;
+  }
+  .top .chapter {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .top .anchor {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: .08em;
+  }
+  /* 右上角工具：启动音乐 / 静音 / 全屏 */
+  .tools {
+    flex: 0 0 auto;
+    align-self: center;
+    display: flex;
+    align-items: center;
+    gap: .5vmin;
+    margin-left: auto;
+  }
+  .tool {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 3.6vmin;
+    height: 3.6vmin;
+    padding: 0;
+    border: 0;
+    border-radius: .8vmin;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tool:hover { background: var(--card); color: var(--ink); }
+  .tool:active { transform: scale(.94); }
+  .tool svg { width: 2.2vmin; height: 2.2vmin; fill: currentColor; }
+  .tool.on { color: var(--ink); }
+  .tool.hidden { display: none; }
+  main {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 1.2vmin 0 1.4vmin;
+    display: flex;
+  }
+  /* 大屏阅读区：overflow hidden，网页端不可手动滚动；翻页只由手机遥控 */
+  #viewport {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 0 2.6vmin;
+    overflow: hidden;
+  }
+  #content {
+    position: relative;
+    height: 100%;
+    column-fill: auto;
+    /* 翻页位移用 transform 过渡，实际时长由 JS 的 PAGE_ANIM_MS 控制 */
+    transition: transform 300ms cubic-bezier(.22, .61, .36, 1);
+    /* 栏间距固定 50px：不随字号变化，保证分栏数只由屏幕宽度和一栏最大宽度决定 */
+    column-gap: 50px;
+    font-size: 32px;
+    line-height: 1.64;
+    will-change: transform;
+    text-rendering: optimizeLegibility;
+  }
+  /* 每章另起一栏：新标准属性 + Blink 旧属性一起写（page-break-before 在 multicol 里
+     会把章节排到上一章残段的同一栏里，反而失效，所以不用它） */
+  .chapter {
+    display: block;
+    break-before: column;
+    -webkit-column-break-before: always;
+  }
+  .chapter:first-child {
+    break-before: auto;
+    -webkit-column-break-before: auto;
+  }
+  .blk {
+    margin: 0 0 .58em;
+    text-align: justify;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .blk:last-child { margin-bottom: 0; }
+  .lv1 { font-size: 1.52em; font-weight: 700; line-height: 1.34; margin: .55em 0 .12em; }
+  .lv2 { font-size: 1.33em; font-weight: 700; line-height: 1.38; margin: .5em 0 .1em; }
+  .lv3 { font-size: 1.17em; font-weight: 700; line-height: 1.45; margin: .45em 0 .1em; }
+  .lv4, .lv5, .lv6 { font-size: 1.06em; font-weight: 700; margin: .4em 0 .1em; }
+
+  /* 遥控器关掉“显示音乐”时整条隐藏，正文区自动补满 */
+  body.no-music .footer { display: none; }
+  .footer {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 1.8vmin;
+    margin: 0 2.2vmin 2vmin;
+    padding: 1.2vmin 1.8vmin;
+    background: var(--card);
+    border-radius: 1.2vmin;
+    min-height: 8.2vmin;
+  }
+  .art {
+    width: 5.8vmin;
+    height: 5.8vmin;
+    flex: 0 0 auto;
+    border-radius: .9vmin;
+    background-color: var(--track);
+    background-size: cover;
+    background-position: center;
+  }
+  /* 歌名占满到进度条之前，只有真的放不下才省略，不再提前按 40vmin 截断 */
+  .meta { flex: 1 1 auto; min-width: 0; }
+  .meta .t {
+    font-size: 1.8vmin;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .meta .a {
+    margin-top: .25vmin;
+    font-size: 1.55vmin;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .spacer { display: none; }
+  .playbar { flex: 0 1 auto; display: flex; align-items: center; gap: 1.4vmin; }
+  .bar {
+    width: 26vmin;
+    height: .45vmin;
+    background: var(--track);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--ink); opacity: .7; }
+  .time {
+    font-size: 1.5vmin;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  #hint {
+    position: fixed;
+    left: 50%;
+    bottom: 14vmin;
+    transform: translateX(-50%);
+    padding: 1.2vmin 2.4vmin;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, .74);
+    color: #fff;
+    font-size: 1.9vmin;
+    cursor: pointer;
+  }
+  body.offline::after {
+    content: "连接已断开，等待手机…";
+    position: fixed;
+    top: 1.4vmin;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: .7vmin 1.8vmin;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, .7);
+    color: #fff;
+    font-size: 1.65vmin;
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="book" id="book"></span>
+  <span class="chapter" id="chapter"></span>
+  <span class="anchor" id="anchor"></span>
+  <span class="tools">
+    <button class="tool" id="btn-play" title="启动音乐" aria-label="启动音乐">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path id="play-path"/></svg>
+    </button>
+    <button class="tool" id="btn-mute" title="静音" aria-label="静音">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path id="mute-path"/></svg>
+    </button>
+    <button class="tool" id="btn-full" title="全屏" aria-label="全屏">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path id="full-path"/></svg>
+    </button>
+  </span>
+</header>
+<main>
+  <div id="viewport"><div id="content"></div></div>
+</main>
+<footer class="footer">
+  <div class="art" id="art"></div>
+  <div class="meta">
+    <div class="t" id="title">未在播放</div>
+    <div class="a" id="artist"></div>
+  </div>
+  <div class="spacer"></div>
+  <div class="playbar">
+    <div class="bar"><i id="bar"></i></div>
+    <div class="time" id="time">0:00 / 0:00</div>
+  </div>
+</footer>
+<div id="hint" hidden>点击任意处开启声音</div>
+<audio id="audio" preload="auto"></audio>
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var viewport = $('viewport');
+  var content = $('content');
+  var audio = $('audio');
+  var SYSTEM_FONT = '-apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", ' +
+    '"Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", system-ui, sans-serif';
+
+  var S = null;
+  var bookKey = '';
+  var chapterCount = 0;
+  var ready = false;
+  var cache = new Map();
+  var loadedFrom = 0;
+  var loadedTo = -1;
+  var lastTurnOffset = 0;
+  var lastFontSize = -1;
+  var lastMaxWidth = -1;
+  var currentFontUrl = '';
+  var currentFontFamily = SYSTEM_FONT;
+  var fontSeq = 0;
+  // pageStep = 相邻栏左边缘的距离；currentCol = 最左可见栏的列号（位置真正由它决定）
+  var pageStep = 0;
+  var currentCol = 0;
+  var colsPerPage = 1;
+  var turnCols = 1;
+  var lastViewportW = -1;
+  var lastViewportH = -1;
+  // 锁定的阅读位置（大屏左上角“章:段:字”）：重排只还原它，绝不重写；
+  // 只有用户点上一页/下一页（或从历史恢复）时才更新。
+  var lockedAnchor = null;
+  var lastShowMusic = null;
+  var lastTurnUnit = '';
+  var lastFocusGen = -1;
+  var lastReportKey = '';
+  var lastTrack = '';
+  var pendingSeek = null;
+  var lastSeekGen = -1;
+  var mutedPref = false;
+  try { mutedPref = localStorage.getItem('castMuted') === '1'; } catch (e) { /* ignore */ }
+  var hintDismissed = false;
+
+  function sleep(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  function mmss(sec) {
+    sec = Math.max(0, Math.floor(sec || 0));
+    var m = Math.floor(sec / 60);
+    var s = sec % 60;
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  // ---- 右上角工具：启动音乐 / 静音 / 全屏 ----
+  var ICON_VOLUME = 'M4 9v6h4l5 4V5L8 9H4zm12.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4z';
+  var ICON_MUTED = 'M4 9v6h4l5 4V5L8 9H4zm15.5 3l2.1-2.1-1.4-1.4L18.1 10.6 16 8.5l-1.4 1.4 2.1 2.1-2.1 2.1 1.4 1.4 2.1-2.1 2.1 2.1 1.4-1.4L19.5 12z';
+  var ICON_PLAY = 'M8 5v14l11-7z';
+  var ICON_PAUSE = 'M6 5h4v14H6zM14 5h4v14h-4z';
+  var ICON_FULL = 'M5 9V5h4V3H3v6h2zm14 0V5h-4V3h6v6h-2zM5 15v4h4v2H3v-6h2zm14 0v4h-4v2h6v-6h-2z';
+  var ICON_EXIT_FULL = 'M9 3v4H5v2h6V3H9zm6 0v6h6V7h-4V3h-2zM3 15v2h6v4h2v-6H3zm12 0v6h2v-4h4v-2h-6z';
+
+  var toolPlay = null;
+  var toolMute = null;
+  var toolFull = null;
+
+  function syncMuteIcon() {
+    if (!toolMute) return;
+    document.getElementById('mute-path').setAttribute('d', audio.muted ? ICON_MUTED : ICON_VOLUME);
+    toolMute.classList.toggle('on', audio.muted);
+    toolMute.title = audio.muted ? '取消静音' : '静音';
+    toolMute.setAttribute('aria-label', toolMute.title);
+  }
+
+  function syncFullIcon() {
+    if (!toolFull) return;
+    var on = !!document.fullscreenElement;
+    document.getElementById('full-path').setAttribute('d', on ? ICON_EXIT_FULL : ICON_FULL);
+    toolFull.classList.toggle('on', on);
+    toolFull.title = on ? '退出全屏' : '全屏';
+    toolFull.setAttribute('aria-label', toolFull.title);
+  }
+
+  function syncPlayIcon() {
+    if (!toolPlay) return;
+    // 播放状态由手机决定，这里只做“启动音乐”的入口，图标保持播放键
+    document.getElementById('play-path').setAttribute('d', ICON_PLAY);
+  }
+
+  function initTools() {
+    toolPlay = $('btn-play');
+    toolMute = $('btn-mute');
+    toolFull = $('btn-full');
+    audio.muted = mutedPref;
+    syncMuteIcon();
+    syncFullIcon();
+    syncPlayIcon();
+
+    toolPlay.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      // 浏览器拦了自动播放时，点这里手动启动（随后由手机播放状态驱动）
+      if (!audio.src) return;
+      audio.play().then(hideHint).catch(showHint);
+    });
+    toolMute.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      audio.muted = !audio.muted;
+      mutedPref = audio.muted;
+      try { localStorage.setItem('castMuted', mutedPref ? '1' : '0'); } catch (e) { /* ignore */ }
+      syncMuteIcon();
+    });
+    toolFull.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      try {
+        if (document.fullscreenElement) {
+          if (document.exitFullscreen) document.exitFullscreen().catch(function () {});
+        } else if (document.documentElement.requestFullscreen) {
+          document.documentElement.requestFullscreen().catch(function () {});
+        }
+      } catch (e) { /* ignore */ }
+    });
+    document.addEventListener('fullscreenchange', syncFullIcon);
+    audio.addEventListener('play', syncPlayIcon);
+    audio.addEventListener('pause', syncPlayIcon);
+  }
+
+  function showHint() {
+    if (!hintDismissed) $('hint').hidden = false;
+  }
+  function hideHint() {
+    hintDismissed = true;
+    $('hint').hidden = true;
+  }
+
+  // ---- 字体：始终使用手机阅读页的字体文件，保证两边一致 ----
+
+  async function ensureFont(url) {
+    var u = url || '';
+    if (u === currentFontUrl) return false;
+    currentFontUrl = u;
+    if (!u) {
+      currentFontFamily = SYSTEM_FONT;
+      content.style.fontFamily = SYSTEM_FONT;
+      return true;
+    }
+    fontSeq += 1;
+    var family = 'CastReaderFont' + fontSeq;
+    var st = document.getElementById('castFontStyle');
+    if (!st) {
+      st = document.createElement('style');
+      st.id = 'castFontStyle';
+      document.head.appendChild(st);
+    }
+    st.textContent = '@font-face{font-family:"' + family + '";src:url("' + u +
+      '");font-display:block;}';
+    currentFontFamily = '"' + family + '",' + SYSTEM_FONT;
+    content.style.fontFamily = currentFontFamily;
+    try {
+      await document.fonts.load('20px "' + family + '"');
+      await document.fonts.ready;
+    } catch (e) { /* fallback to system font */ }
+    return true;
+  }
+
+  async function fontsReady() {
+    try { await document.fonts.ready; } catch (e) { /* ignore */ }
+  }
+
+  // ---- 排版：按字号和“一栏最大宽度”自动分栏，页面填满可视宽度 ----
+
+  // 栏间距固定为 50px（与 #content 的 column-gap 一致），不随字号变化。
+  var COLUMN_GAP_PX = 50;
+
+  function applyLayout(s) {
+    var W = viewport.clientWidth;
+    if (W <= 0) return;
+    var fontPx = Math.max(10, s.fontSizePx || 32);
+    var gap = COLUMN_GAP_PX;
+    var maxW = Math.max(120, s.maxColumnWidthPx || 640);
+    // 栏数只由可视宽度和一栏最大宽度决定：n 栏时每栏宽 = (W-(n-1)*gap)/n，
+    // 取最小的 n 使每栏不超过 maxW。字号只影响每栏排多少字，不参与分栏数计算，
+    // 所以改字号不会让分栏数跳变。
+    var n = Math.max(1, Math.ceil((W + gap) / (maxW + gap)));
+    // 一栏宽 = (W - 栏间距) / 栏数；位置按“栏”记，翻页一次走一屏（n 栏）或一栏
+    var colW = (W - (n - 1) * gap) / n;
+    colsPerPage = n;
+    pageStep = colW + gap;
+    turnCols = s.turnUnit === 'COLUMN' ? 1 : n;
+    content.style.width = W + 'px';
+    content.style.height = '100%';
+    content.style.columnCount = String(n);
+    // 栏宽交给浏览器按 column-count 均分，避免 column-count 与 column-width 同时生效时互相钳制
+    content.style.columnWidth = 'auto';
+    content.style.columnGap = gap + 'px';
+    content.style.columnFill = 'auto';
+    content.style.fontSize = fontPx + 'px';
+    content.style.lineHeight = '1.64';
+    content.style.fontFamily = currentFontFamily;
+    lastViewportW = W;
+    lastViewportH = viewport.clientHeight;
+  }
+
+  // 最左可见栏最多能推到第几栏（让内容右边缘刚好贴住可视区右边缘）
+  function lastCol() {
+    if (!pageStep) return 0;
+    var W = viewport.clientWidth;
+    var total = Math.max(W, content.scrollWidth);
+    return Math.max(0, Math.floor((total - W) / pageStep + 0.002));
+  }
+
+  // 翻页动画时长（毫秒）：遥控器每次上一页/下一页都滑动过去，不跳变
+  var PAGE_ANIM_MS = 300;
+
+  // 把内容平移到第 x 像素；animate = false 时瞬时到位（重排、锚点定位用）
+  function moveTo(x, animate) {
+    content.style.transition = animate
+      ? 'transform ' + PAGE_ANIM_MS + 'ms cubic-bezier(.22,.61,.36,1)'
+      : 'none';
+    // 先落定 transition 的切换，再改 transform：动画/瞬时到位都按预期生效
+    void content.offsetWidth;
+    content.style.transform = 'translateX(' + (-x) + 'px)';
+  }
+
+  // 内容能平移的最大距离（“一栏”模式下最后一页可能不是整数步长）
+  function maxTranslate() {
+    return Math.max(0, content.scrollWidth - viewport.clientWidth);
+  }
+
+  // 定位到第 k 栏（k 为最左可见栏的列号）
+  function setCol(k, animate) {
+    var last = lastCol();
+    currentCol = Math.max(0, Math.min(Math.round(k), last));
+    moveTo(Math.min(currentCol * pageStep, maxTranslate()), animate !== false);
+  }
+
+  function findBlockEl(c, b) {
+    return content.querySelector('.blk[data-c="' + c + '"][data-b="' + b + '"]');
+  }
+
+  function findCharRect(a) {
+    var el = findBlockEl(a.chapter, a.block);
+    if (!el) return null;
+    var node = el.firstChild;
+    var rect = null;
+    if (node && node.nodeType === 3 && node.textContent.length > 0) {
+      var len = node.textContent.length;
+      var pos = Math.max(0, Math.min(len - 1, a.char | 0));
+      try {
+        var r = document.createRange();
+        r.setStart(node, pos);
+        r.setEnd(node, Math.min(len, pos + 1));
+        var rects = r.getClientRects();
+        if (rects && rects.length) rect = rects[0];
+      } catch (e) { /* ignore */ }
+    }
+    if (!rect) rect = el.getBoundingClientRect();
+    return { el: el, rect: rect };
+  }
+
+  // 内容坐标 x 落在第几栏
+  function colOfX(x) {
+    if (!pageStep) return 0;
+    return Math.max(0, Math.min(lastCol(), Math.floor((x + 1) / pageStep)));
+  }
+
+  // 等浏览器完成这一帧的排版/分栏（改动字号、栏宽后 multicol 可能延后一帧才稳定）
+  function nextFrame() {
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () { requestAnimationFrame(resolve); });
+    });
+  }
+
+  // resetOffset：重排后旧 transform 会让坐标换算失真，先把内容归零再找锚点。
+  // 定位后用“再测一次”校验：multicol 重排可能晚一帧，一轮不对就再校正，
+  // 保证锚点字符真的回到可视区左侧那一栏。
+  function focusAnchor(a, resetOffset) {
+    if (resetOffset) {
+      currentCol = 0;
+      moveTo(0, false);
+    }
+    var placed = false;
+    for (var i = 0; i < 3; i++) {
+      var t = findCharRect(a);
+      if (!t) return false;
+      var vr = viewport.getBoundingClientRect();
+      var x = t.rect.left - vr.left + currentCol * pageStep;
+      var col = colOfX(x);
+      placed = true;
+      if (col === currentCol) break;
+      setCol(col, false);
+    }
+    updateHeaderFromPoint();
+    return placed;
+  }
+
+  function caretChar(x, y, blk) {
+    var node = null;
+    var off = 0;
+    try {
+      if (document.caretPositionFromPoint) {
+        var p = document.caretPositionFromPoint(x, y);
+        if (p) { node = p.offsetNode; off = p.offset; }
+      } else if (document.caretRangeFromPoint) {
+        var r = document.caretRangeFromPoint(x, y);
+        if (r) { node = r.startContainer; off = r.startOffset; }
+      }
+    } catch (e) { /* ignore */ }
+    if (node && node.nodeType === 3 && blk.contains(node)) return off;
+    return 0;
+  }
+
+  /** 当前页左上角第一个字：大屏翻页后回报给手机的“章:段:字”。 */
+  function topAnchor() {
+    var vr = viewport.getBoundingClientRect();
+    var yMax = Math.min(vr.height - 2, 120);
+    var dxs = [3, 10, 18, 28];
+    for (var dy = 2; dy < yMax; dy += 4) {
+      for (var i = 0; i < dxs.length; i++) {
+        var x = vr.left + dxs[i];
+        var y = vr.top + dy;
+        var els = document.elementsFromPoint
+          ? document.elementsFromPoint(x, y)
+          : [document.elementFromPoint(x, y)];
+        for (var j = 0; j < els.length; j++) {
+          var el = els[j];
+          if (!el || !el.closest) continue;
+          var blk = el.closest('.blk');
+          if (!blk || !content.contains(blk)) continue;
+          var c = parseInt(blk.dataset.c, 10);
+          var b = parseInt(blk.dataset.b, 10);
+          if (isNaN(c) || isNaN(b)) continue;
+          return { chapter: c, block: b, char: caretChar(x, y, blk) };
+        }
+      }
+    }
+    return null;
+  }
+
+  function updateHeader(a) {
+    if (!a) return;
+    var sec = content.querySelector('section.chapter[data-c="' + a.chapter + '"]');
+    $('chapter').textContent = sec ? (sec.dataset.title || '') : '';
+    $('anchor').textContent = (a.chapter + 1) + ':' + (a.block + 1);
+  }
+
+  function updateHeaderFromPoint() {
+    updateHeader(topAnchor());
+  }
+
+  function reportAnchor() {
+    var a = topAnchor();
+    if (!a) return;
+    updateHeader(a);
+    var key = a.chapter + ',' + a.block + ',' + a.char;
+    if (key === lastReportKey) return;
+    lastReportKey = key;
+    fetch('/anchor?c=' + a.chapter + '&b=' + a.block + '&char=' + a.char +
+      '&gen=' + lastTurnOffset, { cache: 'no-store' }).catch(function () {});
+  }
+
+  // ---- 正文：按章懒加载，追加/前插后保持当前页位置 ----
+
+  function buildChapter(ch) {
+    var sec = document.createElement('section');
+    sec.className = 'chapter';
+    sec.dataset.c = ch.index;
+    sec.dataset.title = ch.title || '';
+    var blocks = ch.blocks || [];
+    for (var i = 0; i < blocks.length; i++) {
+      var b = blocks[i];
+      if (!b || !b.text || !b.text.trim()) continue;
+      var d = document.createElement('div');
+      var lv = (b.level >= 1 && b.level <= 6) ? b.level : 0;
+      d.className = 'blk' + (lv ? ' lv' + lv : '');
+      d.dataset.c = ch.index;
+      d.dataset.b = i;
+      d.textContent = b.text;
+      sec.appendChild(d);
+    }
+    return sec;
+  }
+
+  function renderChapters(chs, mode) {
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < chs.length; i++) {
+      frag.appendChild(buildChapter(chs[i]));
+      cache.set(chs[i].index, chs[i]);
+    }
+    if (mode === 'replace') {
+      content.innerHTML = '';
+      content.appendChild(frag);
+    } else if (mode === 'prepend') {
+      content.insertBefore(frag, content.firstChild);
+    } else {
+      content.appendChild(frag);
+    }
+  }
+
+  async function fetchChapter(i) {
+    if (cache.has(i)) return cache.get(i);
+    try {
+      var r = await fetch('/chapter?i=' + i, { cache: 'no-store' });
+      if (!r.ok) return null;
+      var ch = await r.json();
+      cache.set(i, ch);
+      return ch;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function fetchRange(from, to) {
+    var jobs = [];
+    for (var i = from; i <= to; i++) jobs.push(fetchChapter(i));
+    var chs = await Promise.all(jobs);
+    for (var j = 0; j < chs.length; j++) if (!chs[j]) return null;
+    return chs;
+  }
+
+  function resetContent() {
+    content.innerHTML = '';
+    moveTo(0, false);
+    cache.clear();
+    loadedFrom = 0;
+    loadedTo = -1;
+    currentCol = 0;
+    lastReportKey = '';
+    lastTurnOffset = 0;
+    lockedAnchor = null;
+    ready = false;
+  }
+
+  async function loadInitial(chapter) {
+    var c = Math.max(0, Math.min(chapterCount - 1, chapter || 0));
+    // 从当前章开始，首屏不会跑到上一章的末尾；要往前翻时再前插上一章
+    var from = c;
+    var to = Math.min(chapterCount - 1, c + 3);
+    var chs = await fetchRange(from, to);
+    if (!chs) return false;
+    content.innerHTML = '';
+    moveTo(0, false);
+    renderChapters(chs, 'replace');
+    loadedFrom = from;
+    loadedTo = to;
+    currentCol = 0;
+    return true;
+  }
+
+  async function loadForward() {
+    if (loadedTo >= chapterCount - 1) return false;
+    var from = loadedTo + 1;
+    var to = Math.min(chapterCount - 1, loadedTo + 2);
+    var chs = await fetchRange(from, to);
+    if (!chs) return false;
+    renderChapters(chs, 'append');
+    loadedTo = to;
+    return true;
+  }
+
+  async function loadBackward() {
+    if (loadedFrom <= 0) return false;
+    var from = Math.max(0, loadedFrom - 2);
+    var to = loadedFrom - 1;
+    var chs = await fetchRange(from, to);
+    if (!chs) return false;
+    renderChapters(chs, 'prepend');
+    loadedFrom = from;
+    return true;
+  }
+
+  async function turnForward() {
+    var last = lastCol();
+    if (currentCol >= last) {
+      var added = await loadForward();
+      if (added) last = lastCol();
+    }
+    if (currentCol < last) setCol(Math.min(currentCol + turnCols, last));
+    else setCol(last);
+  }
+
+  async function turnBackward() {
+    if (currentCol <= 0 && loadedFrom > 0) {
+      var a = lockedAnchor || topAnchor();
+      var added = await loadBackward();
+      if (added && a) focusAnchor(a, true);
+      else if (added) setCol(0);
+    }
+    if (currentCol > 0) setCol(Math.max(0, currentCol - turnCols));
+    else setCol(0);
+  }
+
+  async function doTurns(delta) {
+    if (!ready || !delta) return;
+    var steps = Math.min(Math.abs(delta), 60);
+    for (var i = 0; i < steps; i++) {
+      if (delta > 0) await turnForward();
+      else await turnBackward();
+    }
+    // 等翻页动画结束再读左上角，避免把滑动途中的位置回报给手机
+    if (steps > 0) await sleep(PAGE_ANIM_MS + 40);
+    var a = topAnchor();
+    if (a) lockedAnchor = a;
+    reportAnchor();
+  }
+
+  // 遥控端从进度历史恢复：定位到该“章:段:字”，不做翻页动画
+  async function jumpToAnchor(a) {
+    var ch = Math.max(0, Math.min(chapterCount - 1, a.chapter || 0));
+    if (ch < loadedFrom || ch > loadedTo) {
+      if (!(await loadInitial(ch))) return;
+    }
+    moveTo(0, false);
+    currentCol = 0;
+    await fontsReady();
+    await nextFrame();
+    if (!focusAnchor(a, true)) return;
+    lockedAnchor = topAnchor() || a;
+    reportAnchor();
+  }
+
+  // 重排（改字号/栏宽/翻页单位/音乐条开关/字体加载/窗口尺寸变化）只做一件事：
+  // 把锁定的阅读位置还原到左上角，其他一律不动 —— 不回报锚点、不落盘。
+  async function relayoutPreserving(s) {
+    var a = lockedAnchor || topAnchor();
+    applyLayout(s);
+    moveTo(0, false);
+    currentCol = 0;
+    await fontsReady();
+    await nextFrame();
+    var ok = a ? focusAnchor(a, true) : false;
+    if (!ok && a) {
+      // 锁定位置所在章不在懒加载窗口里：补载该章后再定位
+      if (await loadInitial(a.chapter)) {
+        applyLayout(s);
+        moveTo(0, false);
+        currentCol = 0;
+        await fontsReady();
+        await nextFrame();
+        ok = focusAnchor(a, true);
+      }
+    }
+    // 锁定位置只在翻页/恢复时更新：重排后不重新采样，避免每重排一次就往后漂一段
+    updateHeaderFromPoint();
+  }
+
+  // ---- 音乐与播放器状态（网页只显示，不提供控制） ----
+
+  function updateMusic(s) {
+    var m = s.music || {};
+    $('title').textContent = m.title || '未在播放';
+    $('artist').textContent = m.artist || '';
+    var art = $('art');
+    art.style.visibility = m.title ? 'visible' : 'hidden';
+    if (m.hasArt && m.id) {
+      var bg = 'url("/art?v=' + encodeURIComponent(m.id) + '")';
+      if (art.dataset.bg !== bg) {
+        art.dataset.bg = bg;
+        art.style.backgroundImage = bg;
+      }
+    } else {
+      art.dataset.bg = '';
+      art.style.backgroundImage = 'none';
+    }
+    var dur = (m.durationMs || 0) / 1000;
+    // 手机端进度：拖动进度条时这里会跳
+    var phonePos = (m.positionMs || 0) / 1000;
+    // 手机上的 seek 序号变了 = 用户刚刚拖动过进度条，必须立刻跟过去
+    var gen = s.seekGen || 0;
+    if (gen !== lastSeekGen) {
+      lastSeekGen = gen;
+      if (audio.readyState >= 1) {
+        try { audio.currentTime = phonePos; } catch (e) { /* ignore */ }
+      } else if (m.id) {
+        pendingSeek = phonePos;
+      }
+    }
+    var shownPos = phonePos;
+    if (s.audio && !audio.paused && audio.currentTime > 0) shownPos = audio.currentTime;
+    $('bar').style.width = dur > 0 ? Math.min(100, shownPos / dur * 100) + '%' : '0%';
+    $('time').textContent = mmss(shownPos) + ' / ' + mmss(dur);
+    // 只有“网页出声 + 有曲目”时才需要启动音乐按钮
+    if (toolPlay) {
+      toolPlay.classList.toggle('hidden', !s.audio || !m.id);
+      syncPlayIcon();
+    }
+
+    if (!s.audio) {
+      if (!audio.paused) audio.pause();
+      hideHint();
+      return;
+    }
+    if (m.id && m.id !== lastTrack) {
+      lastTrack = m.id;
+      pendingSeek = phonePos;
+      audio.src = '/audio?v=' + encodeURIComponent(m.id);
+      audio.load();
+    }
+    if (!m.id) {
+      if (!audio.paused) audio.pause();
+      return;
+    }
+    if (m.playing) {
+      if (audio.paused) audio.play().then(hideHint).catch(showHint);
+    } else if (!audio.paused) {
+      audio.pause();
+    }
+    if (audio.readyState >= 1) {
+      // 以手机位置为准判断漂移：网页自己的 currentTime 只用于显示，不能让漂移掩盖手机的拖动
+      var target = pendingSeek != null ? pendingSeek : phonePos;
+      var seeked = pendingSeek != null;
+      pendingSeek = null;
+      if (seeked || Math.abs(audio.currentTime - phonePos) > 1.6) {
+        try { audio.currentTime = target; } catch (e) { /* ignore */ }
+      }
+    } else if (pendingSeek == null && Math.abs((m.positionMs || 0) / 1000) > 0) {
+      // 还没元数据：记住目标位置，loadedmetadata 后跳
+      pendingSeek = phonePos;
+    }
+  }
+
+  function updateTheme(s) {
+    var theme = s.theme || 'WHITE';
+    if (document.documentElement.getAttribute('data-theme') !== theme) {
+      document.documentElement.setAttribute('data-theme', theme);
+    }
+  }
+
+  // ---- 主循环 ----
+
+  async function applyState(s) {
+    S = s;
+    updateTheme(s);
+    updateMusic(s);
+    // 是否显示音乐条：挡住底部整条，正文区随之变高
+    var showMusic = s.showMusic !== false;
+    var footerChanged = showMusic !== lastShowMusic;
+    lastShowMusic = showMusic;
+    document.body.classList.toggle('no-music', !showMusic);
+    var turnUnit = s.turnUnit === 'COLUMN' ? 'COLUMN' : 'SCREEN';
+    $('book').textContent = s.bookTitle || '';
+    if (s.bookTitle) document.title = s.bookTitle;
+
+    var key = (s.bookTitle || '') + '|' + (s.bookAuthor || '') + '|' + (s.chapterCount || 0);
+    if (key !== bookKey) {
+      bookKey = key;
+      chapterCount = s.chapterCount || 0;
+      resetContent();
+    }
+
+    var fontChanged = await ensureFont(s.fontUrl);
+    if (!ready) {
+      if (chapterCount <= 0) return;
+      var focus = s.focus || { chapter: 0, block: 0, char: 0 };
+      lastTurnOffset = s.turnOffset || 0;
+      var ok = await loadInitial(focus.chapter);
+      if (!ok) return;
+      applyLayout(s);
+      moveTo(0, false);
+      currentCol = 0;
+      await fontsReady();
+      focusAnchor(focus, true);
+      lastFontSize = s.fontSizePx || 32;
+      lastMaxWidth = s.maxColumnWidthPx || 640;
+      lastTurnUnit = turnUnit;
+      lastFocusGen = (s.focus && s.focus.gen) || 0;
+      ready = true;
+      updateHeaderFromPoint();
+      // 只锁定位置；进度不由加载/重排改写
+      lockedAnchor = topAnchor() || focus;
+      return;
+    }
+
+    if (fontChanged || (s.fontSizePx || 32) !== lastFontSize ||
+      (s.maxColumnWidthPx || 640) !== lastMaxWidth ||
+      turnUnit !== lastTurnUnit || footerChanged) {
+      lastFontSize = s.fontSizePx || 32;
+      lastMaxWidth = s.maxColumnWidthPx || 640;
+      lastTurnUnit = turnUnit;
+      await relayoutPreserving(s);
+    }
+
+    // 遥控端从进度历史恢复（focus gen 变了）：跳到新锚点
+    var fg = (s.focus && s.focus.gen) || 0;
+    if (fg !== lastFocusGen) {
+      lastFocusGen = fg;
+      if (s.focus) await jumpToAnchor(s.focus);
+    }
+
+    if ((s.turnOffset || 0) !== lastTurnOffset) {
+      var delta = (s.turnOffset || 0) - lastTurnOffset;
+      lastTurnOffset = s.turnOffset || 0;
+      await doTurns(delta);
+    }
+  }
+
+  async function pollLoop() {
+    while (true) {
+      try {
+        var r = await fetch('/state?t=' + Date.now(), { cache: 'no-store' });
+        if (!r.ok) throw new Error('http');
+        var s = await r.json();
+        document.body.classList.remove('offline');
+        await applyState(s);
+      } catch (e) {
+        document.body.classList.add('offline');
+      }
+      await sleep(300);
+    }
+  }
+
+  var resizeTimer = null;
+  window.addEventListener('resize', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(async function () {
+      if (!ready || !S) return;
+      if (viewport.clientWidth === lastViewportW && viewport.clientHeight === lastViewportH) return;
+      await relayoutPreserving(S);
+    }, 160);
+  });
+
+  audio.addEventListener('loadedmetadata', function () {
+    if (pendingSeek != null) {
+      try { audio.currentTime = pendingSeek; } catch (e) { /* ignore */ }
+      pendingSeek = null;
+    }
+  });
+  audio.addEventListener('timeupdate', function () {
+    if (!S || !S.audio || !S.music) return;
+    var dur = (S.music.durationMs || 0) / 1000;
+    if (dur > 0) $('bar').style.width = Math.min(100, audio.currentTime / dur * 100) + '%';
+    $('time').textContent = mmss(audio.currentTime) + ' / ' + mmss(dur);
+  });
+  document.addEventListener('click', function () {
+    if (!S || !S.audio || !S.music || !S.music.playing) return;
+    audio.play().then(hideHint).catch(function () {});
+  });
+
+  function keepAwake() {
+    try {
+      if ('wakeLock' in navigator) navigator.wakeLock.request('screen').catch(function () {});
+    } catch (e) { /* ignore */ }
+  }
+  initTools();
+  keepAwake();
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) keepAwake();
+  });
+
+  pollLoop();
+})();
+</script>
+</body>
+</html>

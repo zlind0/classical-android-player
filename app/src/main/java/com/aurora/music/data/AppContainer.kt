@@ -104,6 +104,14 @@ class AppContainer(context: Context) {
     val ebookScanner = com.aurora.music.data.ebook.EbookScanner(ebookStore, ebookDb.ebookDao())
     val ebookPrefs = com.aurora.music.data.ebook.EbookPrefs(appContext)
 
+    /** 网页端投屏时静音本地音乐（声音从浏览器出）；PlaybackService 的 volBase 读这一份。 */
+    val castMute = MutableStateFlow(false)
+    val ebookCast = com.aurora.music.data.ebook.EbookCastController(
+        appContext,
+        ebookPrefs,
+        onWebAudioMuted = { castMute.value = it },
+    )
+
     // 有声书栈：独立 Room 库 + 仓库 + 扫描器（书=根下直接子目录，章=书内音频文件）
     private val audiobookDb: com.aurora.music.data.audiobook.AudiobookDb = Room.databaseBuilder(
         appContext, com.aurora.music.data.audiobook.AudiobookDb::class.java, "audiobook_library.db",
