@@ -150,6 +150,17 @@ fun Ios5App() {
     LaunchedEffect(playerState.current.id) {
         container.songIntro.onSongChanged(playerState.current.id)
     }
+    // 网页投屏常驻（启动即开）：播放器状态与当前清单全局推给网页。
+    // 放在 Ios5App 而不是阅读页，没开阅读页时网页也能显示“正在播放 + 当前清单”。
+    // 必须直接收 VM 的 StateFlow：上面的 playerState 用的是 collectAsStateWithLifecycle，
+    // 锁屏（Activity STOPPED）后会停止收集，投屏状态就冻在锁屏那一刻——网页每 2 秒把
+    // 音频拽回那个死位置，听起来像“几秒的死循环”。VM 里的 ticker 在后台照常跑。
+    LaunchedEffect(playerVM) {
+        playerVM.state.collect { st ->
+            container.ebookCast.updateMusic(st.current, st.positionSec, st.isPlaying)
+            container.ebookCast.updateQueue(st.queue, st.currentIndex)
+        }
+    }
     // 外部打开电子书（文件关联）：导入完成后跳阅读页；失败则提示
     val pendingEbook by container.ebookStore.openRequest.collectAsStateWithLifecycle()
     val ebookNotice by container.ebookStore.notice.collectAsStateWithLifecycle()

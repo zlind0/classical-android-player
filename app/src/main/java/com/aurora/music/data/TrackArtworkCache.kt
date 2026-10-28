@@ -61,8 +61,10 @@ object TrackArtworkCache {
         if (extractEmbedded(context, song)) {
             mem[song.id]?.let { return@withContext it }
         }
-        //  fallback：专辑级 art / 目录封面（列表用的那张）
-        val fallback = song.artworkUrl.ifBlank { folderCover(song) }
+        //  fallback：专辑级 art / 目录封面（列表用的那张）/ 目录里随机一张图片
+        val fallback = song.artworkUrl.ifBlank {
+            folderCover(song).ifBlank { randomFolderImage(song) }
+        }
         return@withContext fallback
     }
 
@@ -166,6 +168,37 @@ object TrackArtworkCache {
         }
         return ""
     }
+
+    /**
+     * 没有内嵌图、也没有专辑图/标准封面名时：从歌曲所在文件夹里随机挑一张图片当封面。
+     * 每个文件夹只随机一次（结果缓存，含"没有图片"），否则每次重绘都换一张图。
+     * 投屏（/art）与正在播放界面都走 [resolve]，所以两边天然一致。
+     */
+    private fun randomFolderImage(song: Song): String {
+        val p = song.path
+        if (p.isBlank()) return ""
+        val dir = runCatching { File(p).absoluteFile.parentFile }.getOrNull() ?: return ""
+        val key = dir.absolutePath
+        folderRandom[key]?.let { return it }
+        val picked = runCatching {
+            val images = dir.listFiles()?.filter { f ->
+                f.isFile && f.canRead() && f.length() in 1..MAX_FOLDER_IMAGE_BYTES &&
+                    f.extension.lowercase() in IMAGE_EXTENSIONS
+            }.orEmpty()
+            if (images.isEmpty()) "" else runCatching { Uri.fromFile(images.random()).toString() }
+                .getOrDefault("")
+        }.getOrDefault("")
+        folderRandom[key] = picked
+        return picked
+    }
+
+    /** 文件夹随机图缓存：目录绝对路径 → 图片 URI（"" = 该目录没有可用图片）。 */
+    private val folderRandom = ConcurrentHashMap<String, String>()
+
+    private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "heic", "avif")
+
+    /** 超过这个大小的文件基本不是封面图；也和投屏 /art 的 12MB 上限保持一致。 */
+    private const val MAX_FOLDER_IMAGE_BYTES = 12L * 1024 * 1024
 
     fun invalidate(songId: String) {
         mem.remove(songId)

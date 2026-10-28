@@ -69,7 +69,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -205,10 +204,10 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
     val recentFonts by container.ebookPrefs.recentFonts.collectAsStateWithLifecycle()
     val castActive = castState.mode != EbookCastMode.OFF
 
-    LaunchedEffect(cast) {
-        // 音乐状态每 200ms 随播放器 tick 更新一次；只存快照，投屏服务线程读到的是一致的一份。
-        snapshotFlow { Triple(playerState.current, playerState.isPlaying, playerState.positionSec) }
-            .collect { (song, playing, pos) -> cast.updateMusic(song, pos, playing) }
+    // 音乐/清单状态由 Ios5App 全局推给网页（没有阅读页时也要有“正在播放”画面），
+    // 这里只负责方向开关：遥控页开着 = 遥控端驱动大屏，关着 = 手机阅读进度驱动大屏。
+    LaunchedEffect(castOpen, castActive) {
+        cast.setRemote(castOpen && castActive)
     }
 
     LaunchedEffect(toast) {
@@ -284,6 +283,10 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
                 (row?.pageIndex ?: 0).coerceAtLeast(0),
             )
             container.ebookTts.setBook(store.md5Of(bookPath), p, bookPath)
+            // 网页立刻落到“上次读到的地方”：不等分页完成，避免大书先在网页上闪一下第 1 章
+            container.ebookCast.setReaderAnchor(
+                EbookCastAnchor(initPage.chapter, initBlock, initChar),
+            )
         }
     }
 
@@ -293,7 +296,7 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
     DisposableEffect(bookPath) {
         onDispose {
             container.ebookTts.stop(savePos = false)
-            // 离开阅读页即结束投屏：服务线程、HDMI Presentation 都随组合销毁
+            // 离开阅读页即退出遥控/HDMI 投屏，并把方向交回手机（网页服务常驻，不关）
             cast.stop()
         }
     }

@@ -12,6 +12,7 @@
     --card: rgba(0, 0, 0, .045);
     --track: rgba(0, 0, 0, .12);
     --rule: rgba(0, 0, 0, .10);
+    --accent: #0a60d6;
   }
   html[data-theme="SEPIA"] {
     --bg: #f4ecd8;
@@ -28,6 +29,7 @@
     --card: rgba(255, 255, 255, .06);
     --track: rgba(255, 255, 255, .16);
     --rule: rgba(255, 255, 255, .12);
+    --accent: #4b9bff;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
@@ -35,19 +37,25 @@
     background: var(--bg);
     color: var(--ink);
     overflow: hidden;
-    display: flex;
-    flex-direction: column;
     font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC",
       "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     touch-action: none;
+  }
+  /* 阅读面 / 音乐面：同一时间只显示一个（没开书 = 音乐界面） */
+  body.music-mode #reading { display: none; }
+  body:not(.music-mode) #music { display: none; }
+  #reading {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
   }
   .top {
     flex: 0 0 auto;
     display: flex;
     align-items: baseline;
     gap: 2.4vmin;
-    padding: 1.7vmin 2.6vmin 1.2vmin;
+    padding: 1.7vmin 16vmin 1.2vmin 2.6vmin;
     border-bottom: 1px solid var(--rule);
     color: var(--muted);
     font-size: 1.9vmin;
@@ -74,14 +82,15 @@
     font-variant-numeric: tabular-nums;
     letter-spacing: .08em;
   }
-  /* 右上角工具：启动音乐 / 静音 / 全屏 */
-  .tools {
-    flex: 0 0 auto;
-    align-self: center;
+  /* 右上角工具：启动音乐 / 静音 / 全屏（两个界面共用，固定在右上角） */
+  #tools {
+    position: fixed;
+    top: 1.2vmin;
+    right: 1.4vmin;
+    z-index: 5;
     display: flex;
     align-items: center;
     gap: .5vmin;
-    margin-left: auto;
   }
   .tool {
     display: flex;
@@ -174,6 +183,10 @@
     background-size: cover;
     background-position: center;
   }
+  /* 只有 App 自带的默认封面在棕色主题下着色，真实封面原样显示 */
+  html[data-theme="SEPIA"] .art.is-default {
+    filter: sepia(.55) saturate(1.25) contrast(.98);
+  }
   /* 歌名占满到进度条之前，只有真的放不下才省略，不再提前按 40vmin 截断 */
   .meta { flex: 1 1 auto; min-width: 0; }
   .meta .t {
@@ -191,7 +204,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .spacer { display: none; }
   .playbar { flex: 0 1 auto; display: flex; align-items: center; gap: 1.4vmin; }
   .bar {
     width: 26vmin;
@@ -207,6 +219,171 @@
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
+
+  /* ---- 音乐面：正方形大封面 + 当前清单 ---- */
+  #music {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4vmin 5vmin;
+  }
+  .np {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5vmin;
+    width: 100%;
+    height: 100%;
+    max-width: 190vmin;
+  }
+  .np-left { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; }
+  .np-cover {
+    width: min(58vw, 74vmin);
+    height: min(58vw, 74vmin);
+    border-radius: 1.6vmin;
+    background-color: var(--track);
+    background-size: cover;
+    background-position: center;
+    box-shadow: 0 2.4vmin 6vmin rgba(0, 0, 0, .22);
+  }
+  html[data-theme="SEPIA"] .np-cover.is-default {
+    filter: sepia(.55) saturate(1.25) contrast(.98);
+  }
+  .np-right {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 74vmin;
+    height: min(58vw, 74vmin);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  /* 右栏是定高纵向 flex：文字行绝不能被 flex-shrink 压扁（压扁 + overflow:hidden
+     会把字的头和脚裁掉），只有曲目列表可伸缩 */
+  .np-eyebrow {
+    flex: 0 0 auto;
+    font-size: 1.7vmin;
+    line-height: 1.5;
+    letter-spacing: .12em;
+    color: var(--muted);
+  }
+  .np-title {
+    flex: 0 0 auto;
+    margin-top: 1vmin;
+    font-size: 3.6vmin;
+    font-weight: 700;
+    line-height: 1.32;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .np-sub {
+    flex: 0 0 auto;
+    margin-top: .9vmin;
+    font-size: 2.1vmin;
+    line-height: 1.45;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .np-progress {
+    flex: 0 0 auto;
+    margin-top: 2.4vmin;
+    display: flex;
+    align-items: center;
+    gap: 1.6vmin;
+  }
+  .np-progress .bar { width: auto; flex: 1 1 auto; height: .6vmin; }
+  .np-progress .time { font-size: 1.6vmin; }
+  .np-list-head {
+    flex: 0 0 auto;
+    margin-top: 3.2vmin;
+    padding-bottom: .9vmin;
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    font-size: 1.7vmin;
+    letter-spacing: .06em;
+    color: var(--muted);
+  }
+  .np-list {
+    position: relative;
+    flex: 1 1 0%;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: none;
+    padding-top: .4vmin;
+  }
+  .np-list::-webkit-scrollbar { width: 0; height: 0; }
+  .qgroup {
+    margin: 1.2vmin 0 .5vmin;
+    font-size: 1.5vmin;
+    line-height: 1.4;
+    font-weight: 700;
+    letter-spacing: .04em;
+    color: var(--muted);
+    opacity: .8;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .qrow {
+    display: flex;
+    align-items: baseline;
+    gap: 1.4vmin;
+    padding: .85vmin 1vmin;
+    border-radius: .8vmin;
+    font-size: 1.85vmin;
+    line-height: 1.5;
+    color: var(--ink);
+    opacity: .72;
+  }
+  .qrow .qidx {
+    flex: 0 0 3.4vmin;
+    text-align: right;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .qrow .qt {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .qrow .qa {
+    flex: 0 1 auto;
+    max-width: 30%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+    font-size: 1.6vmin;
+  }
+  .qrow .qdur {
+    flex: 0 0 auto;
+    color: var(--muted);
+    font-size: 1.55vmin;
+    font-variant-numeric: tabular-nums;
+  }
+  .qrow.cur {
+    opacity: 1;
+    background: var(--card);
+    font-weight: 700;
+  }
+  .qrow.cur .qidx { color: var(--accent); }
+  /* 窄屏（竖着的平板/手机横屏的小窗）：改成上下排，封面缩小 */
+  @media (max-aspect-ratio: 1/1) {
+    .np { flex-direction: column; gap: 3vmin; }
+    .np-cover { width: min(52vw, 38vh); height: min(52vw, 38vh); }
+    .np-right { width: 100%; height: auto; flex: 1 1 auto; min-height: 0; }
+    .np-title { font-size: 4.4vmin; }
+  }
+
   #hint {
     position: fixed;
     left: 50%;
@@ -234,37 +411,62 @@
 </style>
 </head>
 <body>
-<header class="top">
-  <span class="book" id="book"></span>
-  <span class="chapter" id="chapter"></span>
-  <span class="anchor" id="anchor"></span>
-  <span class="tools">
-    <button class="tool" id="btn-play" title="启动音乐" aria-label="启动音乐">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path id="play-path"/></svg>
-    </button>
-    <button class="tool" id="btn-mute" title="静音" aria-label="静音">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path id="mute-path"/></svg>
-    </button>
-    <button class="tool" id="btn-full" title="全屏" aria-label="全屏">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path id="full-path"/></svg>
-    </button>
-  </span>
-</header>
-<main>
-  <div id="viewport"><div id="content"></div></div>
-</main>
-<footer class="footer">
-  <div class="art" id="art"></div>
-  <div class="meta">
-    <div class="t" id="title">未在播放</div>
-    <div class="a" id="artist"></div>
+<div id="tools">
+  <button class="tool" id="btn-play" title="启动音乐" aria-label="启动音乐">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path id="play-path"/></svg>
+  </button>
+  <button class="tool" id="btn-mute" title="静音" aria-label="静音">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path id="mute-path"/></svg>
+  </button>
+  <button class="tool" id="btn-full" title="全屏" aria-label="全屏">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path id="full-path"/></svg>
+  </button>
+</div>
+
+<div id="reading">
+  <header class="top">
+    <span class="book" id="book"></span>
+    <span class="chapter" id="chapter"></span>
+    <span class="anchor" id="anchor"></span>
+  </header>
+  <main>
+    <div id="viewport"><div id="content"></div></div>
+  </main>
+  <footer class="footer">
+    <div class="art" id="art"></div>
+    <div class="meta">
+      <div class="t" id="title">未在播放</div>
+      <div class="a" id="artist"></div>
+    </div>
+    <div class="playbar">
+      <div class="bar"><i id="bar"></i></div>
+      <div class="time" id="time">0:00 / 0:00</div>
+    </div>
+  </footer>
+</div>
+
+<div id="music">
+  <div class="np">
+    <div class="np-left">
+      <div class="np-cover" id="np-art"></div>
+    </div>
+    <div class="np-right">
+      <div class="np-eyebrow" id="np-eyebrow">正在播放</div>
+      <div class="np-title" id="np-title">未在播放</div>
+      <div class="np-sub" id="np-sub"></div>
+      <div class="np-progress">
+        <div class="bar"><i id="np-bar"></i></div>
+        <div class="time" id="np-time">0:00 / 0:00</div>
+      </div>
+      <div class="np-list-head">
+        <span>当前清单</span>
+        <span class="time" id="np-count"></span>
+      </div>
+      <div class="np-list" id="np-list"></div>
+    </div>
   </div>
-  <div class="spacer"></div>
-  <div class="playbar">
-    <div class="bar"><i id="bar"></i></div>
-    <div class="time" id="time">0:00 / 0:00</div>
-  </div>
-</footer>
+</div>
+
 <div id="hint" hidden>点击任意处开启声音</div>
 <audio id="audio" preload="auto"></audio>
 <script>
@@ -299,7 +501,7 @@
   var lastViewportW = -1;
   var lastViewportH = -1;
   // 锁定的阅读位置（大屏左上角“章:段:字”）：重排只还原它，绝不重写；
-  // 只有用户点上一页/下一页（或从历史恢复）时才更新。
+  // 只有手机翻页/遥控翻页（或从历史恢复）时才更新。
   var lockedAnchor = null;
   var lastShowMusic = null;
   var lastTurnUnit = '';
@@ -308,9 +510,24 @@
   var lastTrack = '';
   var pendingSeek = null;
   var lastSeekGen = -1;
+  // 手机时间轴是否还在动：连续几次轮询位置完全一样且仍在播放 = 状态源冻结（锁屏/被节流）
+  var lastPhoneMs = -1;
+  var phoneStillCount = 0;
   var mutedPref = false;
   try { mutedPref = localStorage.getItem('castMuted') === '1'; } catch (e) { /* ignore */ }
   var hintDismissed = false;
+
+  // 当前界面：true = 音乐播放界面（没打开书），false = 阅读界面
+  var musicMode = false;
+  // 当前播放清单（/queue 拉取，queueGen 变化才重拉）
+  var queue = [];
+  var queueGen = -1;
+  var queueIndex = -1;
+  // 只渲染当前曲前后的一段（大歌单不生成上万行 DOM）；行列号是全局序号
+  var renderFrom = 0;
+  var renderTo = 0;
+  var MAX_ROWS = 400;
+  var queueRows = [];
 
   function sleep(ms) {
     return new Promise(function (resolve) { setTimeout(resolve, ms); });
@@ -337,7 +554,7 @@
 
   function syncMuteIcon() {
     if (!toolMute) return;
-    document.getElementById('mute-path').setAttribute('d', audio.muted ? ICON_MUTED : ICON_VOLUME);
+    $('mute-path').setAttribute('d', audio.muted ? ICON_MUTED : ICON_VOLUME);
     toolMute.classList.toggle('on', audio.muted);
     toolMute.title = audio.muted ? '取消静音' : '静音';
     toolMute.setAttribute('aria-label', toolMute.title);
@@ -346,7 +563,7 @@
   function syncFullIcon() {
     if (!toolFull) return;
     var on = !!document.fullscreenElement;
-    document.getElementById('full-path').setAttribute('d', on ? ICON_EXIT_FULL : ICON_FULL);
+    $('full-path').setAttribute('d', on ? ICON_EXIT_FULL : ICON_FULL);
     toolFull.classList.toggle('on', on);
     toolFull.title = on ? '退出全屏' : '全屏';
     toolFull.setAttribute('aria-label', toolFull.title);
@@ -355,7 +572,7 @@
   function syncPlayIcon() {
     if (!toolPlay) return;
     // 播放状态由手机决定，这里只做“启动音乐”的入口，图标保持播放键
-    document.getElementById('play-path').setAttribute('d', ICON_PLAY);
+    $('play-path').setAttribute('d', ICON_PLAY);
   }
 
   function initTools() {
@@ -618,6 +835,7 @@
     updateHeader(topAnchor());
   }
 
+  // 遥控页开着时由大屏回报进度；关着时手机进度是真相，回报会被手机忽略。
   function reportAnchor() {
     var a = topAnchor();
     if (!a) return;
@@ -774,7 +992,7 @@
     reportAnchor();
   }
 
-  // 遥控端从进度历史恢复：定位到该“章:段:字”，不做翻页动画
+  // 手机/遥控端定位：跳到该“章:段:字”，不做翻页动画
   async function jumpToAnchor(a) {
     var ch = Math.max(0, Math.min(chapterCount - 1, a.chapter || 0));
     if (ch < loadedFrom || ch > loadedTo) {
@@ -814,27 +1032,60 @@
     updateHeaderFromPoint();
   }
 
+  // ---- 界面切换：没打开书 → 音乐播放界面（大封面 + 当前清单） ----
+
+  function setMusicMode(on) {
+    if (on === musicMode) return false;
+    musicMode = on;
+    document.body.classList.toggle('music-mode', on);
+    $('music').hidden = !on;
+    $('reading').hidden = on;
+    if (on) {
+      // 阅读面被隐藏：正文状态作废，回来时按手机当前进度重新加载
+      ready = false;
+      bookKey = '';
+      resetContent();
+    } else {
+      // 回到阅读面：视口尺寸变了，重新加载分栏
+      lastViewportW = -1;
+      lastViewportH = -1;
+    }
+    return true;
+  }
+
   // ---- 音乐与播放器状态（网页只显示，不提供控制） ----
+
+  // 封面写进 background-image；isDefault 时挂 is-default 类（棕色主题下给默认封面着色）
+  function applyCover(el, bg, isDefault) {
+    if (!el) return;
+    if (el.dataset.bg !== bg) {
+      el.dataset.bg = bg;
+      el.style.backgroundImage = bg;
+    }
+    el.classList.toggle('is-default', !!isDefault);
+  }
+
+  // 网页出声的前置放大（手机音量条在投屏出声时控制它）：0..1，直接作为媒体元素增益。
+  // 本地静音键仍然独立生效（audio.muted）。
+  function applyPreamp(s) {
+    var v = typeof s.preamp === 'number' ? s.preamp : 1;
+    v = Math.max(0, Math.min(1, v));
+    if (Math.abs(audio.volume - v) > 0.001) audio.volume = v;
+  }
 
   function updateMusic(s) {
     var m = s.music || {};
-    $('title').textContent = m.title || '未在播放';
-    $('artist').textContent = m.artist || '';
-    var art = $('art');
-    art.style.visibility = m.title ? 'visible' : 'hidden';
-    if (m.hasArt && m.id) {
-      var bg = 'url("/art?v=' + encodeURIComponent(m.id) + '")';
-      if (art.dataset.bg !== bg) {
-        art.dataset.bg = bg;
-        art.style.backgroundImage = bg;
-      }
-    } else {
-      art.dataset.bg = '';
-      art.style.backgroundImage = 'none';
-    }
     var dur = (m.durationMs || 0) / 1000;
+    applyPreamp(s);
     // 手机端进度：拖动进度条时这里会跳
     var phonePos = (m.positionMs || 0) / 1000;
+    // 手机时间轴冻住了（锁屏后状态源不动）：这一轮不要纠偏，否则网页音频会被
+    // 反复拽回同一个死位置，听起来就是“几秒一循环”
+    var phoneMs = m.positionMs || 0;
+    if (m.playing && phoneMs === lastPhoneMs) phoneStillCount += 1;
+    else phoneStillCount = 0;
+    lastPhoneMs = phoneMs;
+    var phoneStale = !!m.playing && phoneStillCount >= 3;
     // 手机上的 seek 序号变了 = 用户刚刚拖动过进度条，必须立刻跟过去
     var gen = s.seekGen || 0;
     if (gen !== lastSeekGen) {
@@ -847,8 +1098,35 @@
     }
     var shownPos = phonePos;
     if (s.audio && !audio.paused && audio.currentTime > 0) shownPos = audio.currentTime;
-    $('bar').style.width = dur > 0 ? Math.min(100, shownPos / dur * 100) + '%' : '0%';
-    $('time').textContent = mmss(shownPos) + ' / ' + mmss(dur);
+    var pct = dur > 0 ? Math.min(100, shownPos / dur * 100) + '%' : '0%';
+    var timeText = mmss(shownPos) + ' / ' + mmss(dur);
+
+    // 封面：有内嵌图用内嵌图，没有就用 App 的默认封面（棕色主题下只给默认封面着色）
+    var hasRealArt = !!(m.hasArt && m.id);
+    var bg = hasRealArt
+      ? 'url("/art?v=' + encodeURIComponent(m.id) + '")'
+      : 'url("/defaultart?v=1")';
+
+    // 阅读面底部的小条
+    $('title').textContent = m.title || '未在播放';
+    $('artist').textContent = m.artist || '';
+    var art = $('art');
+    art.style.visibility = m.title ? 'visible' : 'hidden';
+    applyCover(art, bg, !hasRealArt);
+    $('bar').style.width = pct;
+    $('time').textContent = timeText;
+
+    // 音乐面：大封面 + 标题/艺人/专辑 + 进度
+    applyCover($('np-art'), bg, !hasRealArt);
+    $('np-title').textContent = m.title || '未在播放';
+    $('np-sub').textContent = [m.artist, m.album].filter(function (x) { return !!x; }).join(' · ');
+    var eyebrow = '正在播放';
+    if ((s.queueLength || 0) > 0) eyebrow += ' · ' + ((s.queueIndex || 0) + 1) + ' / ' + s.queueLength;
+    $('np-eyebrow').textContent = eyebrow;
+    $('np-bar').style.width = pct;
+    $('np-time').textContent = timeText;
+    if (musicMode && m.title) document.title = m.title;
+
     // 只有“网页出声 + 有曲目”时才需要启动音乐按钮
     if (toolPlay) {
       toolPlay.classList.toggle('hidden', !s.audio || !m.id);
@@ -876,17 +1154,130 @@
       audio.pause();
     }
     if (audio.readyState >= 1) {
-      // 以手机位置为准判断漂移：网页自己的 currentTime 只用于显示，不能让漂移掩盖手机的拖动
+      // 以手机位置为准判断漂移，但只在“真的跑偏”时纠：
+      //   · 手机明显领先网页（网页卡住/落后 >1.6s）→ 追上去；
+      //   · 网页领先手机 >5s（手机倒退或时钟严重滞后）→ 拉回来；
+      // 剩下的几十毫秒到几秒的领先属于正常缓冲，硬拽会造成回跳。
+      // 手机的进度条拖动（seekGen 变化）和换曲已经在上面的分支里直接跳了。
       var target = pendingSeek != null ? pendingSeek : phonePos;
       var seeked = pendingSeek != null;
       pendingSeek = null;
-      if (seeked || Math.abs(audio.currentTime - phonePos) > 1.6) {
+      var drift = audio.currentTime - phonePos;
+      if (seeked || (!phoneStale && (drift < -1.6 || drift > 5))) {
         try { audio.currentTime = target; } catch (e) { /* ignore */ }
       }
     } else if (pendingSeek == null && Math.abs((m.positionMs || 0) / 1000) > 0) {
       // 还没元数据：记住目标位置，loadedmetadata 后跳
       pendingSeek = phonePos;
     }
+  }
+
+  // ---- 当前清单（只读）：queueGen 变化时重拉一次 /queue ----
+
+  function renderQueue(idx) {
+    var list = $('np-list');
+    var frag = document.createDocumentFragment();
+    queueRows = [];
+    var lastAlbum = null;
+    var from = 0;
+    var to = queue.length;
+    if (queue.length > MAX_ROWS) {
+      from = Math.max(0, Math.min(queue.length - MAX_ROWS, idx - Math.floor(MAX_ROWS / 2)));
+      to = Math.min(queue.length, from + MAX_ROWS);
+    }
+    renderFrom = from;
+    renderTo = to;
+    for (var i = from; i < to; i++) {
+      var t = queue[i];
+      var album = (t.album || '').trim();
+      if (album && album !== lastAlbum) {
+        var gh = document.createElement('div');
+        gh.className = 'qgroup';
+        gh.textContent = album + (t.artist ? ' · ' + t.artist : '');
+        frag.appendChild(gh);
+        lastAlbum = album;
+      }
+      var row = document.createElement('div');
+      row.className = 'qrow' + (i === idx ? ' cur' : '');
+      var n = document.createElement('span');
+      n.className = 'qidx';
+      n.textContent = String(i + 1);
+      var ti = document.createElement('span');
+      ti.className = 'qt';
+      ti.textContent = t.title || '';
+      var ar = document.createElement('span');
+      ar.className = 'qa';
+      ar.textContent = t.artist || '';
+      var du = document.createElement('span');
+      du.className = 'qdur';
+      du.textContent = mmss((t.durationMs || 0) / 1000);
+      row.appendChild(n);
+      row.appendChild(ti);
+      row.appendChild(ar);
+      row.appendChild(du);
+      frag.appendChild(row);
+      queueRows.push(row);
+    }
+    list.innerHTML = '';
+    list.appendChild(frag);
+    queueIndex = idx;
+    $('np-count').textContent = queue.length ? (idx + 1) + ' / ' + queue.length : '';
+    scrollQueueToCurrent();
+  }
+
+  function rowOf(i) {
+    if (i < renderFrom || i >= renderTo) return null;
+    return queueRows[i - renderFrom] || null;
+  }
+
+  // 当前曲换成别的行：只切高亮，不重建整张清单（也不打断用户的手动滚动太久）；
+  // 新序号落在这个渲染窗口之外时才重建
+  function markQueueIndex(idx) {
+    if (idx === queueIndex) return;
+    if (!rowOf(idx)) {
+      renderQueue(idx);
+      return;
+    }
+    var old = rowOf(queueIndex);
+    if (old) old.classList.remove('cur');
+    queueIndex = idx;
+    var cur = rowOf(idx);
+    if (cur) cur.classList.add('cur');
+    $('np-count').textContent = queue.length ? (idx + 1) + ' / ' + queue.length : '';
+    scrollQueueToCurrent();
+  }
+
+  function scrollQueueToCurrent() {
+    var list = $('np-list');
+    var row = rowOf(queueIndex);
+    if (!list || !row) return;
+    var top = row.offsetTop - list.clientHeight / 2 + row.offsetHeight / 2;
+    list.scrollTop = Math.max(0, top);
+  }
+
+  async function syncQueue(s) {
+    var len = s.queueLength || 0;
+    if (len === 0) {
+      if (queue.length) {
+        queue = [];
+        queueGen = s.queueGen || 0;
+        renderQueue(0);
+      }
+      return;
+    }
+    var gen = s.queueGen || 0;
+    if (gen === queueGen && queue.length === len) {
+      markQueueIndex(Math.max(0, Math.min(len - 1, s.queueIndex || 0)));
+      return;
+    }
+    try {
+      var r = await fetch('/queue?v=' + gen, { cache: 'no-store' });
+      if (!r.ok) return;
+      var q = await r.json();
+      queue = q.tracks || [];
+      queueGen = q.gen;
+      renderQueue(Math.max(0, Math.min(queue.length - 1, s.queueIndex || 0)));
+    } catch (e) { /* 下一轮再试 */ }
   }
 
   function updateTheme(s) {
@@ -901,7 +1292,16 @@
   async function applyState(s) {
     S = s;
     updateTheme(s);
+    // 没打开书 = 音乐播放界面；打开书 = 阅读界面（进度由手机或遥控端决定）
+    var hasBook = !!s.hasBook && (s.chapterCount || 0) > 0;
+    setMusicMode(!hasBook);
     updateMusic(s);
+    syncQueue(s);
+    if (!hasBook) {
+      document.body.classList.remove('no-music');
+      return;
+    }
+
     // 是否显示音乐条：挡住底部整条，正文区随之变高
     var showMusic = s.showMusic !== false;
     var footerChanged = showMusic !== lastShowMusic;
@@ -950,7 +1350,7 @@
       await relayoutPreserving(s);
     }
 
-    // 遥控端从进度历史恢复（focus gen 变了）：跳到新锚点
+    // 锚点 gen 变了：手机翻页（跟随模式）或遥控端定位/从历史恢复 → 跳过去
     var fg = (s.focus && s.focus.gen) || 0;
     if (fg !== lastFocusGen) {
       lastFocusGen = fg;
@@ -983,7 +1383,7 @@
   window.addEventListener('resize', function () {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(async function () {
-      if (!ready || !S) return;
+      if (!ready || !S || musicMode) return;
       if (viewport.clientWidth === lastViewportW && viewport.clientHeight === lastViewportH) return;
       await relayoutPreserving(S);
     }, 160);
@@ -998,8 +1398,12 @@
   audio.addEventListener('timeupdate', function () {
     if (!S || !S.audio || !S.music) return;
     var dur = (S.music.durationMs || 0) / 1000;
-    if (dur > 0) $('bar').style.width = Math.min(100, audio.currentTime / dur * 100) + '%';
-    $('time').textContent = mmss(audio.currentTime) + ' / ' + mmss(dur);
+    var pct = dur > 0 ? Math.min(100, audio.currentTime / dur * 100) + '%' : '0%';
+    var text = mmss(audio.currentTime) + ' / ' + mmss(dur);
+    $('bar').style.width = pct;
+    $('time').textContent = text;
+    $('np-bar').style.width = pct;
+    $('np-time').textContent = text;
   });
   document.addEventListener('click', function () {
     if (!S || !S.audio || !S.music || !S.music.playing) return;

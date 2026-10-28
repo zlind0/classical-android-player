@@ -58,6 +58,8 @@ class EbookPrefs(context: Context) {
         val WEB_CAST_SHOW_MUSIC = booleanPreferencesKey("web_cast_show_music")
         val WEB_CAST_TURN_UNIT = stringPreferencesKey("web_cast_turn_unit")
         val WEB_CAST_MUSIC_ON_CAST = booleanPreferencesKey("web_cast_music_on_cast")
+        /** 网页出声时的前置放大（0..1）。 */
+        val WEB_CAST_PREAMP = floatPreferencesKey("web_cast_preamp")
         val HDMI_CAST_FONT_PX = intPreferencesKey("hdmi_cast_font_px")
         val HDMI_CAST_COLUMN_WIDTH = intPreferencesKey("hdmi_cast_column_width_px")
         val HDMI_CAST_SHOW_MUSIC = booleanPreferencesKey("hdmi_cast_show_music")
@@ -126,8 +128,11 @@ class EbookPrefs(context: Context) {
                         .coerceIn(MIN_CAST_COLUMN_WIDTH_PX, MAX_CAST_COLUMN_WIDTH_PX),
                     webShowMusic = p[Keys.WEB_CAST_SHOW_MUSIC] ?: true,
                     webTurnUnit = turnUnitOf(p[Keys.WEB_CAST_TURN_UNIT]),
-                    // 网页投屏默认由网页出声（老行为）；HDMI 默认手机出声
-                    webMusicOnCast = p[Keys.WEB_CAST_MUSIC_ON_CAST] ?: true,
+                    // 网页常驻后默认由手机出声：要网页出声由播放页音量条右侧的 airplay 键打开，
+                    // 否则一开网页手机就静音了。HDMI 默认手机出声。
+                    webMusicOnCast = p[Keys.WEB_CAST_MUSIC_ON_CAST] ?: false,
+                    // 网页出声的前置放大默认满幅（100%）
+                    webPreamp = (p[Keys.WEB_CAST_PREAMP] ?: 1f).coerceIn(0f, 1f),
                     hdmiFontSizePx = (p[Keys.HDMI_CAST_FONT_PX] ?: legacyFont)
                         .coerceIn(MIN_CAST_FONT_PX, MAX_CAST_FONT_PX),
                     hdmiMaxColumnWidthPx = (p[Keys.HDMI_CAST_COLUMN_WIDTH] ?: legacyWidth)
@@ -255,6 +260,13 @@ class EbookPrefs(context: Context) {
             appContext.ebookReadDataStore.edit {
                 it[if (web) Keys.WEB_CAST_MUSIC_ON_CAST else Keys.HDMI_CAST_MUSIC_ON_CAST] = onCast
             }
+        }
+    }
+
+    /** 网页出声的前置放大（0..1）：播放页音量条在投屏出声时控制它。 */
+    fun setCastPreamp(v: Float) {
+        scope.launch {
+            appContext.ebookReadDataStore.edit { it[Keys.WEB_CAST_PREAMP] = v.coerceIn(0f, 1f) }
         }
     }
 

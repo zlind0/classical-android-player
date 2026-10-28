@@ -232,6 +232,9 @@ class PlaybackService : MediaLibraryService() {
             .setMediaSourceFactory(mediaSourceFactory)
             .setAudioAttributes(audioAttributes, /* handleAudioFocus = */ true)
             .setHandleAudioBecomingNoisy(true)
+            // 锁屏后 CPU 进入低功耗：播放期间按住唤醒锁，避免解码/输出线程被延迟（卡顿、投屏 /state 变慢）。
+            // 只在真正播放时持锁，暂停即释放（ExoPlayer 自己管理）。
+            .setWakeMode(C.WAKE_MODE_LOCAL)
             // 5 分钟提前缓存：扫描/慢介质抢 IO 时，播放不被拖住。
             // 缓的是解码前压缩样点（CD 级 FLAC 5 分钟约 30MB），内存可接受。
             .setLoadControl(audioLoadControl())
@@ -1159,6 +1162,8 @@ class PlaybackService : MediaLibraryService() {
         val attrs = AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).setUsage(C.USAGE_MEDIA).build()
         return ExoPlayer.Builder(this)
             .setAudioAttributes(attrs, /* handleAudioFocus = */ false)
+            // 交叉淡入淡出也会出声：锁屏时同样要保住音频线程
+            .setWakeMode(C.WAKE_MODE_LOCAL)
             .build().also { fadePlayer = it }
     }
 

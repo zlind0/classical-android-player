@@ -125,6 +125,8 @@ data class EbookCastDisplayPrefs(
     val webTurnUnit: EbookCastTurnUnit = EbookCastTurnUnit.SCREEN,
     /** 网页投屏时音乐是否由网页出声（false = 手机本地播放） */
     val webMusicOnCast: Boolean = true,
+    /** 网页出声时的前置放大（0..1，默认满幅）：手机播放页的音量条此时控制它 */
+    val webPreamp: Float = 1f,
     /** HDMI 投屏字号（px），16..64 */
     val hdmiFontSizePx: Int = 32,
     /** HDMI 投屏一栏的最大宽度（px）；按可用宽度自动决定分几栏 */

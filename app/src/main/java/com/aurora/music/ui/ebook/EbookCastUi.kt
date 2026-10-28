@@ -368,7 +368,11 @@ private fun CastSelectionPage(
             Ios5Group(Modifier.padding(horizontal = 12.dp)) {
                 Ios5Cell(
                     title = "网页端投屏",
-                    subtitle = "同一 Wi-Fi 下用浏览器打开手机上的网址",
+                    subtitle = if (state.webRunning) {
+                        "${state.lanUrl.ifBlank { state.url }} · 网页已在线，点按进入遥控"
+                    } else {
+                        "同一 Wi-Fi 下用浏览器打开手机上的网址"
+                    },
                     onClick = onStartWeb,
                 )
                 Ios5CellDivider(startInset = 12.dp)
@@ -412,7 +416,7 @@ private fun CastSelectionPage(
             )
             Spacer(Modifier.weight(1f))
             Text(
-                "开始投屏后，只有点击「结束投屏」才能退出遥控页",
+                "网页服务常驻在线：进遥控页由遥控端翻页，退出遥控后网页跟随手机阅读进度",
                 color = Ios5Colors.TextSecondary,
                 fontSize = 12.sp,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
@@ -593,8 +597,9 @@ private fun CastTopBar(
                         shadow = Shadow(Color.Black.copy(alpha = 0.55f), Offset(0f, 1f)),
                     ),
                 )
+                // 网页服务常驻：这里只退出遥控页（之后网页跟随手机阅读进度）
                 Ios5SmallButton(
-                    text = "结束投屏",
+                    text = "退出遥控",
                     onClick = onStop,
                     modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp),
                     icon = Icons.Filled.Stop,
