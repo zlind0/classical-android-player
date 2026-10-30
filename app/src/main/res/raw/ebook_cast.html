@@ -45,6 +45,8 @@
   /* 阅读面 / 音乐面：同一时间只显示一个（没开书 = 音乐界面） */
   body.music-mode #reading { display: none; }
   body:not(.music-mode) #music { display: none; }
+  /* 设备接收端（?recv=1）：顶栏由原生界面提供，网页这边不再重复显示书名/章节 */
+  body.recv .top { display: none; }
   #reading {
     height: 100%;
     display: flex;
@@ -472,6 +474,12 @@
 <script>
 (function () {
   'use strict';
+
+  // 被别的设备投屏过来时（接收端 WebView 带着 ?recv=1）：隐藏网页自己的顶栏，
+  // 书名/章节/进度由接收端的原生顶栏显示。
+  if (location.search.indexOf('recv=1') >= 0) {
+    document.body.classList.add('recv');
+  }
 
   var $ = function (id) { return document.getElementById(id); };
   var viewport = $('viewport');

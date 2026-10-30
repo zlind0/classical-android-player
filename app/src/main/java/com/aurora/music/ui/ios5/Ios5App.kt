@@ -159,7 +159,42 @@ fun Ios5App() {
         playerVM.state.collect { st ->
             container.ebookCast.updateMusic(st.current, st.positionSec, st.isPlaying)
             container.ebookCast.updateQueue(st.queue, st.currentIndex)
+            container.ebookCast.updateTransport(st.shuffle, st.repeat.name, st.isCurrentLiked)
         }
+    }
+    // 接收端（被投屏的那台）回传的走带指令 → 本机播放器
+    LaunchedEffect(container) {
+        container.ebookCast.commands.collect { cmd ->
+            when (cmd.type) {
+                com.aurora.music.data.cast.CastCommandType.TOGGLE -> playerVM.togglePlay()
+                com.aurora.music.data.cast.CastCommandType.PLAY -> playerVM.play()
+                com.aurora.music.data.cast.CastCommandType.PAUSE -> playerVM.pause()
+                com.aurora.music.data.cast.CastCommandType.NEXT -> playerVM.next()
+                com.aurora.music.data.cast.CastCommandType.PREV -> playerVM.previous()
+                com.aurora.music.data.cast.CastCommandType.JUMP -> if (cmd.index >= 0) playerVM.jumpTo(cmd.index)
+                com.aurora.music.data.cast.CastCommandType.SEEK -> {
+                    val dur = playerVM.state.value.durationSec
+                    if (dur > 0) playerVM.seekTo((cmd.positionMs / 1000f / dur).coerceIn(0f, 1f))
+                }
+                com.aurora.music.data.cast.CastCommandType.SHUFFLE -> playerVM.toggleShuffle()
+                com.aurora.music.data.cast.CastCommandType.REPEAT -> playerVM.cycleRepeat()
+                com.aurora.music.data.cast.CastCommandType.LIKE -> playerVM.toggleLikeCurrent()
+                com.aurora.music.data.cast.CastCommandType.REJECT,
+                com.aurora.music.data.cast.CastCommandType.STOP,
+                -> Unit
+            }
+        }
+    }
+    // 投屏提示（对方拒绝 / 连接失败 / 已断开）
+    LaunchedEffect(container) {
+        container.ebookCast.events.collect { confirm(it) }
+    }
+    // 本机正在接收别人的投屏：先停掉本地音乐，避免两边同时出声
+    val receiveState by container.castReceiver.state.collectAsStateWithLifecycle()
+    val receivingCast = receiveState is com.aurora.music.data.cast.CastReceiveState.Music ||
+        receiveState is com.aurora.music.data.cast.CastReceiveState.Ebook
+    LaunchedEffect(receivingCast) {
+        if (receivingCast) playerVM.pause()
     }
     // 外部打开电子书（文件关联）：导入完成后跳阅读页；失败则提示
     val pendingEbook by container.ebookStore.openRequest.collectAsStateWithLifecycle()
@@ -1204,6 +1239,9 @@ fun Ios5App() {
                     }
                 }
             }
+
+            // 接收投屏的全屏浮层：不管当前在哪个 Tab / 阅读器 / 播放页，都盖在最上面
+            com.aurora.music.ui.cast.CastReceiverOverlay()
         }
       } // BoxWithConstraints 横竖屏分支结束
     }

@@ -76,17 +76,19 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.LibrarySource
-import com.aurora.music.data.ebook.EbookTheme
+import com.aurora.music.data.cast.CastContentType
 import com.aurora.music.data.lookupMergedTitle
 import com.aurora.music.data.mergeEnabledFor
 import com.aurora.music.model.Song
+import com.aurora.music.ui.cast.CastPickerCard
 import com.aurora.music.ui.components.MarqueeText
 import com.aurora.music.ui.components.TrackArtwork
 import com.aurora.music.ui.components.formatTime
+import com.aurora.music.ui.ios5.Ios5ButtonTone
 import com.aurora.music.ui.ios5.Ios5Sans
-import com.aurora.music.ui.ios5.Ios5SegmentRow
 import com.aurora.music.ui.ios5.Ios5Slider
 import com.aurora.music.ui.ios5.Ios5SliderRow
+import com.aurora.music.ui.ios5.Ios5SmallButton
 import com.aurora.music.viewmodel.PlayerUiState
 import com.aurora.music.viewmodel.RepeatMode
 import kotlin.math.roundToInt
@@ -191,6 +193,11 @@ fun Ios5PlayerPage(
     onOpenQueue: () -> Unit,
     introActive: Boolean = false,
     onIntroClick: () -> Unit = {},
+    /** 非空时左上角改成红底文字按钮（接收投屏用“结束投屏”）。 */
+    collapseLabel: String = "",
+    /** 接收端模式：隐藏投屏键/队列键，音量条直接调本机系统音量。 */
+    remoteMode: Boolean = false,
+    onSeekFinished: (() -> Unit)? = null,
 ) {
     val song = state.current
     val context = LocalContext.current
@@ -271,8 +278,22 @@ fun Ios5PlayerPage(
                 Modifier.fillMaxWidth().height(36.dp + third).padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IpodBarButton(onClick = onCollapse) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBackIos, "返回", tint = Color.White, modifier = Modifier.size(20.dp))
+                if (collapseLabel.isNotBlank()) {
+                    Ios5SmallButton(
+                        text = collapseLabel,
+                        onClick = onCollapse,
+                        icon = Icons.Filled.Stop,
+                        tone = Ios5ButtonTone.Red,
+                    )
+                } else {
+                    IpodBarButton(onClick = onCollapse) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBackIos,
+                            "返回",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                 }
                 Text(
                     song.artist.ifBlank { " " },
@@ -283,8 +304,12 @@ fun Ios5PlayerPage(
                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
                 )
-                IpodBarButton(onClick = onOpenQueue) {
-                    Icon(Icons.AutoMirrored.Filled.QueueMusic, "队列", tint = Color.White, modifier = Modifier.size(20.dp))
+                if (remoteMode) {
+                    Spacer(Modifier.size(36.dp))
+                } else {
+                    IpodBarButton(onClick = onOpenQueue) {
+                        Icon(Icons.AutoMirrored.Filled.QueueMusic, "队列", tint = Color.White, modifier = Modifier.size(20.dp))
+                    }
                 }
             }
             // 标题区：固定高度锁定区域，单行时垂直居中，两行时压缩塞进同一空间。
@@ -352,6 +377,7 @@ fun Ios5PlayerPage(
                     onValueChange = onSeek,
                     modifier = Modifier.weight(1f),
                     compact = true,
+                    onValueChangeFinished = { onSeekFinished?.invoke() },
                 )
                 Text(
                     "-${formatTime(remaining)}",
@@ -472,11 +498,13 @@ fun Ios5PlayerPage(
             // 点亮（蓝）= 声音由网页出（手机本地静音）；灰 = 手机自己播或还没有网页连上。
             val castState by container.ebookCast.state.collectAsStateWithLifecycle()
             val castPrefs by container.ebookPrefs.castPrefs.collectAsStateWithLifecycle()
+            val sender by container.ebookCast.senderState.collectAsStateWithLifecycle()
             val castAudio = castPrefs.musicOnCast(true)
             val castConnected = castState.clientsConnected
             // 音乐投屏启用（网页出声）时：音量条不再调手机系统音量，而是网页端的前置放大
             // （0%..100%，默认 100%）。手机本地此时是静音的，调系统音量没有意义。
-            val casting = castAudio && castConnected
+            val casting = !remoteMode && castAudio && castConnected
+            val deviceCasting = sender.device != null && sender.connected
             var preamp by remember(castPrefs.webPreamp) {
                 mutableFloatStateOf(castPrefs.webPreamp.coerceIn(0f, 1f))
             }
@@ -509,30 +537,28 @@ fun Ios5PlayerPage(
                         modifier = Modifier.weight(1f),
                     )
                 }
-                // 和上一首/下一首同尺寸。点按：已连网页 = 切换“是否由网页出声”，
-                // 还没连网页 = 直接弹出投屏气泡（给出网址，别让用户找不到入口）；长按一律弹气泡。
-                Icon(
-                    Icons.Filled.Airplay,
-                    when {
-                        !castConnected -> "投屏：还没有网页连接，点按查看网址"
-                        castAudio -> "网页投屏出声中，点按改由手机播放"
-                        else -> "在网页上播放声音"
-                    },
-                    tint = if (castAudio && castConnected) Color(0xFF3B8CFA) else Color(0xFF9AA0AB),
-                    modifier = Modifier.size(52.dp).clip(CircleShape)
-                        .pointerInput(castAudio, castConnected) {
-                            detectTapGestures(
-                                onTap = {
-                                    if (castConnected) {
-                                        container.ebookPrefs.setCastMusicOnCast(true, !castAudio)
-                                    } else {
-                                        castBubble = true
-                                    }
-                                },
-                                onLongPress = { castBubble = true },
-                            )
-                        }.padding(8.dp),
-                )
+                // 和上一首/下一首同尺寸。点按/长按都打开投屏选择卡（本机 / 浏览器 / 附近设备）。
+                // 接收端模式没有投屏键：这台设备正在播别人的内容，避免误开本地投屏。
+                if (!remoteMode) {
+                    Icon(
+                        Icons.Filled.Airplay,
+                        when {
+                            deviceCasting -> "正在投屏到 ${sender.device?.name}"
+                            sender.device != null && sender.waiting -> "等待 ${sender.device?.name} 接受"
+                            casting -> "网页投屏出声中"
+                            !castConnected -> "投屏：选择设备或查看网页地址"
+                            else -> "选择投屏目标"
+                        },
+                        tint = if (deviceCasting || casting) Color(0xFF3B8CFA) else Color(0xFF9AA0AB),
+                        modifier = Modifier.size(52.dp).clip(CircleShape)
+                            .pointerInput(remoteMode) {
+                                detectTapGestures(
+                                    onTap = { castBubble = true },
+                                    onLongPress = { castBubble = true },
+                                )
+                            }.padding(8.dp),
+                    )
+                }
             }
         }
     }
@@ -547,20 +573,12 @@ fun Ios5PlayerPage(
     }
 }
 
-// ---- 投屏气泡（播放页 airplay 键长按）----
-// 顶端是网页地址，下面是可扩展的设置项：新增选项直接在 Column 里往下加一段即可。
+// ---- 投屏气泡（播放页 airplay 键）----
+// 本机 / 浏览器 / 局域网里发现的设备，三选一；点设备即把音乐投过去（对方弹接受界面）。
 // 页面风格与电子书投屏共用同一份设置（EbookPrefs.castPrefs.theme），改哪边两边都跟着变。
-
-private val castThemeLabels = listOf("白色", "棕色", "深色")
-private val castThemeValues = listOf(EbookTheme.WHITE, EbookTheme.SEPIA, EbookTheme.DARK)
 
 @Composable
 internal fun CastBubble(onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    val container = (context.applicationContext as AuroraApplication).container
-    val castState by container.ebookCast.state.collectAsStateWithLifecycle()
-    val castPrefs by container.ebookPrefs.castPrefs.collectAsStateWithLifecycle()
-    val url = castState.lanUrl.ifBlank { castState.url }
     Box(
         Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f))
             .clickable(
@@ -582,37 +600,10 @@ internal fun CastBubble(onDismiss: () -> Unit) {
                 )
                 .padding(vertical = 10.dp),
         ) {
-            // 顶端：网页地址 + 连接状态（新装的设备第一次用就是靠这里拿到网址）
-            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                Text(
-                    if (castState.clientsConnected) "网页投屏 · 已连接" else "网页投屏 · 未连接",
-                    color = Color(0xFF8E8E93), fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    url.ifBlank { "网址准备中…（请先连接 Wi-Fi）" },
-                    color = Color(0xFF0A60D6), fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
-                if (!castState.clientsConnected && url.isNotBlank()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "同一 Wi-Fi 下用浏览器打开这个网址",
-                        color = Color(0xFF8E8E93), fontSize = 12.sp, fontFamily = Ios5Sans,
-                    )
-                }
-            }
-            Box(Modifier.fillMaxWidth().padding(top = 8.dp).height(1.dp).background(Color(0xFFDDDDDD)))
-            // 页面风格（与阅读投屏共用）
-            Ios5SegmentRow(
-                title = "页面风格",
-                options = castThemeLabels,
-                selected = castThemeValues.indexOf(castPrefs.theme).coerceAtLeast(0),
-                onSelect = { container.ebookPrefs.setCastTheme(castThemeValues[it]) },
+            CastPickerCard(
+                contentType = CastContentType.MUSIC,
+                onDismiss = onDismiss,
             )
-            // 以后的投屏选项（字号 / 翻页单位…）在这里继续往下加
         }
     }
 }

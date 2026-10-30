@@ -113,6 +113,7 @@ import com.aurora.music.ui.ios5.Ios5SliderRow
 import com.aurora.music.ui.ios5.Ios5SmallButton
 import com.aurora.music.ui.ios5.Ios5StaticText
 import com.aurora.music.viewmodel.PlayerUiState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -254,6 +255,7 @@ fun EbookCastPage(
     onBack: () -> Unit,
     onStartWeb: () -> Unit,
     onStartPresentation: () -> Unit,
+    onStartDevice: (com.aurora.music.data.cast.CastDevice) -> Unit,
     onStop: () -> Unit,
     onPrevPage: () -> Unit,
     onNextPage: () -> Unit,
@@ -294,6 +296,7 @@ fun EbookCastPage(
                 onBack = onBack,
                 onStartWeb = onStartWeb,
                 onStartPresentation = onStartPresentation,
+                onStartDevice = onStartDevice,
             )
         } else {
             CastRemotePage(
@@ -326,7 +329,7 @@ fun EbookCastPage(
         if (settingsOpen && active) {
             CastSettingsOverlay(
                 prefs = prefs,
-                web = state.mode == EbookCastMode.WEB,
+                web = state.mode != EbookCastMode.PRESENTATION,
                 readerFontPath = readerFontPath,
                 bookPath = bookPath,
                 chapterTitles = chapterTitles,
@@ -356,15 +359,48 @@ private fun CastSelectionPage(
     onBack: () -> Unit,
     onStartWeb: () -> Unit,
     onStartPresentation: () -> Unit,
+    onStartDevice: (com.aurora.music.data.cast.CastDevice) -> Unit,
 ) {
     val hdmiReady = displays.isNotEmpty()
+    val context = LocalContext.current
+    val container = (context.applicationContext as AuroraApplication).container
+    val devices by container.castDiscovery.devices.collectAsStateWithLifecycle()
+    // 只在选择页可见时浏览（省电）；离开立即停止
+    DisposableEffect(Unit) {
+        container.castDiscovery.acquireBrowse()
+        onDispose { container.castDiscovery.releaseBrowse() }
+    }
+    val nearby = devices.filter { it.kind == com.aurora.music.data.cast.CastDeviceKind.APP }
     Column(Modifier.fillMaxSize().background(Ios5Colors.linenBrush)) {
         Ios5NavBar(title = "投屏", onBack = onBack)
         Column(
             Modifier.fillMaxSize()
                 .windowInsetsPadding(WindowInsets.navigationBars)
-                .padding(top = 10.dp, bottom = 16.dp),
+                .padding(top = 10.dp, bottom = 16.dp)
+                .verticalScroll(rememberScrollState()),
         ) {
+            Ios5SectionTitle("附近设备")
+            Ios5Group(Modifier.padding(horizontal = 12.dp)) {
+                if (nearby.isEmpty()) {
+                    Ios5Cell(
+                        title = "正在搜索…",
+                        subtitle = "确保对方已打开 Aurora，且连在同一个 Wi-Fi",
+                        showChevron = false,
+                        onClick = {},
+                    )
+                } else {
+                    nearby.forEachIndexed { i, d ->
+                        if (i > 0) Ios5CellDivider(startInset = 12.dp)
+                        Ios5Cell(
+                            title = d.name,
+                            subtitle = "${d.host} · 点按把这本书投过去",
+                            onClick = { onStartDevice(d) },
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Ios5SectionTitle("本机投屏")
             Ios5Group(Modifier.padding(horizontal = 12.dp)) {
                 Ios5Cell(
                     title = "网页端投屏",
@@ -414,7 +450,7 @@ private fun CastSelectionPage(
                 fontSize = 13.sp,
                 modifier = Modifier.padding(horizontal = 20.dp),
             )
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.height(16.dp))
             Text(
                 "网页服务常驻在线：进遥控页由遥控端翻页，退出遥控后网页跟随手机阅读进度",
                 color = Ios5Colors.TextSecondary,
@@ -462,9 +498,13 @@ private fun CastRemotePage(
             EbookTheme.DARK -> "夜间"
         }
         val fontLabel = if (readerFontPath.isBlank()) "系统字体" else File(readerFontPath).name
-        // 网页投屏与 HDMI 投屏各自存一套字号/栏宽，摘要和设置面板都按当前方式取值
-        val isWebCast = state.mode == EbookCastMode.WEB
-        val modeLabel = if (isWebCast) "网页" else "HDMI"
+        // 网页投屏 / 设备投屏与 HDMI 投屏各自存一套字号/栏宽，摘要和设置面板都按当前方式取值
+        val isWebCast = state.mode != EbookCastMode.PRESENTATION
+        val modeLabel = when (state.mode) {
+            EbookCastMode.DEVICE -> "设备"
+            EbookCastMode.PRESENTATION -> "HDMI"
+            else -> "网页"
+        }
         val castFontPx = prefs.fontSizePx(isWebCast)
         val castColumnPx = prefs.maxColumnWidthPx(isWebCast)
         val density = LocalDensity.current
@@ -569,14 +609,18 @@ private fun CastTopBar(
             copied = false
         }
     }
-    val isWeb = state.mode == EbookCastMode.WEB
+    val copyable = state.mode == EbookCastMode.WEB
     val url = state.lanUrl.ifBlank { state.url }
     val anchor = state.anchor?.let { EbookAnchorCode.encode(it.chapter, it.block) }.orEmpty()
     val subtitle = listOfNotNull(
         state.chapterTitle.takeIf { it.isNotBlank() },
         anchor.takeIf { it.isNotBlank() },
     ).joinToString(" · ")
-    val address = if (isWeb) url else "HDMI · ${state.displayName}"
+    val address = when (state.mode) {
+        EbookCastMode.DEVICE -> "投到 · ${state.deviceName}"
+        EbookCastMode.PRESENTATION -> "HDMI · ${state.displayName}"
+        else -> url
+    }
     Column(modifier.fillMaxWidth()) {
         // iOS5 金属顶栏：标题居中，右上角红色 gloss「结束投屏」键
         Box(
@@ -599,7 +643,7 @@ private fun CastTopBar(
                 )
                 // 网页服务常驻：这里只退出遥控页（之后网页跟随手机阅读进度）
                 Ios5SmallButton(
-                    text = "退出遥控",
+                    text = if (state.mode == EbookCastMode.DEVICE) "结束投屏" else "退出遥控",
                     onClick = onStop,
                     modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp),
                     icon = Icons.Filled.Stop,
@@ -619,12 +663,12 @@ private fun CastTopBar(
                 count = if (copied) "已复制" else "",
                 showChevron = false,
                 onClick = {
-                    if (isWeb && address.isNotBlank()) {
+                    if (copyable && address.isNotBlank()) {
                         clipboard.setText(AnnotatedString(address))
                         copied = true
                     }
                 },
-                trailing = if (isWeb) {
+                trailing = if (copyable) {
                     {
                         Icon(
                             if (copied) Icons.Filled.Check else Icons.Filled.ContentCopy,

@@ -4,6 +4,14 @@ import android.content.Context
 import android.net.Uri
 import com.aurora.music.R
 import com.aurora.music.data.TrackArtworkCache
+import com.aurora.music.data.cast.CastCommand
+import com.aurora.music.data.cast.CastCommandType
+import com.aurora.music.data.cast.CastContentType
+import com.aurora.music.data.cast.CastDevice
+import com.aurora.music.data.cast.CastHttp
+import com.aurora.music.data.cast.CastIdentity
+import com.aurora.music.data.cast.CastOffer
+import com.aurora.music.data.cast.CastSenderState
 import com.aurora.music.model.Song
 import com.google.gson.Gson
 import java.io.BufferedOutputStream
@@ -48,7 +56,7 @@ import kotlinx.coroutines.launch
 // - 是否由网页出声由播放页音量条右侧的 airplay 键决定（+ 当前有没有网页连接）。
 // - Presentation 模式复用同一网页，通过 Android Presentation 输出到 HDMI 副屏。
 
-enum class EbookCastMode { OFF, WEB, PRESENTATION }
+enum class EbookCastMode { OFF, WEB, PRESENTATION, DEVICE }
 
 /** 投屏进度锚点：章/段/段内字（与手机阅读进度同一套下标，显示时用 EbookAnchorCode）。 */
 data class EbookCastAnchor(val chapter: Int, val block: Int, val char: Int = 0)
@@ -62,6 +70,8 @@ data class EbookCastState(
     val lanUrl: String = "",
     /** Presentation 模式的目标显示器名称。 */
     val displayName: String = "",
+    /** DEVICE 模式的接收设备名称。 */
+    val deviceName: String = "",
     val error: String = "",
     val bookTitle: String = "",
     val chapterTitle: String = "",
@@ -125,6 +135,8 @@ private data class WireState(
     val bookTitle: String,
     val bookAuthor: String,
     val chapterCount: Int,
+    /** 当前章标题：接收设备顶栏的阅读信息用。 */
+    val chapterTitle: String,
     val focus: WireFocus?,
     val turnOffset: Int,
     val theme: String,
@@ -149,6 +161,14 @@ private data class WireState(
     val queueGen: Int,
     val queueIndex: Int,
     val queueLength: Int,
+    /** 发送端身份与传输状态：设备投屏的接收端据此显示欢迎语与走带按钮的选中态。 */
+    val senderId: String = "",
+    val senderName: String = "",
+    val shuffle: Boolean = false,
+    val repeat: String = "OFF",
+    val liked: Boolean = false,
+    /** 正在投给哪台设备（空 = 没有设备会话）。 */
+    val castDeviceName: String = "",
 )
 
 private data class WireBlock(val level: Int, val text: String)
@@ -158,11 +178,16 @@ private data class WireChapter(val index: Int, val title: String, val blocks: Li
 class EbookCastController(
     context: Context,
     private val prefs: EbookPrefs,
+    private val identity: CastIdentity,
     /**
      * 投屏画面出声时静音手机本地音乐（真正的声音从网页 / HDMI 设备出来），
      * 关掉后手机自己播；停止投屏一律恢复。
      */
     private val onWebAudioMuted: (Boolean) -> Unit = {},
+    /** 收到别的设备投过来的请求（由本机 HTTP 服务 /cast/offer 调用）。 */
+    private val onCastOffer: (CastOffer) -> Boolean = { false },
+    /** 发送端通知本机结束接收（/cast/stop）。 */
+    private val onCastStop: () -> Unit = {},
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -170,6 +195,33 @@ class EbookCastController(
 
     private val _state = MutableStateFlow(EbookCastState())
     val state: StateFlow<EbookCastState> = _state.asStateFlow()
+
+    /** 接收端回传的走带/翻页/播放指令，由 Ios5App 落到 PlayerViewModel。 */
+    private val _commands = MutableSharedFlow<CastCommand>(
+        extraBufferCapacity = 16,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val commands: SharedFlow<CastCommand> = _commands.asSharedFlow()
+
+    /** 投屏提示（对方拒绝/连接失败/已结束），由 Ios5App 用 snackbar 显示。 */
+    private val _events = MutableSharedFlow<String>(
+        extraBufferCapacity = 8,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val events: SharedFlow<String> = _events.asSharedFlow()
+
+    private val _sender = MutableStateFlow(CastSenderState())
+    /** 本机作为发送端的目标设备（音乐/电子书共用）。 */
+    val senderState: StateFlow<CastSenderState> = _sender.asStateFlow()
+
+    @Volatile private var castDevice: CastDevice? = null
+    @Volatile private var castContent: CastContentType = CastContentType.MUSIC
+    @Volatile private var deviceConnected: Boolean = false
+    @Volatile private var lastDeviceAt: Long = 0L
+    @Volatile private var offerSentAt: Long = 0L
+    @Volatile private var transportShuffle: Boolean = false
+    @Volatile private var transportRepeat: String = "OFF"
+    @Volatile private var transportLiked: Boolean = false
 
     /**
      * 大屏端上报的进度锚点：阅读页收集后跳页并落盘。
@@ -363,6 +415,11 @@ class EbookCastController(
             return
         }
         if (_state.value.starting) return
+        // 从“投到设备”切到网页/HDMI：先把设备那边结束掉，不然它会一直停在接收界面
+        if (mode != EbookCastMode.DEVICE) {
+            castDevice?.let { requestStop(it) }
+            clearDeviceTarget()
+        }
         val gen = generation.incrementAndGet()
         _state.value = _state.value.copy(
             starting = true,
@@ -375,16 +432,19 @@ class EbookCastController(
         )
         scope.launch {
             val lan = localIpv4() ?: webLanUrl.takeIf { it.isNotBlank() }
-            if (mode == EbookCastMode.WEB && lan == null) {
-                if (generation.get() == gen) {
-                    _state.value = _state.value.copy(
-                        starting = false,
-                        remote = false,
-                        error = "没有可用的局域网地址，请先连接 Wi-Fi 或热点",
-                        webRunning = server != null,
-                    )
+            if (mode == EbookCastMode.WEB || mode == EbookCastMode.DEVICE) {
+                if (lan == null) {
+                    if (generation.get() == gen) {
+                        _state.value = _state.value.copy(
+                            starting = false,
+                            remote = false,
+                            error = "没有可用的局域网地址，请先连接 Wi-Fi 或热点",
+                            webRunning = server != null,
+                        )
+                    }
+                    clearDeviceTarget()
+                    return@launch
                 }
-                return@launch
             }
             val srv = ensureServerRunning()
             if (generation.get() != gen) return@launch
@@ -395,10 +455,12 @@ class EbookCastController(
                     error = "无法启动网页服务",
                     webRunning = false,
                 )
+                clearDeviceTarget()
                 return@launch
             }
             if (lan != null && lan != webLanUrl) webLanUrl = lan
-            val url = "http://${if (mode == EbookCastMode.WEB) lan!! else "127.0.0.1"}:${srv.port}/"
+            val loopback = mode == EbookCastMode.PRESENTATION
+            val url = "http://${if (loopback) "127.0.0.1" else lan!!}:${srv.port}/"
             val initial = readerAnchor ?: book?.chapters?.takeIf { it.isNotEmpty() }?.let {
                 EbookCastAnchor(0, 0, 0)
             }
@@ -412,6 +474,7 @@ class EbookCastController(
                 url = url,
                 lanUrl = if (webLanUrl.isBlank()) url else "http://$webLanUrl:${srv.port}/",
                 displayName = displayName,
+                deviceName = if (mode == EbookCastMode.DEVICE) displayName else "",
                 error = "",
                 bookTitle = book?.title.orEmpty(),
                 chapterTitle = initial?.let { chapterTitleOf(it.chapter) }.orEmpty(),
@@ -421,15 +484,166 @@ class EbookCastController(
                 clientsConnected = clientsConnected,
                 remote = true,
             )
+            if (mode == EbookCastMode.DEVICE) {
+                castDevice?.let { offerToDevice(it, CastContentType.EBOOK) }
+            }
             syncAudioRoute()
         }
     }
 
     /**
-     * 结束投屏 = 退出遥控页。网页服务不关（网页永远在线），只是方向换回“手机驱动大屏”：
-     * 有书时网页跟着手机阅读进度，没书时显示音乐播放界面。
+     * 把电子书投到另一台运行本应用的设备：排版仍按本机（发送端）的网页设置，
+     * 接收端用 WebView 打开同一个页面，并在本地原生顶栏放“退出投屏 + 阅读信息”。
      */
-    fun stop() {
+    fun startDevice(device: CastDevice) {
+        if (_state.value.starting) return
+        val old = castDevice
+        if (old != null && old.id != device.id) requestStop(old)
+        castDevice = device
+        castContent = CastContentType.EBOOK
+        deviceConnected = false
+        _sender.value = CastSenderState(device, CastContentType.EBOOK, waiting = true, connected = false)
+        start(EbookCastMode.DEVICE, device.name)
+    }
+
+    /** 音乐投到另一台设备：本机继续播放（静音本地输出），接收端拉 /audio 出声。 */
+    fun castMusicTo(device: CastDevice) {
+        if (_state.value.mode == EbookCastMode.DEVICE) stop(notifyDevice = false)
+        val old = castDevice
+        if (old != null && old.id != device.id) requestStop(old)
+        castDevice = device
+        castContent = CastContentType.MUSIC
+        deviceConnected = false
+        _sender.value = CastSenderState(device, CastContentType.MUSIC, waiting = true, connected = false)
+        offerToDevice(device, CastContentType.MUSIC)
+        syncAudioRoute()
+    }
+
+    /** 停止设备投屏（音乐或电子书）。 */
+    fun stopDeviceCast() = stop()
+
+    /** 只结束“投到设备”的会话，不动网页/HDMI 遥控页（切换输出时用）。 */
+    fun stopDeviceOnly() {
+        val d = castDevice ?: return
+        requestStop(d)
+        clearDeviceTarget()
+    }
+
+    /** 接收端通过 /cast/command 回传的操作。 */
+    internal fun onRemoteCommand(cmd: String, positionMs: Long, index: Int) {
+        when (cmd) {
+            "reject" -> {
+                val d = castDevice
+                clearDeviceTarget()
+                if (_state.value.mode == EbookCastMode.DEVICE) stop(notifyDevice = false)
+                _events.tryEmit(if (d != null) "${d.name} 拒绝了投屏" else "对方拒绝了投屏")
+            }
+
+            "stop" -> {
+                val wasDevice = _state.value.mode == EbookCastMode.DEVICE
+                clearDeviceTarget()
+                if (wasDevice) stop(notifyDevice = false)
+                _events.tryEmit("投屏已结束")
+            }
+
+            "toggle" -> _commands.tryEmit(CastCommand(CastCommandType.TOGGLE))
+            "play" -> _commands.tryEmit(CastCommand(CastCommandType.PLAY))
+            "pause" -> _commands.tryEmit(CastCommand(CastCommandType.PAUSE))
+            "next" -> _commands.tryEmit(CastCommand(CastCommandType.NEXT))
+            "prev" -> _commands.tryEmit(CastCommand(CastCommandType.PREV))
+            "seek" -> _commands.tryEmit(CastCommand(CastCommandType.SEEK, positionMs = positionMs))
+            "jump" -> _commands.tryEmit(CastCommand(CastCommandType.JUMP, index = index))
+            "shuffle" -> _commands.tryEmit(CastCommand(CastCommandType.SHUFFLE))
+            "repeat" -> _commands.tryEmit(CastCommand(CastCommandType.REPEAT))
+            "like" -> _commands.tryEmit(CastCommand(CastCommandType.LIKE))
+        }
+    }
+
+    /** 收到别的设备投过来的请求；返回 true 表示已弹接受界面。 */
+    fun acceptOffer(offer: CastOffer): Boolean = onCastOffer(offer)
+
+    /** 发送端结束/取消投屏。 */
+    fun onIncomingCastStop() = onCastStop()
+
+    /** 接收端每轮 /state 请求都算一次在线心跳。 */
+    internal fun onDeviceRequest() {
+        lastDeviceAt = android.os.SystemClock.elapsedRealtime()
+        if (deviceConnected) return
+        val d = castDevice ?: return
+        deviceConnected = true
+        _sender.value = CastSenderState(d, castContent, waiting = false, connected = true)
+        syncAudioRoute()
+    }
+
+    internal fun updateTransport(shuffle: Boolean, repeat: String, liked: Boolean) {
+        transportShuffle = shuffle
+        transportRepeat = repeat
+        transportLiked = liked
+    }
+
+    private fun clearDeviceTarget() {
+        if (castDevice == null && !_sender.value.active) return
+        castDevice = null
+        castContent = CastContentType.MUSIC
+        deviceConnected = false
+        offerSentAt = 0L
+        _sender.value = CastSenderState()
+        syncAudioRoute()
+    }
+
+    private fun requestStop(device: CastDevice) {
+        scope.launch { CastHttp.stop(device) }
+    }
+
+    private fun offerToDevice(device: CastDevice, type: CastContentType) {
+        if (type == CastContentType.MUSIC && music.id.isBlank()) {
+            clearDeviceTarget()
+            _events.tryEmit("先开始播放一首歌再投屏")
+            return
+        }
+        val host = lanAddress()
+        val srv = ensureServerRunning()
+        if (host == null || srv == null) {
+            clearDeviceTarget()
+            if (_state.value.mode == EbookCastMode.DEVICE) stop(notifyDevice = false)
+            _events.tryEmit("没有可用的局域网地址，请先连接 Wi-Fi")
+            return
+        }
+        val offer = CastOffer(
+            senderId = identity.id,
+            senderName = identity.name,
+            host = host,
+            port = srv.port,
+            type = if (type == CastContentType.EBOOK) "ebook" else "music",
+            title = if (type == CastContentType.EBOOK) book?.title.orEmpty() else music.title,
+            subtitle = if (type == CastContentType.EBOOK) book?.author.orEmpty() else music.artist,
+            url = "http://$host:${srv.port}/",
+        )
+        scope.launch {
+            val ok = CastHttp.offer(device, offer)
+            if (!ok && castDevice?.id == device.id) {
+                clearDeviceTarget()
+                if (_state.value.mode == EbookCastMode.DEVICE) stop(notifyDevice = false)
+                _events.tryEmit("无法连接 ${device.name}，对方可能正忙或未打开 Aurora")
+            } else if (ok) {
+                offerSentAt = android.os.SystemClock.elapsedRealtime()
+            }
+        }
+    }
+
+    /**
+     * 结束投屏 = 退出遥控页 / 结束设备投屏。网页服务不关（网页永远在线），
+     * 只是方向换回“手机驱动大屏”：有书时网页跟着手机阅读进度，没书时显示音乐播放界面。
+     */
+    fun stop(notifyDevice: Boolean = true) {
+        val d = castDevice
+        if (d != null) {
+            if (notifyDevice) requestStop(d)
+            castDevice = null
+            castContent = CastContentType.MUSIC
+            deviceConnected = false
+            _sender.value = CastSenderState()
+        }
         generation.incrementAndGet()
         remote = false
         focus = null
@@ -516,18 +730,40 @@ class EbookCastController(
                 _state.value = _state.value.copy(clientsConnected = alive)
                 syncAudioRoute()
             }
+            // 设备接收端每 700ms 拉一次 /state；超过 8 秒没有心跳就认为它退出了
+            if (deviceConnected &&
+                android.os.SystemClock.elapsedRealtime() - lastDeviceAt > 8_000
+            ) {
+                deviceConnected = false
+                val wasEbook = _state.value.mode == EbookCastMode.DEVICE
+                clearDeviceTarget()
+                if (wasEbook) stop(notifyDevice = false)
+                _events.tryEmit("投屏设备已断开")
+            }
+            // 发出去的投屏请求长时间没人接：收起“等待接受”，别让界面一直挂着
+            if (!deviceConnected && castDevice != null && offerSentAt > 0 &&
+                android.os.SystemClock.elapsedRealtime() - offerSentAt > 60_000
+            ) {
+                val name = castDevice?.name.orEmpty()
+                val wasEbook = _state.value.mode == EbookCastMode.DEVICE
+                clearDeviceTarget()
+                if (wasEbook) stop(notifyDevice = false)
+                _events.tryEmit("$name 没有响应投屏请求")
+            }
             kotlinx.coroutines.delay(1_000)
         }
     }
 
     /** 服务线程收到任意请求时调用：刷新连接时间戳，断→连时通知 UI 显示 airplay 键。 */
-    internal fun onClientRequest() {
+    internal fun onClientRequest(headers: Map<String, String> = emptyMap()) {
         lastClientAt = android.os.SystemClock.elapsedRealtime()
         if (!clientsConnected) {
             clientsConnected = true
             _state.value = _state.value.copy(clientsConnected = true)
             syncAudioRoute()
         }
+        // 设备接收端的原生轮询带这个头（浏览器页面不会带），据此判断“设备会话在线”
+        if (headers["x-aurora-device"] == "1") onDeviceRequest()
     }
 
     /**
@@ -537,7 +773,11 @@ class EbookCastController(
     private fun syncAudioRoute() {
         val mode = _state.value.mode
         val wantWeb = displayPrefs.musicOnCast(mode != EbookCastMode.PRESENTATION)
-        val active = wantWeb && clientsConnected && music.hasAudio && music.id.isNotBlank()
+        val webActive = wantWeb && clientsConnected
+        // 设备投屏：音乐会话必须出声；电子书会话按发送端的“音乐在投屏设备播放”设置
+        val wantDevice = castDevice != null && deviceConnected &&
+            (castContent == CastContentType.MUSIC || wantWeb)
+        val active = (webActive || wantDevice) && music.hasAudio && music.id.isNotBlank()
         if (active == webAudioActive) return
         webAudioActive = active
         onWebAudioMuted(active)
@@ -646,6 +886,7 @@ class EbookCastController(
             bookTitle = b?.title.orEmpty(),
             bookAuthor = b?.author.orEmpty(),
             chapterCount = b?.chapters?.size ?: 0,
+            chapterTitle = if (hasBook) chapterTitleOf(f?.chapter ?: 0) else "",
             // 没书时不给锚点：网页据此显示音乐界面，也不会拿旧锚点去定位正文
             focus = if (!hasBook) null else f?.let { WireFocus(it.chapter, it.block, it.char, focusGen) },
             turnOffset = turnOffset,
@@ -675,6 +916,12 @@ class EbookCastController(
             queueGen = queueGen,
             queueIndex = queueIndex,
             queueLength = queue.size,
+            senderId = identity.id,
+            senderName = identity.name,
+            shuffle = transportShuffle,
+            repeat = transportRepeat,
+            liked = transportLiked,
+            castDeviceName = castDevice?.name.orEmpty(),
         )
         return gson.toJson(wire).toByteArray(Charsets.UTF_8)
     }
@@ -909,6 +1156,9 @@ class EbookCastController(
 
     /** 供遥控页直接展示的局域网地址（服务未启动时也尽量给出）。 */
     fun lanAddress(): String? = localIpv4()
+
+    /** 网页服务实际端口（发现协议要广播这个值）；服务还没起来返回 null。 */
+    fun serverPort(): Int? = server?.port
 }
 
 // ---- 极简只读 HTTP 服务 ----
@@ -970,10 +1220,52 @@ private class EbookCastHttpServer(private val cast: EbookCastController) {
                 val target = parts[1]
                 val path = target.substringBefore('?')
                 val query = parseQuery(target.substringAfter('?', ""))
+                // 读取表单 body（只用于 /cast/offer；内容已 URL 编码，ISO-8859-1 读字符即可）
+                val bodyLen = headers["content-length"]?.toIntOrNull() ?: 0
+                val body = if (bodyLen > 0 && bodyLen <= 64 * 1024) {
+                    val chars = CharArray(bodyLen)
+                    var read = 0
+                    while (read < bodyLen) {
+                        val n = reader.read(chars, read, bodyLen - read)
+                        if (n <= 0) break
+                        read += n
+                    }
+                    String(chars, 0, read)
+                } else {
+                    ""
+                }
                 // 任意请求都算“网页在线”：播放页据此显示 airplay 键、决定由谁出声
-                cast.onClientRequest()
+                cast.onClientRequest(headers)
                 val out = BufferedOutputStream(s.getOutputStream())
-                if (method != "GET" && method != "HEAD") {
+                if (method == "POST") {
+                    when (path) {
+                        "/cast/offer" -> {
+                            val data = query["data"]?.takeIf { it.isNotBlank() }
+                                ?: parseQuery(body).let { it["data"] }
+                            val offer = data?.let {
+                                runCatching {
+                                    com.google.gson.Gson().fromJson(it, CastOffer::class.java)
+                                }.getOrNull()
+                            }
+                            val ok = offer != null && cast.acceptOffer(offer)
+                            HttpUtil.sendText(
+                                out,
+                                if (ok) 200 else 409,
+                                if (ok) "OK" else "Conflict",
+                                "text/plain; charset=utf-8",
+                                if (ok) "ok" else "busy",
+                            )
+                        }
+
+                        "/cast/stop" -> {
+                            cast.onIncomingCastStop()
+                            HttpUtil.sendText(out, 200, "OK", "text/plain; charset=utf-8", "ok")
+                        }
+
+                        else ->
+                            HttpUtil.sendText(out, 404, "Not Found", "text/plain; charset=utf-8", "not found")
+                    }
+                } else if (method != "GET" && method != "HEAD") {
                     HttpUtil.sendText(out, 405, "Method Not Allowed", "text/plain; charset=utf-8", "read only")
                 } else {
                     when (path) {
@@ -999,6 +1291,13 @@ private class EbookCastHttpServer(private val cast: EbookCastController) {
                         }
                         "/queue" ->
                             HttpUtil.sendBytes(out, 200, "OK", "application/json; charset=utf-8", cast.queueJson())
+                        "/cast/command" -> {
+                            val cmd = query["cmd"].orEmpty()
+                            val pos = query["pos"]?.toLongOrNull() ?: 0L
+                            val index = query["index"]?.toIntOrNull() ?: -1
+                            if (cmd.isNotBlank()) cast.onRemoteCommand(cmd, pos, index)
+                            HttpUtil.sendText(out, 200, "OK", "text/plain; charset=utf-8", "ok")
+                        }
                         "/font" -> cast.sendFont(out)
                         "/audio" -> cast.sendAudio(out, headers)
                         "/art" -> cast.sendArt(out)

@@ -404,6 +404,7 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
                 onRestoreCastAnchor = { c, b -> cast.restoreAnchor(EbookCastAnchor(c, b, 0)) },
                 onBack = { castOpen = false },
                 onStartWeb = { cast.start(EbookCastMode.WEB) },
+                onStartDevice = { cast.startDevice(it) },
                 onStartPresentation = { startPresentationCast() },
                 onStop = {
                     cast.stop()

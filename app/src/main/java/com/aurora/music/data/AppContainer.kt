@@ -106,11 +106,36 @@ class AppContainer(context: Context) {
 
     /** 网页端投屏时静音本地音乐（声音从浏览器出）；PlaybackService 的 volBase 读这一份。 */
     val castMute = MutableStateFlow(false)
+
+    /** 设备投屏：本机身份 + 局域网发现 + 接收端控制器（同一进程既是发射器也是接收器）。 */
+    val castIdentity = com.aurora.music.data.cast.CastIdentity(appContext)
+    val castReceiver = com.aurora.music.data.cast.CastReceiverController(appContext, castIdentity.id)
+    val castDiscovery = com.aurora.music.data.cast.CastDiscovery(
+        appContext,
+        castIdentity,
+        stateProvider = {
+            if (castReceiver.state.value is com.aurora.music.data.cast.CastReceiveState.Idle) "idle" else "receiving"
+        },
+    )
+
     val ebookCast = com.aurora.music.data.ebook.EbookCastController(
         appContext,
         ebookPrefs,
+        castIdentity,
         onWebAudioMuted = { castMute.value = it },
+        onCastOffer = { castReceiver.onOffer(it) },
+        onCastStop = { castReceiver.onSenderStop() },
     )
+
+    init {
+        // 网页服务在 App 启动后才异步起来；端口就绪后注册 mDNS
+        scope.launch {
+            while (true) {
+                ebookCast.serverPort()?.let { castDiscovery.advertise(it) }
+                kotlinx.coroutines.delay(3_000)
+            }
+        }
+    }
 
     // 有声书栈：独立 Room 库 + 仓库 + 扫描器（书=根下直接子目录，章=书内音频文件）
     private val audiobookDb: com.aurora.music.data.audiobook.AudiobookDb = Room.databaseBuilder(
