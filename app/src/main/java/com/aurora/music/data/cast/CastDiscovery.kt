@@ -125,6 +125,7 @@ class CastDiscovery(
             registered = false
             advertisedPort = port
             registerNsd()
+            announce()
         }
     }
 
@@ -154,6 +155,9 @@ class CastDiscovery(
                 // 有的机型 stop/start 太快会 onStartDiscoveryFailed；这里定期补一次
                 if (discoveryListener == null) startDiscovery()
                 probe()
+                // 主动广播 offer：对端进程重启后 mDNS 有时不会重新回调 onServiceFound，
+                // UDP offer 能让正在浏览的一端无需等待 probe 就重新发现本机。
+                announce()
             }
         }
     }
@@ -373,6 +377,22 @@ class CastDiscovery(
             runCatching {
                 socket.send(DatagramPacket(bytes, bytes.size, addr, UDP_PORT))
             }
+        }
+    }
+
+    /** 主动向局域网广播“我在线”，不依赖对端 probe 或 mDNS 重新发现。 */
+    private fun announce() {
+        val socket = udpSocket ?: return
+        val msg = UdpMessage(
+            t = "offer",
+            id = identity.id,
+            name = identity.name,
+            port = serverPort,
+            state = stateProvider(),
+        )
+        val bytes = gson.toJson(msg).toByteArray(Charsets.UTF_8)
+        broadcastAddresses().forEach { addr ->
+            runCatching { socket.send(DatagramPacket(bytes, bytes.size, addr, UDP_PORT)) }
         }
     }
 

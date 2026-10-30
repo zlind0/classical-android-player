@@ -1314,7 +1314,8 @@ private class EbookCastHttpServer(private val cast: EbookCastController) {
                         "/audio" -> cast.sendAudio(out, headers)
                         "/art" -> cast.sendArt(out)
                         "/defaultart" -> cast.sendDefaultArt(out)
-                        "/library/all", "/media/music", "/media/audiobook", "/media/ebook",
+                        "/library/version", "/library/all",
+                        "/media/music", "/media/audiobook", "/media/ebook",
                         "/media/songart", "/media/cover" -> {
                             val q = HashMap(query)
                             q["__route"] = path

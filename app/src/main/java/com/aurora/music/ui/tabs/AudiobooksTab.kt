@@ -108,7 +108,7 @@ fun AudiobooksTab(
                         deviceName = lib.deviceName,
                         bookId = b.id,
                         title = b.title,
-                        coverUrl = if (b.hasCover) "${lib.baseUrl}/media/cover?kind=audiobook&key=${java.net.URLEncoder.encode(b.id, "UTF-8")}" else "",
+                        coverUrl = container.remoteLibrary.audiobookCoverUrl(lib, b.id, b.hasCover),
                         chapters = b.chapters,
                         currentIndex = remoteRecents.firstOrNull {
                             it.deviceId == lib.deviceId && it.bookId == b.id

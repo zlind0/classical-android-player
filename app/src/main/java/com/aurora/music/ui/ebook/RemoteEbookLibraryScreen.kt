@@ -64,7 +64,7 @@ fun RemoteEbookLibraryScreen(
 
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = title.ifBlank { root?.displayName ?: "电子书" }, onBack = onBack)
-        if (lib == null || root == null) {
+        if (lib == null || !lib.online || root == null) {
             Ios5Empty("这台设备的资料库暂时不可用")
             return@Column
         }
@@ -85,9 +85,7 @@ fun RemoteEbookLibraryScreen(
                     remotePath = b.path,
                     title = b.title,
                     author = b.author,
-                    coverUrl = if (b.hasCover) {
-                        "${lib.baseUrl}/media/cover?kind=ebook&key=${java.net.URLEncoder.encode(b.path, "UTF-8")}"
-                    } else "",
+                    coverUrl = container.remoteLibrary.ebookCoverUrl(lib, b.path, b.hasCover),
                     size = b.size,
                     localPath = cached?.localPath.orEmpty(),
                     lastReadAt = cached?.lastReadAt ?: 0L,

@@ -56,11 +56,13 @@ data class RemoteAudiobookWire(
     val chapters: List<RemoteChapterWire> = emptyList(),
 )
 
-/** 一台设备的完整资料库快照（磁盘也缓存这一份，离线时照样显示）。 */
+/** 一台设备的完整资料库快照（磁盘也缓存这一份）。 */
 data class RemoteLibraryWire(
     val deviceId: String = "",
     val deviceName: String = "",
     val generatedAt: Long = 0L,
+    /** 库内容变化时才更新的时间戳；客户端据此跳过启动时的全量 meta 传输。 */
+    val libraryUpdatedAt: Long = 0L,
     val music: List<RemoteTrackWire> = emptyList(),
     val ebookRoots: List<RemoteEbookRootWire> = emptyList(),
     val ebooks: List<RemoteEbookWire> = emptyList(),
@@ -72,6 +74,7 @@ data class RemoteLibraryWire(
 data class RemoteArtistGroup(
     val name: String,
     val songs: List<Song>,
+    val imageUrl: String = "",
 )
 
 data class RemoteAlbumGroup(
@@ -142,7 +145,12 @@ sealed interface LibraryResource {
     data class Bytes(val bytes: ByteArray, override val mime: String) : LibraryResource
 }
 
-/** 本机 HTTP 服务把 /library/all 与 /media/… 委托给这个 provider。 */
+/** `GET /library/version` 的轻量响应：只带库内容时间戳，不传全量 meta。 */
+data class RemoteLibraryVersion(
+    val version: Long = 0L,
+)
+
+/** 本机 HTTP 服务把 /library/… 与 /media/… 委托给这个 provider。 */
 interface RemoteLibraryProvider {
     fun libraryJson(): String
 

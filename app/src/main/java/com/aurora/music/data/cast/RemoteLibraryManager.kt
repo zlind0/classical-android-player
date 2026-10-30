@@ -101,15 +101,33 @@ class RemoteLibraryManager(
     private suspend fun syncLoop() {
         var first = true
         while (scope.isActive) {
-            val devices = runCatching { discovery.devices.value }.getOrDefault(emptyList())
-                .filter { it.kind == CastDeviceKind.APP && it.port > 0 }
-            devices.forEach { syncDevice(it) }
-            // 已经发现的设备离线后仍保留快照，只把 online 置 false
-            val alive = devices.map { it.id }.toSet()
-            _libraries.value = _libraries.value.map { lib ->
-                if (lib.deviceId !in alive || devices.firstOrNull { it.id == lib.deviceId }?.let { it.port != lib.port } == true) {
-                    lib.copy(online = false)
-                } else lib
+            try {
+                pruneExpired()
+                val discovered = runCatching { discovery.devices.value }.getOrDefault(emptyList())
+                    .filter { it.kind == CastDeviceKind.APP && it.port > 0 }
+                val discoveredIds = discovered.map { it.id }.toSet()
+                // 关键：设备从后台被杀后，mDNS 可能不会重新通知正在浏览的一端。
+                // 对“已缓存但当前没被 mDNS/UDP 发现”的设备，用上次 host/port 主动探活，
+                // 只要对端应用重新起来，就能恢复在线并跳过全量 meta。
+                val known = payloads.values
+                    .filter {
+                        it.deviceId !in discoveredIds &&
+                            it.host.isNotBlank() && it.port > 0
+                    }
+                    .map {
+                        CastDevice(
+                            id = it.deviceId,
+                            name = it.deviceName,
+                            host = it.host,
+                            port = it.port,
+                            source = "cache",
+                            lastSeen = it.lastSeenAt,
+                        )
+                    }
+                (discovered + known).distinctBy { it.id }.forEach { syncDevice(it) }
+            } catch (t: Throwable) {
+                // 单轮同步异常不能把常驻循环打死，否则会永久看不到对端。
+                android.util.Log.w("AuroraRemoteLibrary", "sync loop error", t)
             }
             delay(if (first) 1_500L else 15_000L)
             first = false
@@ -117,6 +135,37 @@ class RemoteLibraryManager(
     }
 
     private suspend fun syncDevice(device: CastDevice) {
+        // 先问轻量版本：时间戳没变就直接复用磁盘上的完整快照，不拉全量 meta。
+        val versionResult = fetchVersion(device)
+        if (versionResult == null) {
+            markOffline(device.id)
+            return
+        }
+        val cached = payloads[device.id]
+        if (versionResult.first && cached != null &&
+            cached.payload.libraryUpdatedAt > 0L &&
+            cached.payload.libraryUpdatedAt == versionResult.second
+        ) {
+            // 版本一致：只刷新在线状态和最后连接时间，meta 不发。
+            val now = System.currentTimeMillis()
+            val sameEndpoint = cached.host == device.host && cached.port == device.port
+            val wasOnline = cached.online && sameEndpoint
+            val updated = cached.copy(
+                deviceName = device.name,
+                host = device.host,
+                port = device.port,
+                online = true,
+                lastSeenAt = now,
+            )
+            payloads[device.id] = updated
+            // lastSeen 每 15 秒写一次盘没必要；一小时落一次足够判断 30 天过期。
+            if (!sameEndpoint || now - cached.lastSeenAt > LAST_SEEN_SAVE_INTERVAL_MS) {
+                persistPayload(updated)
+            }
+            if (!wasOnline) rebuildLibraries()
+            return
+        }
+
         val json = withContext(Dispatchers.IO) {
             runCatching {
                 val req = Request.Builder()
@@ -136,28 +185,87 @@ class RemoteLibraryManager(
             markOffline(device.id)
             return
         }
-        val cached = CachedPayload(
+        val now = System.currentTimeMillis()
+        val oldVersion = cached?.payload?.libraryUpdatedAt ?: 0L
+        if (oldVersion != 0L && wire.libraryUpdatedAt != 0L && oldVersion != wire.libraryUpdatedAt) {
+            // 封面可能随资料库变化：版本变化时清掉旧封面，让下面的预取重新下载。
+            RemoteArtCache.clearDevice(appContext, device.id)
+        }
+        val fresh = CachedPayload(
             deviceId = device.id,
             deviceName = device.name,
             host = device.host,
             port = device.port,
-            fetchedAt = System.currentTimeMillis(),
-            payload = wire,
+            fetchedAt = now,
+            lastSeenAt = now,
+            payload = wire.copy(deviceId = device.id, deviceName = device.name),
             online = true,
         )
-        payloads[device.id] = cached
-        persistPayload(cached)
+        payloads[device.id] = fresh
+        persistPayload(fresh)
         rebuildLibraries()
+        scope.launch { prefetchArtwork(fresh); rebuildLibraries() }
+    }
+
+    /**
+     * 返回 (是否支持版本接口, 版本号)；网络失败返回 null。
+     * 老版本设备没有 /library/version 时返回 (false, 0)，调用方走全量。
+     */
+    private suspend fun fetchVersion(device: CastDevice): Pair<Boolean, Long>? = withContext(Dispatchers.IO) {
+        runCatching {
+            val req = Request.Builder()
+                .url("${device.baseUrl}/library/version?t=${System.currentTimeMillis()}")
+                .header("X-Aurora-Device", "1")
+                .get()
+                .build()
+            client.newCall(req).execute().use { r ->
+                if (r.code == 404) return@use false to 0L
+                if (!r.isSuccessful) return@use null
+                val body = r.body?.string() ?: return@use false to 0L
+                val v = runCatching { gson.fromJson(body, RemoteLibraryVersion::class.java) }
+                    .getOrNull()?.version ?: 0L
+                if (v > 0L) true to v else false to 0L
+            }
+        }.getOrNull()
+    }
+
+    /** 艺术家/专辑/图书/有声书封面一次性补到本地，之后 UI 直接用 file://。 */
+    private suspend fun prefetchArtwork(cached: CachedPayload) {
+        val lib = runCatching { cached.toLibrary(appContext) }.getOrNull() ?: return
+        val urls = LinkedHashSet<String>()
+        lib.albums.forEach { if (it.artworkUrl.isNotBlank()) urls += it.artworkUrl }
+        lib.artists.forEach { if (it.imageUrl.isNotBlank()) urls += it.imageUrl }
+        lib.ebooks.filter { it.hasCover }.forEach {
+            urls += "${lib.baseUrl}/media/cover?kind=ebook&key=${enc(it.path)}"
+        }
+        lib.audiobooks.filter { it.hasCover }.forEach {
+            urls += "${lib.baseUrl}/media/cover?kind=audiobook&key=${enc(it.id)}"
+        }
+        RemoteArtCache.prefetch(appContext, cached.deviceId, urls)
     }
 
     private fun markOffline(deviceId: String) {
         val c = payloads[deviceId] ?: return
+        if (!c.online) return
         payloads[deviceId] = c.copy(online = false)
         rebuildLibraries()
     }
 
+    /** 30 天没连上过：删掉该设备的 meta 与封面缓存。 */
+    private fun pruneExpired() {
+        val cutoff = System.currentTimeMillis() - CACHE_TTL_MS
+        val expired = payloads.values.filter { it.lastSeenAt == 0L || it.lastSeenAt < cutoff }
+        if (expired.isEmpty()) return
+        expired.forEach {
+            payloads.remove(it.deviceId)
+            runCatching { File(storeDir, "${safeId(it.deviceId)}.json").delete() }
+            RemoteArtCache.clearDevice(appContext, it.deviceId)
+        }
+        rebuildLibraries()
+    }
+
     private fun rebuildLibraries() {
-        val out = payloads.values.map { it.toLibrary() }.sortedBy { it.deviceName.lowercase() }
+        val out = payloads.values.map { it.toLibrary(appContext) }.sortedBy { it.deviceName.lowercase() }
         val allSongs = ConcurrentHashMap<String, Song>()
         out.forEach { lib -> lib.songs.forEach { allSongs[it.id] = it } }
         songsById.putAll(allSongs)
@@ -182,7 +290,7 @@ class RemoteLibraryManager(
                     remotePath = b.path,
                     title = b.title,
                     author = b.author,
-                    coverUrl = if (b.hasCover) "${lib.baseUrl}/media/cover?kind=ebook&key=${enc(b.path)}" else "",
+                    coverUrl = ebookCoverUrl(lib, b.path, b.hasCover),
                     size = b.size,
                     localPath = cached?.localPath.orEmpty(),
                     lastReadAt = cached?.lastReadAt ?: 0L,
@@ -192,6 +300,16 @@ class RemoteLibraryManager(
 
     fun ebookEntriesOf(deviceId: String): List<RemoteEbookEntry> =
         ebookEntries().filter { it.deviceId == deviceId }
+
+    fun ebookCoverUrl(lib: RemoteDeviceLibrary, path: String, hasCover: Boolean): String =
+        if (!hasCover) "" else RemoteArtCache.cachedOrRemote(
+            appContext, lib.deviceId, "${lib.baseUrl}/media/cover?kind=ebook&key=${enc(path)}",
+        )
+
+    fun audiobookCoverUrl(lib: RemoteDeviceLibrary, bookId: String, hasCover: Boolean): String =
+        if (!hasCover) "" else RemoteArtCache.cachedOrRemote(
+            appContext, lib.deviceId, "${lib.baseUrl}/media/cover?kind=audiobook&key=${enc(bookId)}",
+        )
 
     /** 老版本设备没有根目录元信息时兜底：按路径给出一个平铺根。 */
     fun ebookRootsOf(lib: RemoteDeviceLibrary): List<RemoteEbookRootWire> =
@@ -294,7 +412,7 @@ class RemoteLibraryManager(
                     deviceName = lib.deviceName,
                     bookId = b.id,
                     title = b.title,
-                    coverUrl = if (b.hasCover) "${lib.baseUrl}/media/cover?kind=audiobook&key=${enc(b.id)}" else "",
+                    coverUrl = audiobookCoverUrl(lib, b.id, b.hasCover),
                     chapters = b.chapters,
                     currentIndex = play?.index ?: 0,
                     positionMs = play?.positionMs ?: 0L,
@@ -461,6 +579,7 @@ class RemoteLibraryManager(
                 if (c.deviceId.isNotBlank()) payloads[c.deviceId] = c.copy(online = false)
             }
         }
+        pruneExpired()
         rebuildLibraries()
     }
 
@@ -500,7 +619,8 @@ class RemoteLibraryManager(
         _libraries.value = _libraries.value.toList()
     }
 
-    private fun CachedPayload.toLibraryOrNull(): RemoteDeviceLibrary? = runCatching { toLibrary() }.getOrNull()
+    private fun CachedPayload.toLibraryOrNull(): RemoteDeviceLibrary? =
+        runCatching { toLibrary(appContext) }.getOrNull()
 
     private fun parseAudiobookSongId(id: String): Triple<String, String, Int>? {
         // audiobook:remote:<deviceId>:<base64(bookId)>#<index>
@@ -539,16 +659,25 @@ class RemoteLibraryManager(
             Base64.URL_SAFE or Base64.NO_WRAP,
         ) + "#$index"
 
+    private companion object {
+        /** 30 天没成功连上（版本探测也算）就清掉 meta 与封面缓存。 */
+        const val CACHE_TTL_MS = 30L * 24 * 60 * 60 * 1000
+
+        /** 在线心跳只每小时落一次盘，避免每 15 秒重写整份大 JSON。 */
+        const val LAST_SEEN_SAVE_INTERVAL_MS = 60L * 60 * 1000
+    }
+
     private data class CachedPayload(
         val deviceId: String = "",
         val deviceName: String = "",
         val host: String = "",
         val port: Int = 0,
         val fetchedAt: Long = 0L,
+        val lastSeenAt: Long = 0L,
         val payload: RemoteLibraryWire = RemoteLibraryWire(),
         val online: Boolean = false,
     ) {
-        fun toLibrary(): RemoteDeviceLibrary {
+        fun toLibrary(context: Context): RemoteDeviceLibrary {
             val sid = deviceId
             val base = "http://$host:$port"
             val songs = payload.music.filter { it.id.isNotBlank() }.map { t ->
@@ -556,12 +685,13 @@ class RemoteLibraryManager(
                     t.id.toByteArray(Charsets.UTF_8),
                     Base64.URL_SAFE or Base64.NO_WRAP,
                 )
+                val remoteArt = if (t.hasArt) "$base/media/songart?id=${URLEncoder.encode(t.id, "UTF-8")}" else ""
                 Song(
                     id = id,
                     title = t.title.ifBlank { t.id },
                     artist = t.artist,
                     album = t.album,
-                    artworkUrl = if (t.hasArt) "$base/media/songart?id=${URLEncoder.encode(t.id, "UTF-8")}" else "",
+                    artworkUrl = if (remoteArt.isBlank()) "" else RemoteArtCache.cachedOrRemote(context, sid, remoteArt),
                     durationSec = t.durationSec,
                     streamUrl = "$base/media/music?id=${URLEncoder.encode(t.id, "UTF-8")}",
                     albumId = t.albumId,
@@ -572,7 +702,13 @@ class RemoteLibraryManager(
                 )
             }
             val artists = songs.groupBy { it.artist.ifBlank { "未知艺人" } }
-                .map { (name, list) -> RemoteArtistGroup(name, list) }
+                .map { (name, list) ->
+                    RemoteArtistGroup(
+                        name = name,
+                        songs = list,
+                        imageUrl = list.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl.orEmpty(),
+                    )
+                }
                 .sortedBy { it.name.lowercase() }
             val albums = songs.groupBy { it.albumId.ifBlank { "${it.artist}|${it.album}" } }
                 .map { (key, list) ->

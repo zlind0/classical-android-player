@@ -50,77 +50,173 @@ class LocalLibraryHttpProvider(
                 .maxByOrNull { it.rootPath.length }
             return match?.id?.toString().orEmpty()
         }
+        val music = songs.filter { it.available && it.id.isNotBlank() }.map {
+            RemoteTrackWire(
+                id = it.id,
+                title = it.title,
+                artist = it.artist,
+                album = it.album,
+                albumId = it.albumId,
+                artistId = it.artistId,
+                durationSec = it.durationSec,
+                trackNumber = it.trackNumber,
+                discNumber = it.discNumber,
+                hasArt = true,
+            )
+        }
+        val ebookList = ebooks.distinctBy { it.path }.filter { it.path.isNotBlank() }.map {
+            RemoteEbookWire(
+                path = it.path,
+                title = it.displayTitle,
+                author = it.author,
+                size = it.size,
+                hasCover = it.coverPath.isNotBlank(),
+                rootKey = rootKeyOf(it),
+            )
+        }
+        val roots = buildList {
+            add(
+                RemoteEbookRootWire(
+                    key = "shelf",
+                    rootPath = "",
+                    displayName = "默认书架",
+                    shelf = true,
+                    bookCount = shelfBooks.size,
+                ),
+            )
+            enabledRoots.forEach { r ->
+                add(
+                    RemoteEbookRootWire(
+                        key = r.id.toString(),
+                        rootPath = r.rootPath,
+                        displayName = r.displayName,
+                        shelf = false,
+                        bookCount = ebooks.count { b ->
+                            !b.inShelf && (b.path == r.rootPath || b.path.startsWith(r.rootPath.trimEnd('/') + "/"))
+                        },
+                    ),
+                )
+            }
+        }
+        val audiobooks = abooks.map { b ->
+            RemoteAudiobookWire(
+                id = b.id,
+                title = b.displayTitle,
+                hasCover = b.coverPath.isNotBlank(),
+                chapters = b.chapters.map { c ->
+                    RemoteChapterWire(
+                        path = c.path,
+                        title = c.displayTitle,
+                        trackNumber = c.trackNumber,
+                        durationSec = c.durationSec,
+                        size = c.size,
+                    )
+                },
+            )
+        }
+        val version = versionFor(music, roots, ebookList, audiobooks)
         val payload = RemoteLibraryWire(
             deviceId = identity.id,
             deviceName = identity.name,
             generatedAt = System.currentTimeMillis(),
-            music = songs.filter { it.available && it.id.isNotBlank() }.map {
-                RemoteTrackWire(
-                    id = it.id,
-                    title = it.title,
-                    artist = it.artist,
-                    album = it.album,
-                    albumId = it.albumId,
-                    artistId = it.artistId,
-                    durationSec = it.durationSec,
-                    trackNumber = it.trackNumber,
-                    discNumber = it.discNumber,
-                    hasArt = true,
-                )
-            },
-            ebookRoots = buildList {
+            libraryUpdatedAt = version,
+            music = music,
+            ebookRoots = roots,
+            ebooks = ebookList,
+            audiobooks = audiobooks,
+        )
+        return gson.toJson(payload)
+    }
+
+    /** 只传时间戳的轻量接口：客户端先问版本，相同就不拉全量 meta。 */
+    fun libraryVersion(): Long {
+        val songs = runCatching { musicProvider() }.getOrDefault(emptyList())
+        val ebooks = runCatching { ebookProvider() }.getOrDefault(emptyList())
+        val roots = runCatching { ebookRootsProvider() }.getOrDefault(emptyList())
+        val abooks = runCatching { audiobookProvider() }.getOrDefault(emptyList())
+        val music = songs.filter { it.available && it.id.isNotBlank() }.map {
+            RemoteTrackWire(
+                id = it.id, title = it.title, artist = it.artist, album = it.album,
+                albumId = it.albumId, artistId = it.artistId, durationSec = it.durationSec,
+                trackNumber = it.trackNumber, discNumber = it.discNumber, hasArt = true,
+            )
+        }
+        val ebookList = ebooks.distinctBy { it.path }.filter { it.path.isNotBlank() }.map {
+            RemoteEbookWire(path = it.path, title = it.displayTitle, author = it.author, size = it.size)
+        }
+        val shelfCount = ebooks.count { it.inShelf || it.rootId == null }
+        val rootList = buildList {
+            add(
+                RemoteEbookRootWire(
+                    key = "shelf", rootPath = "", displayName = "默认书架",
+                    shelf = true, bookCount = shelfCount,
+                ),
+            )
+            roots.filter { it.enabled }.forEach {
                 add(
                     RemoteEbookRootWire(
-                        key = "shelf",
-                        rootPath = "",
-                        displayName = "默认书架",
-                        shelf = true,
-                        bookCount = shelfBooks.size,
+                        key = it.id.toString(), rootPath = it.rootPath,
+                        displayName = it.displayName, shelf = false,
                     ),
                 )
-                enabledRoots.forEach { r ->
-                    add(
-                        RemoteEbookRootWire(
-                            key = r.id.toString(),
-                            rootPath = r.rootPath,
-                            displayName = r.displayName,
-                            shelf = false,
-                            bookCount = ebooks.count { b ->
-                                !b.inShelf && (b.path == r.rootPath || b.path.startsWith(r.rootPath.trimEnd('/') + "/"))
-                            },
-                        ),
-                    )
-                }
-            },
-            ebooks = ebooks.distinctBy { it.path }.filter { it.path.isNotBlank() }.map {
-                RemoteEbookWire(
-                    path = it.path,
-                    title = it.displayTitle,
-                    author = it.author,
-                    size = it.size,
-                    hasCover = it.coverPath.isNotBlank(),
-                    rootKey = rootKeyOf(it),
-                )
-            },
-            audiobooks = abooks.map { b ->
-                RemoteAudiobookWire(
-                    id = b.id,
-                    title = b.displayTitle,
-                    hasCover = b.coverPath.isNotBlank(),
-                    chapters = b.chapters.map { c ->
-                        RemoteChapterWire(
-                            path = c.path,
-                            title = c.displayTitle,
-                            trackNumber = c.trackNumber,
-                            durationSec = c.durationSec,
-                            size = c.size,
-                        )
-                    },
-                )
-            },
-        )
-        // 设备身份由 EbookCastController 在发送时补上（这里不知道 identity，留空由调用方处理）
-        return gson.toJson(payload)
+            }
+        }
+        val abookList = abooks.map { b ->
+            RemoteAudiobookWire(
+                id = b.id, title = b.displayTitle,
+                chapters = b.chapters.map { c ->
+                    RemoteChapterWire(path = c.path, title = c.displayTitle, size = c.size)
+                },
+            )
+        }
+        return versionFor(music, rootList, ebookList, abookList)
+    }
+
+    private val revisionLock = Any()
+    private val revisionPrefs by lazy {
+        appContext.getSharedPreferences("aurora_library_revision", Context.MODE_PRIVATE)
+    }
+
+    /**
+     * 资料库内容签名：只有列表/标题/大小变化才换时间戳。
+     * 时间戳持久化，App 重启后不会因为“刚启动”又变成新版本。
+     */
+    private fun versionFor(
+        music: List<RemoteTrackWire>,
+        roots: List<RemoteEbookRootWire>,
+        ebooks: List<RemoteEbookWire>,
+        audiobooks: List<RemoteAudiobookWire>,
+    ): Long {
+        var h = -0x340d631b7bdddcdbL
+        fun mix(s: String?) {
+            h = h * 0x100000001b3L xor (s ?: "").hashCode().toLong()
+        }
+        fun mix(n: Long) {
+            h = h * 0x100000001b3L xor n
+        }
+        mix(music.size.toLong())
+        music.forEach {
+            mix(it.id); mix(it.title); mix(it.artist); mix(it.album)
+            mix(it.durationSec.toLong()); mix(it.trackNumber.toLong())
+        }
+        mix(roots.size.toLong())
+        roots.forEach { mix(it.key); mix(it.rootPath); mix(it.displayName) }
+        mix(ebooks.size.toLong())
+        ebooks.forEach { mix(it.path); mix(it.title); mix(it.author); mix(it.size) }
+        mix(audiobooks.size.toLong())
+        audiobooks.forEach { b ->
+            mix(b.id); mix(b.title); mix(b.chapters.size.toLong())
+            b.chapters.forEach { c -> mix(c.path); mix(c.title); mix(c.size) }
+        }
+        val sig = h.toString()
+        synchronized(revisionLock) {
+            val storedSig = revisionPrefs.getString("signature", "")
+            val storedAt = revisionPrefs.getLong("updatedAt", 0L)
+            if (storedAt > 0L && storedSig == sig) return storedAt
+            val now = System.currentTimeMillis()
+            revisionPrefs.edit().putString("signature", sig).putLong("updatedAt", now).apply()
+            return now
+        }
     }
 
     override fun serve(
@@ -129,6 +225,11 @@ class LocalLibraryHttpProvider(
         query: Map<String, String>,
     ): Boolean {
         return when (query["__route"]) {
+            "/library/version" -> {
+                val body = gson.toJson(RemoteLibraryVersion(libraryVersion()))
+                HttpUtil.sendText(out, 200, "OK", "application/json; charset=utf-8", body)
+                true
+            }
             "/library/all" -> {
                 HttpUtil.sendText(out, 200, "OK", "application/json; charset=utf-8", libraryJson())
                 true

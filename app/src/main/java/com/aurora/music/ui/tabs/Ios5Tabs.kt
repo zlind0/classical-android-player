@@ -358,7 +358,7 @@ fun ArtistsTab(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     com.aurora.music.ui.components.Ios5WifiIcon()
                                     Spacer(Modifier.width(8.dp))
-                                    Artwork(g.songs.firstOrNull()?.artworkUrl.orEmpty(), accentFor(g.name), Modifier.size(40.dp), corner = 20.dp)
+                                    Artwork(g.imageUrl, accentFor(g.name), Modifier.size(40.dp), corner = 20.dp)
                                 }
                             },
                         )
