@@ -153,6 +153,12 @@ class AppContainer(context: Context) {
                 if (_librarySource.value == LibrarySource.FILE) musicRoots.allSongs()
                 else localLibrary.songs
             },
+            musicPathOrderProvider = { _librarySource.value == LibrarySource.FILE },
+            mergeEnabledProvider = { song ->
+                if (_librarySource.value == LibrarySource.FILE) {
+                    mergeEnabledFor(musicRoots.roots.value, listOf(song))
+                } else true
+            },
             ebookProvider = { ebookStore.allBooks.value },
             ebookRootsProvider = { ebookStore.roots.value },
             // 有声书栈字段在 init 之后才初始化，HTTP 线程极端情况下先到，这里兜底空列表。

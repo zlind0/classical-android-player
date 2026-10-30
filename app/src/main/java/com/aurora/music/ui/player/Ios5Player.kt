@@ -166,8 +166,11 @@ fun rememberMergedTitle(song: Song): Pair<String, String>? {
     val roots by container.musicRoots.roots.collectAsStateWithLifecycle(initialValue = emptyList())
     val libMerges by container.localLibrary.albumMerges.collectAsStateWithLifecycle()
     val fileMerges by container.musicRoots.fileMerges.collectAsStateWithLifecycle()
-    return remember(song.id, song.albumId, libMerges, fileMerges, roots, source) {
-        if (source == LibrarySource.FILE) {
+    val remoteLibraries by container.remoteLibrary.libraries.collectAsStateWithLifecycle()
+    return remember(song.id, song.albumId, libMerges, fileMerges, roots, source, remoteLibraries) {
+        if (song.id.startsWith("remote:")) {
+            container.remoteLibrary.mergedTitleForSong(song.id)
+        } else if (source == LibrarySource.FILE) {
             val tracks = container.musicRoots.albumTracksSorted(song.albumId)
             if (tracks.isEmpty() || !mergeEnabledFor(roots, tracks)) null
             else lookupMergedTitle(fileMerges[song.albumId], tracks, song.id)

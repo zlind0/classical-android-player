@@ -226,7 +226,7 @@ class MusicRootsStore(
 
     /** 专辑曲目标准序（路径序），与 merge 预计算同一份顺序，序号对齐。O(1) 缓存过滤。 */
     fun albumTracksSorted(albumId: String): List<Song> =
-        cachedSongs.filter { it.albumId == albumId }.sortedBy { it.path.lowercase() }
+        cachedSongs.filter { it.albumId == albumId }.sortedWith(albumTrackComparator(pathFirst = true))
 
     /** 从 _trackRows 重建 songs/albums/artists 缓存。调用方在 DB/内存变化后调。 */
     private fun rebuildCache() {

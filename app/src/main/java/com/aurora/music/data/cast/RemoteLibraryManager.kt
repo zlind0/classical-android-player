@@ -3,8 +3,15 @@ package com.aurora.music.data.cast
 import android.content.Context
 import android.net.Uri
 import android.util.Base64
+import com.aurora.music.data.AlbumRow
+import com.aurora.music.data.albumTrackComparator
+import com.aurora.music.data.lookupMergedTitle as libLookupMergedTitle
+import com.aurora.music.data.mapMergeRows
 import com.aurora.music.model.Song
 import com.aurora.music.util.accentFor
+import com.aurora.titlemerge.MergeInput
+import com.aurora.titlemerge.MergedRow
+import com.aurora.titlemerge.mergeTracks
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.io.File
@@ -66,6 +73,9 @@ class RemoteLibraryManager(
 
     /** 所有远程歌曲（音乐 + 有声书章节）按播放用 id 索引，缓存维护用。 */
     private val songsById = ConcurrentHashMap<String, Song>()
+
+    /** 远程专辑的曲名合成结果（只对发送端开启合并的专辑计算）。 */
+    private val mergeRowsCache = ConcurrentHashMap<String, List<MergedRow>>()
 
     private val storeDir: File
         get() = File(appContext.filesDir, "remote_library").apply { if (!isDirectory) runCatching { mkdirs() } }
@@ -273,9 +283,35 @@ class RemoteLibraryManager(
         val live = out.flatMap { it.songs }.map { it.id }.toSet()
         songsById.keys.filter { it !in live && !it.startsWith("audiobook:remote:") }.forEach { songsById.remove(it) }
         _libraries.value = out
+        mergeRowsCache.clear()
         lastQueueSignature = ""
         // 远程有声书在听列表：以设备快照为元信息，播放记录为进度
         rebuildAbookRecents()
+    }
+
+    // ---- 曲名合成（与本地专辑同一套 lib-titlemerge 规则） ----
+
+    private fun mergedLibRows(album: RemoteAlbumGroup): List<MergedRow> =
+        mergeRowsCache.getOrPut(album.id) {
+            mergeTracks(album.songs.map { MergeInput(it.id, it.title) })
+        }
+
+    /** 专辑详情 UI 用：开启合并时返回可展开的分组行，否则逐曲单行。 */
+    fun albumRowsFor(album: RemoteAlbumGroup): List<AlbumRow> {
+        if (!album.mergeTitles) {
+            return album.songs.mapIndexed { i, s -> AlbumRow.Single(s, i) }
+        }
+        return mapMergeRows(mergedLibRows(album), album.songs)
+    }
+
+    /** 正在播放页：远程歌曲也要显示“大标题 + 小标题”。 */
+    fun mergedTitleForSong(songId: String): Pair<String, String>? {
+        if (!songId.startsWith("remote:")) return null
+        val album = _libraries.value.asSequence()
+            .flatMap { it.albums.asSequence() }
+            .firstOrNull { a -> a.mergeTitles && a.songs.any { it.id == songId } }
+            ?: return null
+        return libLookupMergedTitle(mergedLibRows(album), album.songs, songId)
     }
 
     // ---- 电子书 ----
@@ -680,11 +716,14 @@ class RemoteLibraryManager(
         fun toLibrary(context: Context): RemoteDeviceLibrary {
             val sid = deviceId
             val base = "http://$host:$port"
-            val songs = payload.music.filter { it.id.isNotBlank() }.map { t ->
+            val mergeById = HashMap<String, Boolean>()
+            // path 只参与本地同款排序，构造完播放用 Song 后会清空，避免被当成真实文件路径。
+            val rawSongs = payload.music.filter { it.id.isNotBlank() }.map { t ->
                 val id = "remote:$sid:" + Base64.encodeToString(
                     t.id.toByteArray(Charsets.UTF_8),
                     Base64.URL_SAFE or Base64.NO_WRAP,
                 )
+                mergeById[id] = t.mergeTitles
                 val remoteArt = if (t.hasArt) "$base/media/songart?id=${URLEncoder.encode(t.id, "UTF-8")}" else ""
                 Song(
                     id = id,
@@ -698,9 +737,25 @@ class RemoteLibraryManager(
                     artistId = t.artistId,
                     trackNumber = t.trackNumber,
                     discNumber = t.discNumber,
+                    path = t.path,
                     accent = accentFor(id),
                 )
             }
+            val comparator = albumTrackComparator(payload.musicPathOrder)
+            val albums = rawSongs.groupBy { it.albumId.ifBlank { "${it.artist}|${it.album}" } }
+                .map { (key, list) ->
+                    val ordered = list.sortedWith(comparator).map { it.copy(path = "") }
+                    RemoteAlbumGroup(
+                        id = "remote-album:$sid:$key",
+                        title = ordered.first().album.ifBlank { "未知专辑" },
+                        artist = ordered.first().artist,
+                        artworkUrl = ordered.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl.orEmpty(),
+                        songs = ordered,
+                        mergeTitles = ordered.all { mergeById[it.id] != false },
+                    )
+                }
+                .sortedBy { it.title.lowercase() }
+            val songs = albums.flatMap { it.songs }
             val artists = songs.groupBy { it.artist.ifBlank { "未知艺人" } }
                 .map { (name, list) ->
                     RemoteArtistGroup(
@@ -710,17 +765,6 @@ class RemoteLibraryManager(
                     )
                 }
                 .sortedBy { it.name.lowercase() }
-            val albums = songs.groupBy { it.albumId.ifBlank { "${it.artist}|${it.album}" } }
-                .map { (key, list) ->
-                    RemoteAlbumGroup(
-                        id = "remote-album:$sid:$key",
-                        title = list.first().album.ifBlank { "未知专辑" },
-                        artist = list.first().artist,
-                        artworkUrl = list.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl.orEmpty(),
-                        songs = list,
-                    )
-                }
-                .sortedBy { it.title.lowercase() }
             return RemoteDeviceLibrary(
                 deviceId = sid, deviceName = deviceName, host = host, port = port,
                 online = online, fetchedAt = fetchedAt,

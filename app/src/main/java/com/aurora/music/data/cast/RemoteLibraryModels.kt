@@ -21,6 +21,10 @@ data class RemoteTrackWire(
     val trackNumber: Int = 0,
     val discNumber: Int = 0,
     val hasArt: Boolean = false,
+    /** 发送端该曲目所在库开启了“曲名合成”时才合并。 */
+    val mergeTitles: Boolean = true,
+    /** 仅用于与本地完全一致的专辑内排序（FILE 栈按路径）。 */
+    val path: String = "",
 )
 
 /** 电子书顶层目录：默认书架 + 各扫描根；远程端按它还原本地“书库→目录→书”的层级。 */
@@ -63,6 +67,8 @@ data class RemoteLibraryWire(
     val generatedAt: Long = 0L,
     /** 库内容变化时才更新的时间戳；客户端据此跳过启动时的全量 meta 传输。 */
     val libraryUpdatedAt: Long = 0L,
+    /** 发送端当前音乐栈是 FILE（按路径排序）还是 MEDIA（按碟号/曲号）。 */
+    val musicPathOrder: Boolean = false,
     val music: List<RemoteTrackWire> = emptyList(),
     val ebookRoots: List<RemoteEbookRootWire> = emptyList(),
     val ebooks: List<RemoteEbookWire> = emptyList(),
@@ -83,6 +89,7 @@ data class RemoteAlbumGroup(
     val artist: String,
     val artworkUrl: String,
     val songs: List<Song>,
+    val mergeTitles: Boolean = true,
 )
 
 /** 一台远程设备在 UI 里的一份只读资料库。songs 已转成可直接播放的 [Song]。 */

@@ -192,7 +192,7 @@ class LocalLibrary(
 
     /** 专辑曲目标准序：碟号 → 曲号 → 标题 → 文件名（展示与合并都用它对齐序号）。 */
     fun albumTracksSorted(albumId: String): List<Song> =
-        songsByAlbumId(albumId).sortedWith(ALBUM_TRACK_ORDER)
+        songsByAlbumId(albumId).sortedWith(albumTrackComparator(pathFirst = false))
     fun songsByArtistId(artistId: String): List<Song> = songs.filter { it.artistId == artistId }
 
     /** 艺人名下专辑：按名称自然排序（1, 2, … 11，而不是字典序 1, 11, 2）。 */
@@ -427,7 +427,8 @@ class LocalLibrary(
         // 标题合并表：同一份标准序上一次算好，UI 查表即可不再分词
         val memSongs = rows.map { it.toSong(overlayGain = true) }
         val merges = albums.map { a ->
-            val ordered = memSongs.filter { it.albumId == a.albumKey }.sortedWith(ALBUM_TRACK_ORDER)
+            val ordered = memSongs.filter { it.albumId == a.albumKey }
+                .sortedWith(albumTrackComparator(pathFirst = false))
             MsMerge(a.albumKey, buildMergeJson(ordered))
         }
         dao.replaceAll(rows, albums, merges)
@@ -441,11 +442,5 @@ class LocalLibrary(
         /** 跨文件夹/跨艺人同名即同专辑（代价：标题撞名的不同专辑会被并到一起）。 */
         fun albumKey(title: String): String = "album::" + title.trim().lowercase()
 
-        /** 碟号 → 曲号 → 标题 → 文件名；缺号沉底。 */
-        val ALBUM_TRACK_ORDER: Comparator<Song> =
-            compareBy<Song> { if (it.discNumber == 0) Int.MAX_VALUE else it.discNumber }
-                .thenBy { if (it.trackNumber == 0) Int.MAX_VALUE else it.trackNumber }
-                .thenBy { it.title.lowercase() }
-                .thenBy { it.path.substringAfterLast('/').lowercase() }
     }
 }

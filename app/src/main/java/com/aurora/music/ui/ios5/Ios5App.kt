@@ -402,16 +402,10 @@ fun Ios5App() {
     ) {
         if (group.songs.isEmpty()) return
         // 与本地艺人详情一致：先按专辑分组，再列全部歌曲。
-        val albums = group.songs.groupBy { it.albumId.ifBlank { "${it.artist}|${it.album}" } }
-            .map { (key, list) ->
-                com.aurora.music.data.cast.RemoteAlbumGroup(
-                    id = "remote-album:${lib.deviceId}:$key",
-                    title = list.first().album.ifBlank { "未知专辑" },
-                    artist = list.first().artist,
-                    artworkUrl = list.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl.orEmpty(),
-                    songs = list,
-                )
-            }
+        // 直接取库里已分好的专辑，保留“是否允许曲名合成”的标记。
+        val songIds = group.songs.map { it.id }.toSet()
+        val albums = lib.albums
+            .filter { a -> a.songs.any { it.id in songIds } }
             .sortedBy { it.title.lowercase() }
         remoteDetail = RemoteDetailTarget(
             deviceId = lib.deviceId,
@@ -433,6 +427,7 @@ fun Ios5App() {
             title = album.title,
             subtitle = "${album.artist} · ${lib.deviceName} · 远程",
             songs = album.songs,
+            singleAlbum = album,
         )
         navController.navigate(Ios5Routes.REMOTE_GROUP)
     }
@@ -736,6 +731,7 @@ fun Ios5App() {
                                     subtitle = target.subtitle,
                                     songs = target.songs,
                                     albums = target.albums,
+                                    singleAlbum = target.singleAlbum,
                                     player = playerState,
                                     onBack = { navController.popBackStack() },
                                     onSearch = { navController.navigate(Ios5Routes.search("songs")) },
@@ -1446,4 +1442,6 @@ private data class RemoteDetailTarget(
     val subtitle: String,
     val songs: List<com.aurora.music.model.Song>,
     val albums: List<com.aurora.music.data.cast.RemoteAlbumGroup> = emptyList(),
+    /** 从专辑列表直接进入时，用这份专辑元信息判断是否开启曲名合成。 */
+    val singleAlbum: com.aurora.music.data.cast.RemoteAlbumGroup? = null,
 )

@@ -28,6 +28,10 @@ class LocalLibraryHttpProvider(
     private val context: Context,
     private val identity: CastIdentity,
     private val musicProvider: () -> List<Song>,
+    /** FILE 栈按路径排序，MEDIA 栈按碟号/曲号；远程端复用同一个比较器。 */
+    private val musicPathOrderProvider: () -> Boolean = { false },
+    /** 该曲目所在库是否开启曲名合成；远程端只对开启的专辑做合并。 */
+    private val mergeEnabledProvider: (Song) -> Boolean = { true },
     private val ebookProvider: () -> List<EbookBook>,
     private val ebookRootsProvider: () -> List<com.aurora.music.data.ebook.EbookRoot>,
     private val audiobookProvider: () -> List<AudiobookBook>,
@@ -62,6 +66,8 @@ class LocalLibraryHttpProvider(
                 trackNumber = it.trackNumber,
                 discNumber = it.discNumber,
                 hasArt = true,
+                mergeTitles = runCatching { mergeEnabledProvider(it) }.getOrDefault(true),
+                path = it.path,
             )
         }
         val ebookList = ebooks.distinctBy { it.path }.filter { it.path.isNotBlank() }.map {
@@ -114,12 +120,14 @@ class LocalLibraryHttpProvider(
                 },
             )
         }
-        val version = versionFor(music, roots, ebookList, audiobooks)
+        val pathOrder = runCatching { musicPathOrderProvider() }.getOrDefault(false)
+        val version = versionFor(music, roots, ebookList, audiobooks, pathOrder)
         val payload = RemoteLibraryWire(
             deviceId = identity.id,
             deviceName = identity.name,
             generatedAt = System.currentTimeMillis(),
             libraryUpdatedAt = version,
+            musicPathOrder = pathOrder,
             music = music,
             ebookRoots = roots,
             ebooks = ebookList,
@@ -139,6 +147,8 @@ class LocalLibraryHttpProvider(
                 id = it.id, title = it.title, artist = it.artist, album = it.album,
                 albumId = it.albumId, artistId = it.artistId, durationSec = it.durationSec,
                 trackNumber = it.trackNumber, discNumber = it.discNumber, hasArt = true,
+                mergeTitles = runCatching { mergeEnabledProvider(it) }.getOrDefault(true),
+                path = it.path,
             )
         }
         val ebookList = ebooks.distinctBy { it.path }.filter { it.path.isNotBlank() }.map {
@@ -169,7 +179,10 @@ class LocalLibraryHttpProvider(
                 },
             )
         }
-        return versionFor(music, rootList, ebookList, abookList)
+        return versionFor(
+            music, rootList, ebookList, abookList,
+            runCatching { musicPathOrderProvider() }.getOrDefault(false),
+        )
     }
 
     private val revisionLock = Any()
@@ -186,6 +199,7 @@ class LocalLibraryHttpProvider(
         roots: List<RemoteEbookRootWire>,
         ebooks: List<RemoteEbookWire>,
         audiobooks: List<RemoteAudiobookWire>,
+        pathOrder: Boolean,
     ): Long {
         var h = -0x340d631b7bdddcdbL
         fun mix(s: String?) {
@@ -194,10 +208,12 @@ class LocalLibraryHttpProvider(
         fun mix(n: Long) {
             h = h * 0x100000001b3L xor n
         }
+        mix(if (pathOrder) "path" else "tag")
         mix(music.size.toLong())
         music.forEach {
-            mix(it.id); mix(it.title); mix(it.artist); mix(it.album)
+            mix(it.id); mix(it.title); mix(it.artist); mix(it.album); mix(it.path)
             mix(it.durationSec.toLong()); mix(it.trackNumber.toLong())
+            mix(if (it.mergeTitles) "1" else "0")
         }
         mix(roots.size.toLong())
         roots.forEach { mix(it.key); mix(it.rootPath); mix(it.displayName) }
