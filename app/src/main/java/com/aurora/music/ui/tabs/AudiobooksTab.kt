@@ -40,6 +40,9 @@ import com.aurora.music.util.accentFor
 @Composable
 fun AudiobooksTab(
     onPlayBook: (bookId: String) -> Unit,
+    remoteLibraries: List<com.aurora.music.data.cast.RemoteDeviceLibrary> = emptyList(),
+    remoteRecents: List<com.aurora.music.data.cast.RemoteAudiobookEntry> = emptyList(),
+    onPlayRemoteBook: (com.aurora.music.data.cast.RemoteAudiobookEntry) -> Unit = {},
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val books by container.audiobookStore.books.collectAsStateWithLifecycle()
@@ -59,7 +62,7 @@ fun AudiobooksTab(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 16.dp),
         ) {
-            if (recents.isNotEmpty()) {
+            if (recents.isNotEmpty() || remoteRecents.isNotEmpty()) {
                 item { Ios5SectionTitle("在听") }
                 ios5Rows(recents, key = { it.id }) { _, b ->
                     AudiobookRow(
@@ -68,6 +71,16 @@ fun AudiobooksTab(
                         coverPath = b.coverPath,
                         accentKey = b.id,
                         onClick = { onPlayBook(b.id) },
+                    )
+                }
+                ios5Rows(remoteRecents, key = { it.key }) { _, b ->
+                    AudiobookRow(
+                        title = b.displayTitle,
+                        subtitle = bookSubtitle(b.chapters.size, b.currentIndex, 0f, 0, played = true),
+                        coverPath = b.coverUrl,
+                        accentKey = b.key,
+                        remote = true,
+                        onClick = { onPlayRemoteBook(b) },
                     )
                 }
             }
@@ -85,7 +98,36 @@ fun AudiobooksTab(
                     )
                 }
             }
-            if (recents.isEmpty() && books.isEmpty() && enabledRoots.isEmpty()) {
+            remoteLibraries.filter { it.audiobooks.isNotEmpty() }.forEach { lib ->
+                item(key = "remote-abooks-${lib.deviceId}") {
+                    Ios5SectionTitle("${lib.deviceName}${if (lib.online) "" else "（离线）"} - 远程（${lib.audiobooks.size}）")
+                }
+                ios5Rows(lib.audiobooks, key = { "r:${lib.deviceId}:${it.id}" }) { _, b ->
+                    val entry = com.aurora.music.data.cast.RemoteAudiobookEntry(
+                        deviceId = lib.deviceId,
+                        deviceName = lib.deviceName,
+                        bookId = b.id,
+                        title = b.title,
+                        coverUrl = if (b.hasCover) "${lib.baseUrl}/media/cover?kind=audiobook&key=${java.net.URLEncoder.encode(b.id, "UTF-8")}" else "",
+                        chapters = b.chapters,
+                        currentIndex = remoteRecents.firstOrNull {
+                            it.deviceId == lib.deviceId && it.bookId == b.id
+                        }?.currentIndex ?: 0,
+                        lastPlayedAt = remoteRecents.firstOrNull {
+                            it.deviceId == lib.deviceId && it.bookId == b.id
+                        }?.lastPlayedAt ?: 0L,
+                    )
+                    AudiobookRow(
+                        title = entry.displayTitle,
+                        subtitle = bookSubtitle(entry.chapters.size, entry.currentIndex, 0f, 0, played = entry.lastPlayedAt > 0),
+                        coverPath = entry.coverUrl,
+                        accentKey = entry.key,
+                        remote = true,
+                        onClick = { onPlayRemoteBook(entry) },
+                    )
+                }
+            }
+            if (recents.isEmpty() && books.isEmpty() && enabledRoots.isEmpty() && remoteLibraries.all { it.audiobooks.isEmpty() }) {
                 item { Ios5Empty("还没有有声书\n请到 设置 → 有声书 → 有声书来源 添加目录并扫描") }
             }
         }
@@ -108,6 +150,7 @@ internal fun AudiobookRow(
     coverPath: String,
     accentKey: String,
     onClick: () -> Unit,
+    remote: Boolean = false,
 ) {
     Row(
         Modifier.fillMaxWidth()
@@ -115,6 +158,10 @@ internal fun AudiobookRow(
             .padding(horizontal = 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (remote) {
+            com.aurora.music.ui.components.Ios5WifiIcon()
+            Spacer(Modifier.width(8.dp))
+        }
         if (coverPath.isNotBlank()) {
             Artwork(coverPath, accentFor(accentKey), Modifier.size(44.dp), corner = 6.dp)
         } else {

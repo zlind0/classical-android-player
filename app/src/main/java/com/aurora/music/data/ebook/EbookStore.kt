@@ -38,6 +38,10 @@ class EbookStore(context: Context, private val dao: EbookDao) {
     private val _counts = MutableStateFlow<Map<Long, Int>>(emptyMap())
     val counts: StateFlow<Map<Long, Int>> = _counts.asStateFlow()
 
+    /** 全库快照（书架 + 已扫描），局域网资料库同步用；不参与 UI 列表。 */
+    private val _allBooks = MutableStateFlow<List<EbookBook>>(emptyList())
+    val allBooks: StateFlow<List<EbookBook>> = _allBooks.asStateFlow()
+
     val scanProgress = MutableStateFlow(EbookScanProgress())
 
     /** 外部打开（content/file intent）处理完后这里产生路径，UI 消费后清空。 */
@@ -72,10 +76,15 @@ class EbookStore(context: Context, private val dao: EbookDao) {
         _recents.value = dao.recentBooks(MAX_RECENT_BOOKS).map { it.toBook() }
         val map = mutableMapOf<Long, Int>()
         map[EBOOK_SHELF_ROOT_ID] = _shelf.value.size
+        val all = LinkedHashMap<String, EbookBook>()
+        _shelf.value.forEach { all[it.path] = it }
         rows.forEach { r ->
-            map[r.id] = dao.booksOfRoot(r.id).size
+            val books = dao.booksOfRoot(r.id).map { it.toBook() }
+            map[r.id] = books.size
+            if (r.enabled) books.forEach { all[it.path] = it }
         }
         _counts.value = map
+        _allBooks.value = all.values.toList()
     }
 
     // ---- 书库管理 ----

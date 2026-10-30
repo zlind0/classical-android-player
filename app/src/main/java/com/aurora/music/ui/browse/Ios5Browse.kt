@@ -78,12 +78,14 @@ fun Ios5SongsBrowse(
     onBack: () -> Unit,
     onSearch: () -> Unit,
     onPlaySongs: (List<Song>, Int) -> Unit,
+    remote: List<com.aurora.music.data.cast.RemoteDeviceLibrary> = emptyList(),
 ) {
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "歌曲", onBack = onBack, onSearch = onSearch)
+        val remoteWithSongs = remote.filter { it.songs.isNotEmpty() }
         when {
             loading -> Ios5Loading()
-            songs.isEmpty() -> Ios5Empty("没有歌曲")
+            songs.isEmpty() && remoteWithSongs.isEmpty() -> Ios5Empty("没有歌曲")
             else -> LazyColumn(
                 state = com.aurora.music.ui.rememberPersistentLazyListState("browse:songs"),
                 modifier = Modifier.fillMaxSize(),
@@ -93,6 +95,16 @@ fun Ios5SongsBrowse(
                 ios5Rows(songs, key = { it.id }) { i, s ->
                     Ios5SongRow(s, s.id == player.current.id, player.isPlaying) {
                         onPlaySongs(songs, i)
+                    }
+                }
+                remoteWithSongs.forEach { lib ->
+                    item(key = "remote-songs-${lib.deviceId}") {
+                        Ios5SectionTitle("${lib.deviceName}${if (lib.online) "" else "（离线）"} - 远程（${lib.songs.size}）")
+                    }
+                    ios5Rows(lib.songs, key = { "r:${lib.deviceId}:${it.id}" }) { i, s ->
+                        Ios5SongRow(s, s.id == player.current.id, player.isPlaying, remote = true) {
+                            onPlaySongs(lib.songs, i)
+                        }
                     }
                 }
             }
@@ -109,12 +121,15 @@ fun Ios5AlbumsBrowse(
     onBack: () -> Unit,
     onSearch: () -> Unit,
     onOpenDetail: (kind: String, id: String, title: String) -> Unit,
+    remote: List<com.aurora.music.data.cast.RemoteDeviceLibrary> = emptyList(),
+    onOpenRemoteAlbum: (com.aurora.music.data.cast.RemoteDeviceLibrary, com.aurora.music.data.cast.RemoteAlbumGroup) -> Unit = { _, _ -> },
 ) {
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "专辑", onBack = onBack, onSearch = onSearch)
+        val remoteWithAlbums = remote.filter { it.albums.isNotEmpty() }
         when {
             loading -> Ios5Loading()
-            albums.isEmpty() -> Ios5Empty("没有专辑")
+            albums.isEmpty() && remoteWithAlbums.isEmpty() -> Ios5Empty("没有专辑")
             else -> LazyColumn(
                 state = com.aurora.music.ui.rememberPersistentLazyListState("browse:albums"),
                 modifier = Modifier.fillMaxSize(),
@@ -129,6 +144,26 @@ fun Ios5AlbumsBrowse(
                         onClick = { onOpenDetail("album", a.id, a.title) },
                         leading = { Artwork(a.artworkUrl, accentFor(a.id), Modifier.size(44.dp), corner = 6.dp) },
                     )
+                }
+                remoteWithAlbums.forEach { lib ->
+                    item(key = "remote-albums-${lib.deviceId}") {
+                        Ios5SectionTitle("${lib.deviceName}${if (lib.online) "" else "（离线）"} - 远程（${lib.albums.size}）")
+                    }
+                    ios5Rows(lib.albums, key = { "r:${lib.deviceId}:${it.id}" }) { _, a ->
+                        Ios5Cell(
+                            title = a.title,
+                            subtitle = a.artist,
+                            count = "${a.songs.size}",
+                            onClick = { onOpenRemoteAlbum(lib, a) },
+                            leading = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    com.aurora.music.ui.components.Ios5WifiIcon()
+                                    Spacer(Modifier.width(8.dp))
+                                    Artwork(a.artworkUrl, accentFor(a.id), Modifier.size(44.dp), corner = 6.dp)
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -182,6 +217,7 @@ fun Ios5GroupDetail(
     onPlaySongs: (List<Song>, Int) -> Unit,
     onPlayAll: () -> Unit,
     onShuffleAll: () -> Unit,
+    remote: Boolean = false,
 ) {
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = title, onBack = onBack, onSearch = onSearch)
@@ -203,7 +239,7 @@ fun Ios5GroupDetail(
                     )
                 }
                 ios5Rows(songs, key = { it.id }) { i, s ->
-                    Ios5SongRow(s, s.id == player.current.id, player.isPlaying) {
+                    Ios5SongRow(s, s.id == player.current.id, player.isPlaying, remote = remote) {
                         onPlaySongs(songs, i)
                     }
                 }

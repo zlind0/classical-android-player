@@ -118,6 +118,15 @@ class AppContainer(context: Context) {
         },
     )
 
+    // 远程资料库：发现常驻（不再只在投屏选择页开），启动即开始同步别的设备元信息。
+    // 远程音乐/有声书的边播边缓存也在这里初始化（播放器数据源共用同一个 SimpleCache）。
+    val remoteMediaCache = com.aurora.music.data.cast.RemoteMediaCache.also { it.init(appContext) }
+    val remoteLibrary = com.aurora.music.data.cast.RemoteLibraryManager(
+        appContext,
+        castDiscovery,
+        ebookRecentLimit = { ebookPrefs.recentLimit.value },
+    )
+
     val ebookCast = com.aurora.music.data.ebook.EbookCastController(
         appContext,
         ebookPrefs,
@@ -135,6 +144,20 @@ class AppContainer(context: Context) {
                 kotlinx.coroutines.delay(3_000)
             }
         }
+        // 资料库同步需要持续发现：常驻浏览，投屏选择页开关不再影响它。
+        castDiscovery.acquirePersistentBrowse()
+        ebookCast.libraryProvider = com.aurora.music.data.cast.LocalLibraryHttpProvider(
+            appContext,
+            castIdentity,
+            musicProvider = {
+                if (_librarySource.value == LibrarySource.FILE) musicRoots.allSongs()
+                else localLibrary.songs
+            },
+            ebookProvider = { ebookStore.allBooks.value },
+            ebookRootsProvider = { ebookStore.roots.value },
+            // 有声书栈字段在 init 之后才初始化，HTTP 线程极端情况下先到，这里兜底空列表。
+            audiobookProvider = { runCatching { audiobookStore.books.value }.getOrDefault(emptyList()) },
+        )
     }
 
     // 有声书栈：独立 Room 库 + 仓库 + 扫描器（书=根下直接子目录，章=书内音频文件）
@@ -450,6 +473,19 @@ class AppContainer(context: Context) {
             // loadFromDb 之后调用，保证 roots/内存快照就绪；串行逐个续扫。
             runCatching { musicRoots.ensureLoaded() }
             runCatching { scanManager.resumePending() }
+        }
+        // 远程缓存维护放在第二个 init：musicState 等字段在上面的文本顺序里
+        // 还没初始化，提前 launch 会让协程抢在字段赋值前 collect 到 null。
+        scope.launch {
+            musicState.collect { st ->
+                if (st.queueIds.isNotEmpty()) {
+                    remoteLibrary.onPlaybackQueue(st.queueIds, st.index, st.positionMs / 1000f)
+                    remoteLibrary.onPlaybackPosition(st.queueIds, st.index, st.positionMs / 1000f)
+                }
+            }
+        }
+        scope.launch {
+            ebookPrefs.recentLimit.collect { remoteLibrary.trimEbookCache() }
         }
         registerConnectivity()
     }

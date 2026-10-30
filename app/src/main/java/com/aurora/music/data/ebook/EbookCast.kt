@@ -1159,6 +1159,18 @@ class EbookCastController(
 
     /** 网页服务实际端口（发现协议要广播这个值）；服务还没起来返回 null。 */
     fun serverPort(): Int? = server?.port
+
+    /**
+     * 局域网资料库：`/library/all` 与 `/media/…` 全部委托给 AppContainer 注入的 provider。
+     * provider 自己写 HTTP 响应（音频要 Range，不能在控制器里缓冲整个文件）。
+     */
+    @Volatile var libraryProvider: com.aurora.music.data.cast.RemoteLibraryProvider? = null
+
+    internal fun serveLibrary(
+        out: OutputStream,
+        headers: Map<String, String>,
+        query: Map<String, String>,
+    ): Boolean = libraryProvider?.serve(out, headers, query) ?: false
 }
 
 // ---- 极简只读 HTTP 服务 ----
@@ -1302,6 +1314,15 @@ private class EbookCastHttpServer(private val cast: EbookCastController) {
                         "/audio" -> cast.sendAudio(out, headers)
                         "/art" -> cast.sendArt(out)
                         "/defaultart" -> cast.sendDefaultArt(out)
+                        "/library/all", "/media/music", "/media/audiobook", "/media/ebook",
+                        "/media/songart", "/media/cover" -> {
+                            val q = HashMap(query)
+                            q["__route"] = path
+                            val handled = cast.serveLibrary(out, headers, q)
+                            if (!handled) {
+                                HttpUtil.sendText(out, 404, "Not Found", "text/plain; charset=utf-8", "not found")
+                            }
+                        }
                         "/favicon.ico" ->
                             HttpUtil.sendBytes(out, 200, "OK", "image/x-icon", ByteArray(0))
                         else ->
@@ -1326,7 +1347,7 @@ private class EbookCastHttpServer(private val cast: EbookCastController) {
     }
 }
 
-private object HttpUtil {
+internal object HttpUtil {
 
     fun sendText(
         out: OutputStream,

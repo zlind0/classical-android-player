@@ -94,7 +94,9 @@ interface EbookDao {
     @Query("SELECT * FROM ebooks WHERE inShelf = 1 ORDER BY title COLLATE NOCASE ASC")
     suspend fun shelfBooks(): List<EbookRow>
 
-    @Query("SELECT * FROM ebooks WHERE lastReadAt > 0 ORDER BY lastReadAt DESC LIMIT :limit")
+    // 局域网设备的书落在 filesDir/remote_ebooks，由 RemoteLibraryManager 单独展示最近阅读；
+    // 这里排除掉，避免本机与远程两份“最近阅读”重复。
+    @Query("SELECT * FROM ebooks WHERE lastReadAt > 0 AND path NOT LIKE '%/remote_ebooks/%' ORDER BY lastReadAt DESC LIMIT :limit")
     suspend fun recentBooks(limit: Int): List<EbookRow>
 
     @Query("SELECT * FROM ebooks WHERE path = :path")

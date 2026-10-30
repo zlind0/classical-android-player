@@ -227,7 +227,9 @@ class PlaybackService : MediaLibraryService() {
             renderersFactory.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
         }
 
-        val dataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this)
+        // 局域网远程音频走 SimpleCache：边播边缓存，离线时已缓存的章节照样能播。
+        // 本地 file:// / content:// 不经过缓存，避免无意义地复制整个曲库。
+        val dataSourceFactory = com.aurora.music.data.cast.RemoteMediaCache.dataSourceFactory(this)
         val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(dataSourceFactory)
 
         val playerBuilder = ExoPlayer.Builder(this, renderersFactory)

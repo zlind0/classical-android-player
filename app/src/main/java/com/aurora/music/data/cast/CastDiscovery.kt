@@ -87,6 +87,8 @@ class CastDiscovery(
     private var browseJob: Job? = null
     private var udpSocket: DatagramSocket? = null
     private var browseRefs = 0
+    /** 资料库同步需要常驻发现：置位后投屏选择页关闭也不会停掉浏览。 */
+    @Volatile private var persistentBrowse = false
     private var multicastLock: WifiManager.MulticastLock? = null
 
     init {
@@ -126,6 +128,12 @@ class CastDiscovery(
         }
     }
 
+    /** App 启动时调用一次：局域网资料库要持续可见，浏览永不释放。 */
+    fun acquirePersistentBrowse() {
+        persistentBrowse = true
+        acquireBrowse()
+    }
+
     /** 打开投屏选择页时调用（引用计数，多个入口同时打开也不会互相打断）。 */
     fun acquireBrowse() {
         synchronized(resolveLock) {
@@ -141,7 +149,8 @@ class CastDiscovery(
                 probe()
             }
             while (isActive) {
-                delay(2_000)
+                // 常驻资料库同步时把探测降到 10 秒一次，省电；打开投屏选择页再恢复 2 秒。
+                delay(if (persistentBrowse) 10_000L else 2_000L)
                 // 有的机型 stop/start 太快会 onStartDiscoveryFailed；这里定期补一次
                 if (discoveryListener == null) startDiscovery()
                 probe()
@@ -150,6 +159,7 @@ class CastDiscovery(
     }
 
     fun releaseBrowse() {
+        if (persistentBrowse) return
         synchronized(resolveLock) {
             if (browseRefs > 0) browseRefs -= 1
             if (browseRefs > 0) return

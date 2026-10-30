@@ -98,6 +98,8 @@ fun Ios5AudiobookPlayerPage(
     onOpenQueue: () -> Unit,
     introActive: Boolean = false,
     onIntroClick: () -> Unit = {},
+    /** 远程书离线时：未缓存的章节显示灰色（true = 可选中）。 */
+    chapterAvailable: (Int) -> Boolean = { true },
 ) {
     val song = state.current
     var bubble by remember { mutableStateOf<AbookBubble?>(null) }
@@ -365,6 +367,7 @@ fun Ios5AudiobookPlayerPage(
             AbookBubble.CHAPTERS -> ChapterBubble(
                 book = book,
                 currentIndex = state.currentIndex,
+                chapterAvailable = chapterAvailable,
                 onSelect = { onSeekChapter(it); bubble = null },
                 onDismiss = { bubble = null },
             )
@@ -514,6 +517,7 @@ private fun GainBubble(
 private fun ChapterBubble(
     book: AudiobookBook,
     currentIndex: Int,
+    chapterAvailable: (Int) -> Boolean = { true },
     onSelect: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -563,22 +567,31 @@ private fun ChapterBubble(
                 modifier = Modifier.fillMaxWidth().height(540.dp),
             ) {
                 itemsIndexed(book.chapters, key = { i, c -> "$i:${c.path}" }) { i, c ->
+                    val available = chapterAvailable(i)
                     Row(
                         Modifier.fillMaxWidth()
-                            .clickable(onClick = { onSelect(i) })
+                            .clickable(enabled = available) { onSelect(i) }
                             .background(if (i == currentIndex) Color(0xFF0A60D6).copy(alpha = 0.12f) else Color.Transparent)
                             .padding(horizontal = 16.dp, vertical = 9.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
                             "${i + 1}",
-                            color = if (i == currentIndex) Color(0xFF0A60D6) else Color(0xFF8E8E93),
+                            color = when {
+                                !available -> Color(0xFFC7C7CC)
+                                i == currentIndex -> Color(0xFF0A60D6)
+                                else -> Color(0xFF8E8E93)
+                            },
                             fontSize = 13.sp, fontWeight = FontWeight.Bold,
                             modifier = Modifier.width(32.dp),
                         )
                         Text(
                             c.displayTitle,
-                            color = if (i == currentIndex) Color(0xFF0A60D6) else Color.Black,
+                            color = when {
+                                !available -> Color(0xFFB0B0B5)
+                                i == currentIndex -> Color(0xFF0A60D6)
+                                else -> Color.Black
+                            },
                             fontSize = 15.sp, fontWeight = FontWeight.Bold,
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
@@ -586,7 +599,8 @@ private fun ChapterBubble(
                         if (c.durationSec > 0) {
                             Text(
                                 formatTime(c.durationSec),
-                                color = Color(0xFF8E8E93), fontSize = 13.sp,
+                                color = if (available) Color(0xFF8E8E93) else Color(0xFFC7C7CC),
+                                fontSize = 13.sp,
                             )
                         }
                     }

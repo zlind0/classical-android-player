@@ -48,6 +48,10 @@ fun EbooksTab(
     onOpenBook: (path: String) -> Unit,
     onOpenSearch: () -> Unit,
     onOpenExport: (path: String) -> Unit,
+    remoteLibraries: List<com.aurora.music.data.cast.RemoteDeviceLibrary> = emptyList(),
+    remoteRecents: List<com.aurora.music.data.cast.RemoteEbookEntry> = emptyList(),
+    onOpenRemoteBook: (com.aurora.music.data.cast.RemoteEbookEntry) -> Unit = {},
+    onOpenRemoteRoot: (deviceId: String, rootKey: String, title: String) -> Unit = { _, _, _ -> },
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val recents = container.ebookStore.recents.collectAsStateWithLifecycle()
@@ -65,7 +69,8 @@ fun EbooksTab(
         ) {
             // recents 固定存上限 20 条，这里按用户设置截断（首页仍固定 3 本，互不影响）
             val recent = recents.value.take(recentLimit.value)
-            if (recent.isNotEmpty()) {
+            val remoteRecent = remoteRecents.take(recentLimit.value)
+            if (recent.isNotEmpty() || remoteRecent.isNotEmpty()) {
                 item { Ios5SectionTitle("最近阅读") }
                 ios5Rows(recent, key = { it.path }) { _, b ->
                     EbookRow(
@@ -77,6 +82,16 @@ fun EbooksTab(
                         trailing = {
                             com.aurora.music.ui.ebook.EbookExportButton(b.path, onOpenExport)
                         },
+                    )
+                }
+                ios5Rows(remoteRecent, key = { it.key }) { _, b ->
+                    EbookRow(
+                        title = b.displayTitle,
+                        subtitle = b.deviceName,
+                        coverPath = b.coverUrl,
+                        accentKey = b.key,
+                        remote = true,
+                        onClick = { onOpenRemoteBook(b) },
                     )
                 }
             }
@@ -106,7 +121,33 @@ fun EbooksTab(
                     }
                 }
             }
-            if (recent.isEmpty() && enabledRoots.isEmpty()) {
+            remoteLibraries.filter { it.ebooks.isNotEmpty() }.forEach { lib ->
+                item(key = "remote-ebooks-${lib.deviceId}") {
+                    Ios5SectionTitle("${lib.deviceName}${if (lib.online) "" else "（离线）"} - 远程（${lib.ebooks.size}）")
+                }
+                val roots = container.remoteLibrary.ebookRootsOf(lib)
+                ios5Rows(roots, key = { "r:${lib.deviceId}:${it.key}" }) { _, r ->
+                    Ios5Cell(
+                        title = r.displayName.ifBlank { "电子书" },
+                        subtitle = if (r.shelf) "外部打开的电子书都存在这里" else r.rootPath,
+                        count = "${r.bookCount}",
+                        onClick = { onOpenRemoteRoot(lib.deviceId, r.key, r.displayName) },
+                        leading = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                com.aurora.music.ui.components.Ios5WifiIcon()
+                                Spacer(Modifier.width(8.dp))
+                                Icon(
+                                    if (r.shelf) Icons.Filled.Book else Icons.Filled.Folder,
+                                    null,
+                                    tint = Ios5Colors.IosBlue,
+                                    modifier = Modifier.size(40.dp),
+                                )
+                            }
+                        },
+                    )
+                }
+            }
+            if (recent.isEmpty() && remoteRecent.isEmpty() && enabledRoots.isEmpty() && remoteLibraries.all { it.ebooks.isEmpty() }) {
                 item { Ios5Empty("还没有电子书\n请到 设置 → 电子书来源 添加目录并扫描\n也可以用其他应用打开 epub/mobi/azw3 存入默认书架") }
             }
         }
@@ -128,6 +169,7 @@ internal fun EbookRow(
     accentKey: String,
     onClick: () -> Unit,
     trailing: (@Composable () -> Unit)? = null,
+    remote: Boolean = false,
 ) {
     Row(
         Modifier.fillMaxWidth()
@@ -135,6 +177,10 @@ internal fun EbookRow(
             .padding(horizontal = 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (remote) {
+            com.aurora.music.ui.components.Ios5WifiIcon()
+            Spacer(Modifier.width(8.dp))
+        }
         if (coverPath.isNotBlank()) {
             Artwork(coverPath, accentFor(accentKey), Modifier.size(44.dp, 60.dp), corner = 4.dp)
         } else {

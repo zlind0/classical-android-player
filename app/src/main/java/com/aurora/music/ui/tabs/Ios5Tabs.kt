@@ -64,6 +64,10 @@ fun HomeTab(
     onOpenBook: (path: String) -> Unit,
     onPlayAudiobook: (bookId: String) -> Unit,
     onOpenExport: (path: String) -> Unit,
+    remoteEbookRecents: List<com.aurora.music.data.cast.RemoteEbookEntry> = emptyList(),
+    remoteAbookRecents: List<com.aurora.music.data.cast.RemoteAudiobookEntry> = emptyList(),
+    onOpenRemoteBook: (com.aurora.music.data.cast.RemoteEbookEntry) -> Unit = {},
+    onPlayRemoteAudiobook: (com.aurora.music.data.cast.RemoteAudiobookEntry) -> Unit = {},
 ) {
     val container = (androidx.compose.ui.platform.LocalContext.current.applicationContext as AuroraApplication).container
     val ebookRecents by container.ebookStore.recents.collectAsStateWithLifecycle()
@@ -82,7 +86,8 @@ fun HomeTab(
         ) {
             // 最近读过的 3 本电子书（电子书 Tab 最近阅读同款行）
             val recentBooks = ebookRecents.take(3)
-            if (recentBooks.isNotEmpty()) {
+            val remoteBooks = remoteEbookRecents.take(3)
+            if (recentBooks.isNotEmpty() || remoteBooks.isNotEmpty()) {
                 item { Ios5SectionTitle("最近阅读") }
                 ios5Rows(recentBooks, key = { it.path }) { _, b ->
                     EbookRow(
@@ -96,10 +101,21 @@ fun HomeTab(
                         },
                     )
                 }
+                ios5Rows(remoteBooks, key = { it.key }) { _, b ->
+                    EbookRow(
+                        title = b.displayTitle,
+                        subtitle = b.deviceName,
+                        coverPath = b.coverUrl,
+                        accentKey = b.key,
+                        remote = true,
+                        onClick = { onOpenRemoteBook(b) },
+                    )
+                }
             }
             // 最近听的 3 本有声书（点行整本续播）
             val recentAbooks = abookRecents.take(3)
-            if (recentAbooks.isNotEmpty()) {
+            val remoteAbooks = remoteAbookRecents.take(3)
+            if (recentAbooks.isNotEmpty() || remoteAbooks.isNotEmpty()) {
                 item { Ios5SectionTitle("最近听书") }
                 ios5Rows(recentAbooks, key = { it.id }) { _, b ->
                     AudiobookRow(
@@ -108,6 +124,16 @@ fun HomeTab(
                         coverPath = b.coverPath,
                         accentKey = b.id,
                         onClick = { onPlayAudiobook(b.id) },
+                    )
+                }
+                ios5Rows(remoteAbooks, key = { it.key }) { _, b ->
+                    AudiobookRow(
+                        title = b.displayTitle,
+                        subtitle = bookSubtitle(b.chapters.size, b.currentIndex, 0f, 0, played = true),
+                        coverPath = b.coverUrl,
+                        accentKey = b.key,
+                        remote = true,
+                        onClick = { onPlayRemoteAudiobook(b) },
                     )
                 }
             }
@@ -171,7 +197,7 @@ fun HomeTab(
                     )
                 }
             }
-            if (d.newReleases.isEmpty() && d.playlists.isEmpty() && d.artists.isEmpty() && d.starred.isEmpty() && d.recentlyPlayed.isEmpty() && recentBooks.isEmpty() && recentAbooks.isEmpty()) {
+            if (d.newReleases.isEmpty() && d.playlists.isEmpty() && d.artists.isEmpty() && d.starred.isEmpty() && d.recentlyPlayed.isEmpty() && recentBooks.isEmpty() && recentAbooks.isEmpty() && remoteBooks.isEmpty() && remoteAbooks.isEmpty()) {
                 item { Ios5Empty("资料库是空的\n请到 设置 → 音乐来源 添加目录并扫描") }
             }
         }
@@ -293,14 +319,17 @@ fun PlaylistsTab(
 fun ArtistsTab(
     artists: List<Artist>,
     loading: Boolean,
+    remote: List<com.aurora.music.data.cast.RemoteDeviceLibrary> = emptyList(),
     onOpenDetail: (kind: String, id: String, title: String) -> Unit,
+    onOpenRemoteArtist: (com.aurora.music.data.cast.RemoteDeviceLibrary, com.aurora.music.data.cast.RemoteArtistGroup) -> Unit = { _, _ -> },
     onOpenSearch: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "艺人", onSearch = onOpenSearch)
+        val remoteWithArtists = remote.filter { it.artists.isNotEmpty() }
         when {
             loading -> Ios5Loading()
-            artists.isEmpty() -> Ios5Empty("没有艺人\n请先扫描音乐目录")
+            artists.isEmpty() && remoteWithArtists.isEmpty() -> Ios5Empty("没有艺人\n请先扫描音乐目录")
             else -> LazyColumn(
                 state = com.aurora.music.ui.rememberPersistentLazyListState("tab:artists"),
                 modifier = Modifier.fillMaxSize(),
@@ -313,6 +342,27 @@ fun ArtistsTab(
                         onClick = { onOpenDetail("artist", a.id, a.name) },
                         leading = { Artwork(a.imageUrl, accentFor(a.id), Modifier.size(40.dp), corner = 20.dp) },
                     )
+                }
+                remoteWithArtists.forEach { lib ->
+                    item(key = "remote-artists-${lib.deviceId}") {
+                        Ios5SectionTitle(
+                            "${lib.deviceName}${if (lib.online) "" else "（离线）"} - 远程（${lib.artists.size}）",
+                        )
+                    }
+                    ios5Rows(lib.artists, key = { "r:${lib.deviceId}:${it.name}" }) { _, g ->
+                        Ios5Cell(
+                            title = g.name,
+                            count = "${g.songs.size}",
+                            onClick = { onOpenRemoteArtist(lib, g) },
+                            leading = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    com.aurora.music.ui.components.Ios5WifiIcon()
+                                    Spacer(Modifier.width(8.dp))
+                                    Artwork(g.songs.firstOrNull()?.artworkUrl.orEmpty(), accentFor(g.name), Modifier.size(40.dp), corner = 20.dp)
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }

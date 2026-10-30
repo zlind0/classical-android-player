@@ -964,6 +964,7 @@ fun Ios5SongRow(
     isPlaying: Boolean,
     showArtwork: Boolean = true,
     showSubtitle: Boolean = true,
+    remote: Boolean = false,
     onClick: () -> Unit,
 ) {
     Row(
@@ -974,6 +975,10 @@ fun Ios5SongRow(
             .heightIn(min = Ios5Dimens.CellHeight),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (remote) {
+            com.aurora.music.ui.components.Ios5WifiIcon()
+            Spacer(Modifier.width(8.dp))
+        }
         if (showArtwork) {
             Artwork(song.artworkUrl, song.accent, Modifier.size(42.dp), corner = 4.dp)
             Spacer(Modifier.width(10.dp))

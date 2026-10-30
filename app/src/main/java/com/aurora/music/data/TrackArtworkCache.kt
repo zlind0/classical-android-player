@@ -57,6 +57,11 @@ object TrackArtworkCache {
     suspend fun resolve(context: Context, song: Song): String = withContext(Dispatchers.IO) {
         if (song.id.isBlank()) return@withContext song.artworkUrl
         mem[song.id]?.let { return@withContext it }
+        // 局域网远程曲目：内嵌图已经在发送端由 /media/songart 提供，不要在接收端
+        // 用 MediaMetadataRetriever 把整首歌再拉一遍。
+        if (song.path.isBlank() && (song.streamUrl.startsWith("http://") || song.streamUrl.startsWith("https://"))) {
+            return@withContext song.artworkUrl
+        }
         // 本文件的内嵌图（按需抽一次，进内容文件 + 内存；DB 行的 artMd5 由扫描/改标签时写入）
         if (extractEmbedded(context, song)) {
             mem[song.id]?.let { return@withContext it }

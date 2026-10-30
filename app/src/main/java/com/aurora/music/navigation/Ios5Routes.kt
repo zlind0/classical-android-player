@@ -23,6 +23,9 @@ object Ios5Routes {
     const val MORE_GENRES = "ios5_more_genres"
     const val MORE_COMPOSERS = "ios5_more_composers"
     const val MORE_FOLDERS = "ios5_more_folders"
+
+    /** 局域网艺人/专辑的曲目页（内容来自 RemoteLibraryManager，不经过本地 repository）。 */
+    const val REMOTE_GROUP = "ios5_remote_group"
     const val FOLDER = "ios5_folder?fid={fid}&title={title}"
     fun folder(fid: String = "", title: String = "") =
         "ios5_folder?fid=${Uri.encode(fid)}&title=${Uri.encode(title)}"
@@ -42,6 +45,10 @@ object Ios5Routes {
         title: String = "",
     ) = "ios5_ebook_lib?shelf=$shelf&rootId=$rootId&rpath=${Uri.encode(rootPath)}&dir=${Uri.encode(dir)}&title=${Uri.encode(title)}"
     const val EBOOK_SEARCH = "ios5_ebook_search"
+    const val REMOTE_EBOOK_LIB =
+        "ios5_remote_ebook_lib?device={device}&root={root}&dir={dir}&title={title}"
+    fun remoteEbookLib(device: String, root: String, dir: String = "", title: String = "") =
+        "ios5_remote_ebook_lib?device=${Uri.encode(device)}&root=${Uri.encode(root)}&dir=${Uri.encode(dir)}&title=${Uri.encode(title)}"
     const val EBOOK_READER = "ebook_reader?epath={epath}"
     fun ebookReader(path: String) = "ebook_reader?epath=${Uri.encode(path)}"
     const val EBOOK_EXPORT = "ebook_export?epath={epath}"
