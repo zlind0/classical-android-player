@@ -269,6 +269,8 @@ class EbookCastController(
     /** 最近一次音乐快照的时刻（elapsedRealtime）：/state 据此把进度外推到“现在”。 */
     @Volatile private var musicAt: Long = 0L
     @Volatile private var trackPath: String? = null
+    /** 局域网远程曲目的直链：投屏时由本机代理给接收端，避免接收端拿不到源地址。 */
+    @Volatile private var trackRemoteUrl: String? = null
     /** 上次解析过本地路径的歌曲 id（同曲不重复 stat）。 */
     @Volatile private var lastPathSongId: String = ""
     @Volatile private var artUri: String? = null
@@ -816,15 +818,23 @@ class EbookCastController(
         if (song.id.isBlank()) {
             music = EbookCastMusic()
             trackPath = null
+            trackRemoteUrl = null
             lastPathSongId = ""
             musicAt = 0L
             syncAudioRoute()
             return
         }
-        // 每 200ms 一次的 tick：同一首歌不必反复 stat 文件
-        val path = if (song.id == lastPathSongId) trackPath else localPathOf(song)
+        // 每 200ms 一次的 tick：同一首歌不必反复 stat 文件/解析远程地址
+        val same = song.id == lastPathSongId
+        val path = if (same) trackPath else localPathOf(song)
+        val remoteUrl = if (same) {
+            trackRemoteUrl
+        } else {
+            song.streamUrl.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+        }
         lastPathSongId = song.id
         trackPath = path
+        trackRemoteUrl = remoteUrl
         // 进度相对“上次位置 + 已过时间”突然跳变 = 用户在手机上拖了进度条
         val now = android.os.SystemClock.elapsedRealtime()
         if (song.id == lastPosSongId && lastPosSec >= 0f) {
@@ -857,7 +867,8 @@ class EbookCastController(
             durationMs = (song.durationSec * 1000L).coerceAtLeast(0L),
             positionMs = (positionSec * 1000f).toLong().coerceAtLeast(0L),
             playing = playing,
-            hasAudio = path != null,
+            // 本地文件或局域网远程直链都算“有音频”，否则投屏时不会静音本机。
+            hasAudio = path != null || remoteUrl != null,
             hasArt = artUri != null,
         )
         syncAudioRoute()
@@ -1001,7 +1012,13 @@ class EbookCastController(
         val path = trackPath
         val file = path?.let { File(it) }
         if (file == null || !file.isFile) {
-            HttpUtil.sendText(out, 404, "Not Found", "text/plain; charset=utf-8", "no audio")
+            // 远程资料库的曲目在本机没有文件：把源设备的音频（含 Range）原样代理给投屏接收端。
+            val remote = trackRemoteUrl
+            if (remote != null) {
+                sendRemoteAudio(out, headers, remote)
+            } else {
+                HttpUtil.sendText(out, 404, "Not Found", "text/plain; charset=utf-8", "no audio")
+            }
             return
         }
         val total = file.length()
@@ -1055,6 +1072,56 @@ class EbookCastController(
         }
     }
 
+    /** 把远程曲目直链代理给投屏接收端：保留 Range/Content-Range，接收端可拖动进度。 */
+    private fun sendRemoteAudio(out: OutputStream, headers: Map<String, String>, url: String) {
+        val conn = runCatching {
+            (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                connectTimeout = 8_000
+                readTimeout = 25_000
+                instanceFollowRedirects = true
+                setRequestProperty("Accept-Encoding", "identity")
+                headers["range"]?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Range", it) }
+            }
+        }.getOrNull()
+        if (conn == null) {
+            HttpUtil.sendText(out, 404, "Not Found", "text/plain; charset=utf-8", "no remote audio")
+            return
+        }
+        try {
+            val code = runCatching { conn.responseCode }.getOrNull() ?: 404
+            if (code !in 200..299) {
+                HttpUtil.sendText(out, 404, "Not Found", "text/plain; charset=utf-8", "remote audio $code")
+                return
+            }
+            val len = conn.contentLengthLong
+            val mime = conn.contentType?.substringBefore(';')?.trim().orEmpty()
+                .ifBlank { "application/octet-stream" }
+            val extra = buildList {
+                conn.getHeaderField("Content-Range")?.takeIf { it.isNotBlank() }
+                    ?.let { add("Content-Range" to it) }
+            }
+            val statusText = if (code == 206) "Partial Content" else "OK"
+            if (len >= 0L) {
+                HttpUtil.sendHeaders(out, code, statusText, mime, len, extra)
+            } else {
+                // 对端没给长度（正常 Aurora 不会）：整段读进来再发，保证响应头合法。
+                val bytes = conn.inputStream.use { it.readBytes() }
+                HttpUtil.sendBytes(out, code, statusText, mime, bytes, extra)
+                return
+            }
+            conn.inputStream.use { ins ->
+                val buf = ByteArray(128 * 1024)
+                while (true) {
+                    val n = ins.read(buf)
+                    if (n <= 0) break
+                    out.write(buf, 0, n)
+                }
+            }
+        } finally {
+            runCatching { conn.disconnect() }
+        }
+    }
+
     internal fun sendArt(out: OutputStream) {
         val uriStr = artUri
         if (uriStr.isNullOrBlank()) {
@@ -1067,6 +1134,8 @@ class EbookCastController(
                     .openInputStream(Uri.parse(uriStr))?.use { it.readBytes() }
                 uriStr.startsWith("file://") -> Uri.parse(uriStr).path?.let { File(it).readBytes() }
                 uriStr.startsWith("/") -> File(uriStr).readBytes()
+                uriStr.startsWith("http://") || uriStr.startsWith("https://") ->
+                    fetchHttpBytes(uriStr, 12 * 1024 * 1024)
                 else -> null
             }
         }.getOrNull()
@@ -1078,6 +1147,34 @@ class EbookCastController(
             if (uriStr.startsWith("content://")) appContext.contentResolver.getType(Uri.parse(uriStr)) else null
         }.getOrNull() ?: sniffImageMime(bytes)
         HttpUtil.sendBytes(out, 200, "OK", mime, bytes)
+    }
+
+    /** 投屏封面兜底：远程曲目的封面可能是局域网 http 地址。 */
+    private fun fetchHttpBytes(url: String, maxBytes: Int): ByteArray? {
+        val conn = runCatching {
+            (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                connectTimeout = 5_000
+                readTimeout = 10_000
+                instanceFollowRedirects = true
+            }
+        }.getOrNull() ?: return null
+        return try {
+            if (conn.responseCode !in 200..299) return null
+            conn.inputStream.use { ins ->
+                val out = java.io.ByteArrayOutputStream()
+                val buf = ByteArray(32 * 1024)
+                while (out.size() <= maxBytes) {
+                    val n = ins.read(buf)
+                    if (n <= 0) break
+                    out.write(buf, 0, n)
+                }
+                if (out.size() > maxBytes) null else out.toByteArray()
+            }
+        } catch (_: Exception) {
+            null
+        } finally {
+            runCatching { conn.disconnect() }
+        }
     }
 
     /**
