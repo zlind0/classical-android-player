@@ -118,14 +118,15 @@ fun Ios5AudiobookPlayerPage(
         val controller = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
         val prevStatus = controller.isAppearanceLightStatusBars
         val prevNav = controller.isAppearanceLightNavigationBars
-        val prevNavColor = window.navigationBarColor
         controller.isAppearanceLightStatusBars = false
         controller.isAppearanceLightNavigationBars = false
         window.navigationBarColor = android.graphics.Color.BLACK
         onDispose {
             controller.isAppearanceLightStatusBars = prevStatus
             controller.isAppearanceLightNavigationBars = prevNav
-            window.navigationBarColor = prevNavColor
+            // 全局导航条恒透明（底部 chrome 直接铺到底）：还原透明，
+            // 不再还原成进入时可能残留的系统白色遮罩。
+            window.navigationBarColor = android.graphics.Color.TRANSPARENT
         }
     }
 

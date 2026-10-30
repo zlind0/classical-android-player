@@ -128,7 +128,9 @@ fun AuroraTheme(
         SideEffect {
             val window = (view.context as Activity).window
             WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !useDark
-            WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = !useDark
+            // iOS5 底部 chrome 恒为深色渐变，导航键始终用白色图标；
+            // 阅读页/投屏页会按各自页面底色临时覆盖。
+            WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = false
         }
     }
     MaterialTheme(

@@ -3,6 +3,7 @@ package com.aurora.music.viewmodel
 import android.app.Application
 import android.content.ComponentName
 import android.net.Uri
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -22,7 +23,10 @@ import com.aurora.music.data.audiobook.ABOOK_ID_PREFIX
 import com.aurora.music.data.audiobook.abookBookIdOf
 import com.aurora.music.data.toSavedTrack
 import com.aurora.music.model.Song
+import com.aurora.music.playback.PositionState
 import com.aurora.music.playback.PlaybackService
+import com.aurora.music.playback.resolvePosition
+import com.aurora.music.playback.shouldResetPositionOnTransition
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -110,6 +114,8 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
     @Volatile private var abookSeekSec: Int = 30
     private var openRestoreAttempted = false
     private var lastPersistMs = 0L
+    // 最近一次写入 UI 的进度样本（用于单次 0 位置防抖）
+    private var lastPosition: PositionState? = null
     private var lastKeyInfoId: String? = null
     private var lastKeyInfo: com.aurora.music.data.SonicEngine.TrackKey? = null
     @Volatile private var loadingRadio = false
@@ -130,10 +136,16 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         }
 
         override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
-            // reset position so the bar doesn't show the previous track during the gap usb sink lags across a skip
-            _state.update { it.copy(positionSec = 0f) }
-            item?.mediaId?.let { maybeRevive(it) }
-            item?.mediaId?.let { onAbookChapterChanged(it) }
+            // 只有新曲确实是歌单里的已知歌曲、且不是当前展示的这首歌时才清 0：
+            // 双播会话切到 UnifiedPlayer 的 ebook_tts 占位、以及同一曲的 seek/缓冲，
+            // 都不该把音乐气泡的进度闪回 0:00（下一拍 ticker/快照会立刻写回真实位置）。
+            val newId = item?.mediaId
+            if (shouldResetPositionOnTransition(newId, _state.value.current.id, songById.keys)) {
+                lastPosition = null
+                _state.update { it.copy(positionSec = 0f) }
+            }
+            newId?.let { maybeRevive(it) }
+            newId?.let { onAbookChapterChanged(it) }
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -295,11 +307,12 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
                 // 队列顺序以音乐 player 时间线为准（随机是物理重排，双播时会话时间线是书的占位，不能拿来用）
                 val mq = ms.queueIds.mapNotNull { songById[it] }
                 val queue = if (ms.queueIds.isNotEmpty() && mq.size == ms.queueIds.size) mq else null
+                // 进度统一走防抖收口：单次 0（seek/缓冲/会话切换）不落 UI
+                applyPosition(controller)
                 _state.update {
                     it.copy(
                         current = cur ?: it.current,
                         isPlaying = ms.playing,
-                        positionSec = (ms.positionMs / 1000f).coerceAtLeast(0f),
                         queue = queue ?: it.queue,
                         currentIndex = abookIdx ?: ms.index,
                         shuffle = ms.shuffle,
@@ -335,6 +348,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         songById = emptyMap()
         lastRecordedId = null
         lastNowPlayingId = null
+        lastPosition = null
         _state.update {
             it.copy(current = emptySong, queue = emptyList(), isPlaying = false, positionSec = 0f, currentIndex = 0, expanded = false,
                 abookId = null, abookSpeed = 1f, abookGain = 1f)
@@ -345,6 +359,27 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         val c = controller ?: return
         val key = playingAccountKey.ifBlank { container.currentAccountKey() }
         if (key.isBlank()) return
+        // 双播时会话 controller 是书的占位时间线（mediaId=ebook_tts、位置恒 0），
+        // 音乐队列/进度必须以服务快照为准；否则朗读期间这里会查不到任何歌曲直接 return，
+        // 听书时的音乐进度永远不落盘，下次启动只能回到旧位置。
+        val ms = container.musicState.value
+        if (ms.mediaId.isNotBlank() && ms.queueIds.isNotEmpty()) {
+            val songs = ms.queueIds.mapNotNull { songById[it] }
+            if (songs.size == ms.queueIds.size) {
+                container.queueStore.save(key, SavedQueue(
+                    tracks = songs.map { it.toSavedTrack() },
+                    currentIndex = ms.index.coerceIn(0, songs.lastIndex),
+                    positionSec = (ms.positionMs / 1000).toInt().coerceAtLeast(0),
+                    shuffle = ms.shuffle,
+                    repeat = when (ms.repeatMode) { Player.REPEAT_MODE_ALL -> 1; Player.REPEAT_MODE_ONE -> 2; else -> 0 },
+                    wasPlaying = ms.playing,
+                    speed = _state.value.speed,
+                    pitch = _state.value.pitch,
+                    matchPitch = _state.value.matchPitch,
+                ))
+                return
+            }
+        }
         // don't clear on an empty controller it fires at startup before restore and wipes what we're about to restore
         if (c.mediaItemCount == 0) return
         val songs = (0 until c.mediaItemCount).mapNotNull { songById[c.getMediaItemAt(it).mediaId] }
@@ -369,6 +404,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         if (songs.isEmpty()) return
         songById = songs.associateBy { it.id }
         // 冷启动恢复的是书：走有声书分支（变速/增益/会话），否则还是音乐页
+        lastPosition = null
         val abookId = songs.takeIf { it.isNotEmpty() && it.all { s -> isAbookSong(s.id) } }
             ?.let { abookBookIdOf(it.first().id) }
         if (abookId != null) abookOrder = songs.map { it.id }
@@ -508,35 +544,43 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
                 val c = controller ?: continue
                 // 双播时会话 c 是书：进度只能取音乐快照，否则会被书的占位 0 位覆盖。
                 val ms = container.musicState.value
-                if (ms.mediaId.isNotBlank()) {
-                    if (ms.playing) {
-                        val posSec = (ms.positionMs / 1000f).coerceAtLeast(0f)
-                        _state.update { it.copy(positionSec = posSec) }
-                        maybeNowPlaying()
-                        recordIfPlayed(posSec)
-                        val now = System.currentTimeMillis()
-                        if (now - lastPersistMs > 2000) {
-                            lastPersistMs = now
-                            persistQueue()
-                            persistAbookNow()
-                        }
-                    }
-                    continue
-                }
-                if (c.effectivelyPlaying) {
-                    val posSec = (c.currentPosition / 1000f).coerceAtLeast(0f)
-                    _state.update { it.copy(positionSec = posSec) }
-                    maybeNowPlaying()
-                    recordIfPlayed(posSec)
-                    val now = System.currentTimeMillis()
-                    if (now - lastPersistMs > 2000) {
-                        lastPersistMs = now
-                        persistQueue()
-                        persistAbookNow()
-                    }
+                val active = if (ms.mediaId.isNotBlank()) ms.playing else c.effectivelyPlaying
+                if (!active) continue
+                val sample = applyPosition(c) ?: continue
+                val posSec = (sample.positionMs / 1000f).coerceAtLeast(0f)
+                maybeNowPlaying()
+                recordIfPlayed(posSec)
+                val now = System.currentTimeMillis()
+                if (now - lastPersistMs > 2000) {
+                    lastPersistMs = now
+                    persistQueue()
+                    persistAbookNow()
                 }
             }
         }
+    }
+
+    /**
+     * 统一进度写入：ticker / 音乐快照 collect / controller 同步共用。
+     * 双播时快照优先；快照缺失时只有会话当前曲是已知歌曲才用 controller 位置，
+     * 会话是 ebook_tts 占位时保持原值，避免把书的 0 位写进音乐气泡。
+     */
+    private fun applyPosition(c: MediaController?, nowMs: Long = SystemClock.elapsedRealtime()): PositionState? {
+        val ms = container.musicState.value
+        val next = resolvePosition(
+            snapshotMediaId = ms.mediaId,
+            snapshotPositionMs = ms.positionMs,
+            snapshotPlaying = ms.playing,
+            sessionMediaId = c?.currentMediaItem?.mediaId,
+            sessionPositionMs = c?.currentPosition ?: 0L,
+            sessionPlaying = c?.effectivelyPlaying == true,
+            knownMediaIds = songById.keys,
+            previous = lastPosition,
+            nowMs = nowMs,
+        ) ?: return null
+        lastPosition = next
+        _state.update { it.copy(positionSec = (next.positionMs / 1000f).coerceAtLeast(0f)) }
+        return next
     }
 
     private fun syncFromController() {
@@ -544,6 +588,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         // 双播时会话 player 是 UnifiedPlayer（书的三窗占位），音乐侧的真实序号/进度看服务快照。
         val ms = container.musicState.value
         val hasMusic = ms.mediaId.isNotBlank()
+        applyPosition(c)
         val mediaId = c.currentMediaItem?.mediaId
         val cur = (if (hasMusic) songById[ms.mediaId] else null)
             ?: mediaId?.let { songById[it] }
@@ -562,8 +607,6 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
                     Player.REPEAT_MODE_ALL -> RepeatMode.ALL
                     else -> RepeatMode.OFF
                 },
-                positionSec = if (hasMusic) (ms.positionMs / 1000f).coerceAtLeast(0f)
-                    else (c.currentPosition / 1000f).coerceAtLeast(0f),
                 queue = if (q.isNotEmpty()) q else it.queue,
                 currentIndex = abookIdx ?: if (hasMusic) ms.index else c.currentMediaItemIndex.coerceAtLeast(0),
                 bpm = ki?.bpm ?: 0,
@@ -667,6 +710,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         c.play()
         // fresh context plays in order make sure shuffle is off
         sendShuffle(0)
+        lastPosition = null
         _state.update { it.copy(queue = delivery.songs, currentIndex = delivery.currentIndex, current = songs[idx], positionSec = 0f, isPlaying = true) }
     }
 
@@ -730,6 +774,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             c.prepare()
             c.play()
             sendShuffle(0)
+            lastPosition = null
             _state.update {
                 it.copy(
                     queue = delivery.songs, currentIndex = delivery.currentIndex, current = songs[idx],
@@ -816,7 +861,11 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         val song = st.current
         if (!isAbookSong(song.id) || song.path.isBlank()) return
         container.abookSession.setCurrentPath(song.path)
-        val posMs = ((controller?.currentPosition ?: (st.positionSec * 1000).toLong())).coerceAtLeast(0L)
+        // 双播时会话是书的朗读占位，controller.currentPosition 是朗读位置，不能当有声书进度；
+        // 快照正好是音乐 player（本书章节）时用它。
+        val ms = container.musicState.value
+        val posMs = (if (ms.mediaId == song.id) ms.positionMs
+            else (controller?.currentPosition ?: (st.positionSec * 1000).toLong())).coerceAtLeast(0L)
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { container.audiobookStore.savePos(bookId, song.path, posMs) }
         }
@@ -832,7 +881,10 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         if (!isAbookSong(song.id) || song.path.isBlank()) return
         // mediaId 反解必须和旧书一致，防止窗口期错配写到别的书上。
         if (abookBookIdOf(song.id) != oldId) return
-        val posMs = ((c?.currentPosition ?: (st.positionSec * 1000).toLong())).coerceAtLeast(0L)
+        // 双播时会话 controller 承载朗读，位置不是有声书进度；快照是本书章节时以快照为准。
+        val ms = container.musicState.value
+        val posMs = (if (ms.mediaId == song.id) ms.positionMs
+            else (c?.currentPosition ?: (st.positionSec * 1000).toLong())).coerceAtLeast(0L)
         runCatching { container.audiobookStore.savePosSync(oldId, song.path, posMs) }
     }
 
@@ -966,6 +1018,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         c.playbackParameters = currentParams()
         c.prepare()
         c.play()
+        lastPosition = null
         _state.update { it.copy(queue = delivery.songs, currentIndex = delivery.currentIndex, current = shuffled[0], positionSec = 0f, isPlaying = true, shuffle = true) }
         // pass the original order so disabling shuffle restores it
         c.sendCustomCommand(

@@ -110,6 +110,8 @@ class PlaybackService : MediaLibraryService() {
     @Volatile private var lastReduckMs = 0L
     @Volatile private var lastMusicStatePublishMs = 0L
     @Volatile private var musicQueueIds: List<String> = emptyList()
+    // 上一次推送的音乐进度（单次 0 防抖：seek/缓冲瞬间不把进度推成 0）
+    @Volatile private var lastMusicPosition: PositionState? = null
 
     // ---- 统一会话（单服务单会话）：音乐 + 听书共用一个系统会话 ----
     // 双播一旦进入（dualArmed）就保持，直到用户亲手停掉其中一路；
@@ -687,15 +689,27 @@ class PlaybackService : MediaLibraryService() {
         }
         val v = runCatching {
             val md = player.currentMediaItem?.mediaMetadata
+            val mediaId = player.currentMediaItem?.mediaId.orEmpty()
+            val playingNow = player.isPlaying ||
+                (player.playWhenReady && player.playbackState == Player.STATE_BUFFERING)
+            // 单次 0 不推（seek/缓冲瞬态）；连续 0 超过防抖窗口才真正落 0。
+            val settled = settlePosition(
+                mediaId = mediaId,
+                positionMs = player.currentPosition,
+                playing = playingNow,
+                previous = lastMusicPosition,
+                nowMs = now,
+            )
+            lastMusicPosition = settled
             MusicPlaybackState(
-                mediaId = player.currentMediaItem?.mediaId.orEmpty(),
+                mediaId = mediaId,
                 queueIds = musicQueueIds,
                 title = md?.title?.toString().orEmpty(),
                 artist = md?.artist?.toString().orEmpty(),
                 artUri = md?.artworkUri?.toString().orEmpty(),
                 index = if (player.mediaItemCount > 0) player.currentMediaItemIndex.coerceAtLeast(0) else 0,
-                positionMs = player.currentPosition.coerceAtLeast(0),
-                playing = player.isPlaying || (player.playWhenReady && player.playbackState == Player.STATE_BUFFERING),
+                positionMs = settled?.positionMs ?: 0L,
+                playing = playingNow,
                 shuffle = player.shuffleModeEnabled,
                 repeatMode = player.repeatMode,
             )

@@ -75,6 +75,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -239,10 +240,12 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
         }
     }
 
-    // 投屏页（选择页 + 遥控页）显示系统状态栏和底部导航键：
-    // 顶栏是 iOS5 深色金属条（浅色图标）；
-    // 遥控页的走带栏一直铺到导航键下方（深色底）用浅色导航键，选择页是浅色亚麻底用深色导航键。
-    DisposableEffect(castOpen, castActive) {
+    // 阅读页（主页/目录/选项）隐藏状态栏，投屏页显示状态栏；导航键图标按当前页面
+    // 底部 chrome 的明暗切换：
+    // - 阅读主页底部是黑/棕渐变（与导航条连成一条）→ 白色导航键；
+    // - 目录/选项页是纸面底色 → WHITE/SEPIA 用深色图标，DARK 用白色；
+    // - 投屏选择页是浅色亚麻底 → 深色图标；投屏遥控页走带栏铺到导航键下 → 白色。
+    DisposableEffect(castOpen, castActive, tocOpen, optionsOpen, prefs.theme) {
         val activity = context as? Activity
         val controller = activity?.let { WindowCompat.getInsetsController(it.window, it.window.decorView) }
         val prevLightStatus = controller?.isAppearanceLightStatusBars
@@ -255,14 +258,15 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
                 controller.isAppearanceLightNavigationBars = !castActive
             } else {
                 controller.hide(WindowInsetsCompat.Type.statusBars())
+                val paperPage = tocOpen || optionsOpen
+                controller.isAppearanceLightNavigationBars =
+                    paperPage && themeOf(prefs.theme).bg.luminance() > 0.5f
             }
         }
         onDispose {
-            if (castOpen && controller != null) {
-                // 退出投屏页：恢复进入前的系统栏图标配色，避免阅读页深色底上出现深色图标
-                controller.isAppearanceLightStatusBars = prevLightStatus ?: false
-                controller.isAppearanceLightNavigationBars = prevLightNav ?: false
-            }
+            // 退出阅读页/切换子页：还原进入前的系统栏图标配色，避免深色底上出现深色图标
+            controller?.isAppearanceLightStatusBars = prevLightStatus ?: false
+            controller?.isAppearanceLightNavigationBars = prevLightNav ?: false
         }
     }
 
