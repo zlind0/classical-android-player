@@ -21,16 +21,20 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
  * 局域网资料库同步器。
@@ -83,6 +87,12 @@ class RemoteLibraryManager(
     val ebookRandomHistory: StateFlow<Map<String, List<RemoteEbookRandomHistory>>> =
         _ebookRandomHistory.asStateFlow()
 
+    /** 随机书库专属最近阅读；与电子书 Tab 的全局“最近阅读”完全隔离。 */
+    private val _ebookRandomRecents =
+        MutableStateFlow<Map<String, List<RemoteEbookRandomRecent>>>(emptyMap())
+    val ebookRandomRecents: StateFlow<Map<String, List<RemoteEbookRandomRecent>>> =
+        _ebookRandomRecents.asStateFlow()
+
     private val _abookPlays = MutableStateFlow<Map<String, RemoteAbookPlay>>(emptyMap())
     val abookPlays: StateFlow<Map<String, RemoteAbookPlay>> = _abookPlays.asStateFlow()
 
@@ -98,6 +108,9 @@ class RemoteLibraryManager(
     /** 快速扫描书库已经按需解析过的书；避免同一次运行反复请求。 */
     private val ebookDetailRequested = ConcurrentHashMap.newKeySet<String>()
 
+    /** 每台设备当前正在运行的批量解析任务；重新随机时取消上一批。 */
+    private val ebookDetailJobs = ConcurrentHashMap<String, Job>()
+
     /** 老服务端没有找书接口，整台设备只探测一次。 */
     private val ebookDetailUnsupported = ConcurrentHashMap.newKeySet<String>()
 
@@ -110,6 +123,16 @@ class RemoteLibraryManager(
     private val prefs by lazy {
         appContext.getSharedPreferences("aurora_remote_library", Context.MODE_PRIVATE)
     }
+
+    /** 随机书库的抽取结果/历史/最近阅读单独落盘，和固定资料库缓存完全分开。 */
+    private val randomStoreFile: File
+        get() = File(appContext.filesDir, "remote_random_books.json")
+
+    private data class RandomStoreFile(
+        val states: List<RemoteEbookRandomState> = emptyList(),
+        val history: List<RemoteEbookRandomHistory> = emptyList(),
+        val recents: List<RemoteEbookRandomRecent> = emptyList(),
+    )
 
     data class RemoteAbookPlay(
         val deviceId: String = "",
@@ -126,6 +149,7 @@ class RemoteLibraryManager(
         scope.launch {
             loadCachedPayloads()
             loadRecents()
+            loadRandomStore()
             syncLoop()
         }
         // 用户下载/删除后，资料库里“只存在于本地”的条目要立刻出现在原设备页面下。
@@ -222,11 +246,6 @@ class RemoteLibraryManager(
             return
         }
         val now = System.currentTimeMillis()
-        val oldVersion = cached?.payload?.libraryUpdatedAt ?: 0L
-        if (oldVersion != 0L && wire.libraryUpdatedAt != 0L && oldVersion != wire.libraryUpdatedAt) {
-            // 封面可能随资料库变化：版本变化时清掉旧封面，让下面的预取重新下载。
-            RemoteArtCache.clearDevice(appContext, device.id)
-        }
         val fresh = RemoteLibrarySnapshot(
             deviceId = device.id,
             deviceName = device.name,
@@ -537,53 +556,58 @@ class RemoteLibraryManager(
         val snapshot = payloads[deviceId] ?: return
         if (!snapshot.online) return
         val pending = paths.distinct().filter { path ->
-            snapshot.payload.ebooks.any { it.path == path && !it.metaScanned }
+            "$deviceId|$path" !in ebookDetailRequested &&
+                snapshot.payload.ebooks.any { it.path == path && !it.metaScanned }
         }
         if (pending.isEmpty()) return
         val baseUrl = "http://${snapshot.host}:${snapshot.port}"
-        scope.launch {
-            var changed = false
-            for (path in pending) {
-                val key = "$deviceId|$path"
-                if (!ebookDetailRequested.add(key)) continue
-                val (detail, unsupported) = fetchEbookDetail(baseUrl, path)
-                if (unsupported) {
-                    ebookDetailUnsupported += deviceId
-                    break
-                }
-                if (detail == null) {
-                    // 临时网络失败：移出集合，下次进入页面还能重试。
-                    ebookDetailRequested.remove(key)
-                    continue
-                }
-                if (applyEbookDetail(deviceId, detail)) changed = true
+        // 用户快速连点“重新随机”时，上一批可能还在解析；直接取消，避免请求堆积。
+        ebookDetailJobs[deviceId]?.cancel()
+        val job = scope.launch {
+            val (details, unsupported) = fetchEbookDetails(baseUrl, pending)
+            if (unsupported) {
+                ebookDetailUnsupported += deviceId
+                return@launch
             }
-            if (changed) payloads[deviceId]?.let { persistPayload(it) }
+            if (details == null) return@launch
+            ensureActive()
+            var changed = false
+            details.forEach { detail ->
+                if (applyEbookDetail(deviceId, detail)) changed = true
+                ebookDetailRequested += "$deviceId|${detail.path}"
+            }
+            if (changed) {
+                rebuildLibraries()
+            }
         }
+        ebookDetailJobs[deviceId] = job
     }
 
-    private suspend fun fetchEbookDetail(
+    private suspend fun fetchEbookDetails(
         baseUrl: String,
-        path: String,
-    ): Pair<RemoteEbookDetail?, Boolean> = withContext(Dispatchers.IO) {
+        paths: List<String>,
+    ): Pair<List<RemoteEbookDetail>?, Boolean> = withContext(Dispatchers.IO) {
         runCatching {
+            val body = gson.toJson(mapOf("paths" to paths))
+                .toRequestBody("application/json; charset=utf-8".toMediaType())
             val req = Request.Builder()
-                .url("$baseUrl/library/ebook/scan?path=${enc(path)}")
+                .url("$baseUrl/library/ebook/scan")
                 .header("X-Aurora-Device", "1")
-                .get()
+                .post(body)
                 .build()
             client.newCall(req).execute().use { r ->
-                if (r.code == 404) return@use null to true
+                if (r.code == 404 || r.code == 405) return@use null to true
                 if (!r.isSuccessful) return@use null to false
-                val body = r.body?.string() ?: return@use null to false
-                val detail = runCatching {
-                    gson.fromJson(body, RemoteEbookDetail::class.java)
+                val text = r.body?.string() ?: return@use null to false
+                val parsed = runCatching {
+                    gson.fromJson(text, RemoteEbookScanResponse::class.java)
                 }.getOrNull()
-                detail to false
+                parsed?.books to false
             }
         }.getOrDefault(null to false)
     }
 
+    /** 只更新内存，由调用方在整批结束后统一重建/落盘，避免 20 次全量刷新。 */
     private fun applyEbookDetail(deviceId: String, detail: RemoteEbookDetail): Boolean {
         val cached = payloads[deviceId] ?: return false
         var changed = false
@@ -606,7 +630,6 @@ class RemoteLibraryManager(
         }
         if (!changed) return false
         payloads[deviceId] = cached.copy(payload = cached.payload.copy(ebooks = ebooks))
-        rebuildLibraries()
         return true
     }
 
@@ -617,6 +640,32 @@ class RemoteLibraryManager(
 
     fun ebookRandomHistoryOf(deviceId: String, rootKey: String): List<RemoteEbookRandomHistory> =
         _ebookRandomHistory.value["$deviceId|$rootKey"].orEmpty()
+
+    fun ebookRandomRecentsOf(
+        deviceId: String,
+        rootKey: String,
+        limit: Int,
+    ): List<RemoteEbookRandomRecent> =
+        _ebookRandomRecents.value["$deviceId|$rootKey"].orEmpty()
+            .sortedByDescending { it.lastReadAt }
+            .take(limit.coerceAtLeast(1))
+
+    /** 随机书库内阅读只记在自己的最近阅读里，不污染电子书 Tab 的全局最近阅读。 */
+    fun noteRandomEbookOpened(deviceId: String, rootKey: String, path: String) {
+        val key = "$deviceId|$rootKey"
+        val now = System.currentTimeMillis()
+        val entry = RemoteEbookRandomRecent(
+            deviceId = deviceId,
+            rootKey = rootKey,
+            path = path,
+            lastReadAt = now,
+        )
+        val updated = (listOf(entry) + _ebookRandomRecents.value[key].orEmpty())
+            .filterNot { it.path == path }
+            .take(MAX_RANDOM_RECENTS)
+        _ebookRandomRecents.value = _ebookRandomRecents.value + (key to updated)
+        persistRandoms()
+    }
 
     /**
      * 首次进入随机书库时生成默认 20 本；之后只要用户没点“重新随机”，
@@ -718,31 +767,6 @@ class RemoteLibraryManager(
         return state
     }
 
-    /** 从“历史随机”里恢复某一批结果（同时把当前批次记入历史）。 */
-    fun restoreEbookRandom(
-        deviceId: String,
-        rootKey: String,
-        history: RemoteEbookRandomHistory,
-        pool: List<String>,
-    ): RemoteEbookRandomState {
-        val key = "$deviceId|$rootKey"
-        val poolSet = pool.toHashSet()
-        _ebookRandoms.value[key]?.let { current ->
-            if (current.paths.isNotEmpty()) pushRandomHistory(current)
-        }
-        val paths = history.paths.filter { it in poolSet }.take(history.count)
-        val state = RemoteEbookRandomState(
-            deviceId = deviceId,
-            rootKey = rootKey,
-            paths = paths,
-            count = history.count.coerceIn(MIN_RANDOM_COUNT, MAX_RANDOM_COUNT),
-            updatedAt = System.currentTimeMillis(),
-        )
-        _ebookRandoms.value = _ebookRandoms.value + (key to state)
-        persistRandoms()
-        return state
-    }
-
     private fun pushRandomHistory(state: RemoteEbookRandomState) {
         val key = state.key
         val entry = RemoteEbookRandomHistory(
@@ -757,21 +781,23 @@ class RemoteLibraryManager(
         _ebookRandomHistory.value = _ebookRandomHistory.value + (key to list)
     }
 
-    suspend fun openEbook(entry: RemoteEbookEntry): File? = withContext(Dispatchers.IO) {
+    suspend fun openEbook(entry: RemoteEbookEntry, recordRecent: Boolean = true): File? = withContext(Dispatchers.IO) {
         // 用户显式下载过：直接打开本地副本，设备离线也能读。
         val downloaded = downloads.localEbookPath(entry.deviceId, entry.remotePath)
         if (downloaded != null) {
             val f = File(downloaded)
             val now = System.currentTimeMillis()
-            val updated = (listOf(
-                entry.copy(
-                    localPath = f.absolutePath,
-                    deviceName = entry.deviceName,
-                    lastReadAt = now,
-                ),
-            ) + _ebookRecents.value.filterNot { it.key == entry.key })
-                .sortedByDescending { it.lastReadAt }
-            setEbookRecents(updated)
+            if (recordRecent) {
+                val updated = (listOf(
+                    entry.copy(
+                        localPath = f.absolutePath,
+                        deviceName = entry.deviceName,
+                        lastReadAt = now,
+                    ),
+                ) + _ebookRecents.value.filterNot { it.key == entry.key })
+                    .sortedByDescending { it.lastReadAt }
+                setEbookRecents(updated)
+            }
             return@withContext f
         }
         val lib = _libraries.value.firstOrNull { it.deviceId == entry.deviceId }
@@ -806,16 +832,48 @@ class RemoteLibraryManager(
             }
         }
         val now = System.currentTimeMillis()
-        val updated = (listOf(
-            entry.copy(
-                localPath = dest.absolutePath,
-                deviceName = lib.deviceName,
-                lastReadAt = now,
-            ),
-        ) + _ebookRecents.value.filterNot { it.key == entry.key })
-            .sortedByDescending { it.lastReadAt }
-        setEbookRecents(updated)
+        if (recordRecent) {
+            val updated = (listOf(
+                entry.copy(
+                    localPath = dest.absolutePath,
+                    deviceName = lib.deviceName,
+                    lastReadAt = now,
+                ),
+            ) + _ebookRecents.value.filterNot { it.key == entry.key })
+                .sortedByDescending { it.lastReadAt }
+            setEbookRecents(updated)
+        }
         dest
+    }
+
+    /** 随机书库“保存到默认书架”：只把文件流到临时文件，交给 EbookStore 收进本地书架。 */
+    suspend fun fetchEbookFile(entry: RemoteEbookEntry): File? = withContext(Dispatchers.IO) {
+        val lib = _libraries.value.firstOrNull { it.deviceId == entry.deviceId }
+            ?: return@withContext null
+        val ext = entry.remotePath.substringAfterLast('.', "epub").lowercase().takeIf {
+            it in setOf("epub", "mobi", "azw", "azw3")
+        } ?: "epub"
+        val tmp = File(
+            appContext.cacheDir,
+            "shelf_import_${System.currentTimeMillis()}_${sha1(entry.remotePath).take(8)}.$ext",
+        )
+        val ok = runCatching {
+            val req = Request.Builder()
+                .url("${lib.baseUrl}/media/ebook?path=${enc(entry.remotePath)}")
+                .get()
+                .build()
+            client.newCall(req).execute().use { r ->
+                if (!r.isSuccessful) return@use false
+                val body = r.body ?: return@use false
+                tmp.outputStream().use { out -> body.byteStream().copyTo(out) }
+                true
+            }
+        }.getOrDefault(false)
+        if (!ok || !(tmp.isFile && tmp.length() > 0)) {
+            runCatching { tmp.delete() }
+            return@withContext null
+        }
+        tmp
     }
 
     /** 用户调整“最近阅读数量”后立刻按新上限清缓存。 */
@@ -1086,19 +1144,37 @@ class RemoteLibraryManager(
             val plays = gson.fromJson<List<RemoteAbookPlay>>(prefs.getString("abook_plays", "[]"), playType).orEmpty()
             _abookPlays.value = plays.associateBy { it.key }
         }
+    }
+
+    private fun loadRandomStore() {
         runCatching {
-            val stateType = object : TypeToken<List<RemoteEbookRandomState>>() {}.type
-            val states = gson.fromJson<List<RemoteEbookRandomState>>(
-                prefs.getString("ebook_random_states", "[]"), stateType,
-            ).orEmpty()
-            _ebookRandoms.value = states.associateBy { it.key }
+            val file = randomStoreFile
+            if (!file.isFile) {
+                // 兼容上一版存在 SharedPreferences 里的临时数据。
+                migrateLegacyRandomStore()
+                return
+            }
+            val store = gson.fromJson(file.readText(), RandomStoreFile::class.java) ?: return
+            _ebookRandoms.value = store.states.orEmpty().associateBy { it.key }
+            _ebookRandomHistory.value = store.history.orEmpty().groupBy { it.deviceId + "|" + it.rootKey }
+            _ebookRandomRecents.value = store.recents.orEmpty().groupBy { it.deviceId + "|" + it.rootKey }
         }
+    }
+
+    private fun migrateLegacyRandomStore() {
         runCatching {
+            val statesType = object : TypeToken<List<RemoteEbookRandomState>>() {}.type
+            val states = gson.fromJson<List<RemoteEbookRandomState>>(
+                prefs.getString("ebook_random_states", "[]"), statesType,
+            ).orEmpty()
             val historyType = object : TypeToken<List<RemoteEbookRandomHistory>>() {}.type
             val history = gson.fromJson<List<RemoteEbookRandomHistory>>(
                 prefs.getString("ebook_random_history", "[]"), historyType,
             ).orEmpty()
+            if (states.isEmpty() && history.isEmpty()) return
+            _ebookRandoms.value = states.associateBy { it.key }
             _ebookRandomHistory.value = history.groupBy { it.deviceId + "|" + it.rootKey }
+            persistRandoms()
         }
     }
 
@@ -1113,13 +1189,12 @@ class RemoteLibraryManager(
 
     private fun persistRandoms() {
         runCatching {
-            prefs.edit()
-                .putString("ebook_random_states", gson.toJson(_ebookRandoms.value.values.toList()))
-                .putString(
-                    "ebook_random_history",
-                    gson.toJson(_ebookRandomHistory.value.values.flatten()),
-                )
-                .apply()
+            val store = RandomStoreFile(
+                states = _ebookRandoms.value.values.toList(),
+                history = _ebookRandomHistory.value.values.flatten(),
+                recents = _ebookRandomRecents.value.values.flatten(),
+            )
+            randomStoreFile.writeText(gson.toJson(store))
         }
     }
 
@@ -1178,6 +1253,7 @@ class RemoteLibraryManager(
         const val MIN_RANDOM_COUNT = 5
         const val MAX_RANDOM_COUNT = 100
         const val MAX_RANDOM_HISTORY = 12
+        const val MAX_RANDOM_RECENTS = 50
     }
 
     private data class CachedPayload(

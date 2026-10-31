@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.Icon
@@ -34,7 +35,6 @@ import com.aurora.music.AuroraApplication
 import com.aurora.music.data.cast.RemoteDeviceLibrary
 import com.aurora.music.data.cast.RemoteDownloadKind
 import com.aurora.music.data.cast.RemoteEbookEntry
-import com.aurora.music.data.cast.RemoteEbookRandomHistory
 import com.aurora.music.data.cast.RemoteEbookRootWire
 import com.aurora.music.data.cast.RemoteEbookWire
 import com.aurora.music.ui.components.Ios5RemoteStatusIcon
@@ -77,6 +77,10 @@ fun RemoteEbookLibraryScreen(
     onBack: () -> Unit,
     onOpenDir: (dir: String, title: String) -> Unit,
     onOpenBook: (RemoteEbookEntry) -> Unit,
+    /** 随机书库内阅读：只记随机书库自己的最近阅读。 */
+    onOpenRandomBook: (RemoteEbookEntry, rootKey: String) -> Unit = { entry, _ -> onOpenBook(entry) },
+    /** 把随机书库里的书保存到默认书架。 */
+    onSaveToShelf: (RemoteEbookEntry) -> Unit = {},
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val libraries by container.remoteLibrary.libraries.collectAsStateWithLifecycle()
@@ -84,12 +88,28 @@ fun RemoteEbookLibraryScreen(
     val recents by container.remoteLibrary.ebookRecents.collectAsStateWithLifecycle()
     val randomStates by container.remoteLibrary.ebookRandoms.collectAsStateWithLifecycle()
     val randomHistory by container.remoteLibrary.ebookRandomHistory.collectAsStateWithLifecycle()
+    val randomRecents by container.remoteLibrary.ebookRandomRecents.collectAsStateWithLifecycle()
+    val recentLimit by container.ebookPrefs.recentLimit.collectAsStateWithLifecycle()
     val lib = (if (allowOffline) cachedLibraries else libraries).firstOrNull { it.deviceId == deviceId }
     val root = lib?.let { container.remoteLibrary.ebookRootsOf(it) }
         ?.firstOrNull { it.key == rootKey }
+    val history = remember(randomHistory, deviceId, rootKey) {
+        randomHistory["$deviceId|$rootKey"].orEmpty()
+    }
+    var openedHistoryAt by rememberSaveable(deviceId, rootKey) { mutableStateOf(0L) }
+    val historyBatch = history.firstOrNull { it.createdAt == openedHistoryAt }
+    BackHandler(enabled = historyBatch != null) { openedHistoryAt = 0L }
 
     Column(Modifier.fillMaxSize()) {
-        Ios5NavBar(title = title.ifBlank { root?.displayName ?: "电子书" }, onBack = onBack)
+        Ios5NavBar(
+            title = when {
+                historyBatch != null -> "历史随机 · ${randomTimeLabel(historyBatch.createdAt)}"
+                else -> title.ifBlank { root?.displayName ?: "电子书" }
+            },
+            onBack = {
+                if (historyBatch != null) openedHistoryAt = 0L else onBack()
+            },
+        )
         if (lib == null || root == null || (!lib.online && !allowOffline && !lib.hasDownloads)) {
             Ios5Empty("这台设备的资料库暂时不可用")
             return@Column
@@ -155,8 +175,49 @@ fun RemoteEbookLibraryScreen(
             if (searchTruncated) searchResults.shuffled(Random(searchSeed)).take(count)
             else searchResults
         }
-        val history = remember(randomHistory, deviceId, rootKey) {
-            randomHistory["$deviceId|$rootKey"].orEmpty()
+
+        if (historyBatch != null && randomMode) {
+            val historyBooks = remember(historyBatch, poolByPath) {
+                historyBatch.paths.mapNotNull { poolByPath[it] }
+            }
+            LaunchedEffect(deviceId, historyBatch.createdAt, historyBooks.map { it.remotePath }) {
+                if (root.fastScan) {
+                    container.remoteLibrary.requestEbookDetails(
+                        deviceId,
+                        historyBooks.map { it.remotePath },
+                    )
+                }
+            }
+            val historyListState = com.aurora.music.ui.rememberPersistentLazyListState(
+                "remote_ebook_history:$deviceId:$rootKey:${historyBatch.createdAt}",
+            )
+            LazyColumn(
+                state = historyListState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 16.dp),
+            ) {
+                item {
+                    Ios5SectionTitle(
+                        "${randomTimeLabel(historyBatch.createdAt)} · ${historyBooks.size} 本",
+                    )
+                }
+                if (historyBooks.isEmpty()) {
+                    item { Ios5Empty("这一批书已经不在书库里了") }
+                } else {
+                    ios5Rows(historyBooks, key = { it.key }) { _, b ->
+                        BookRow(
+                            book = b,
+                            lib = lib,
+                            root = root,
+                            wire = wireByPath[b.remotePath] ?: poolWireByPath[b.remotePath],
+                            randomMode = true,
+                            onOpen = { onOpenRandomBook(b, rootKey) },
+                            onSaveToShelf = { onSaveToShelf(b) },
+                        )
+                    }
+                }
+            }
+            return@Column
         }
 
         if (randomMode) {
@@ -189,6 +250,15 @@ fun RemoteEbookLibraryScreen(
             !randomMode -> books
             query.isNotBlank() -> searchBooks
             else -> randomBooks
+        }
+        val randomRecentBooks = remember(
+            randomRecents, deviceId, rootKey, recentLimit, poolByPath, showRandom,
+        ) {
+            if (!showRandom) emptyList()
+            else randomRecents["$deviceId|$rootKey"].orEmpty()
+                .sortedByDescending { it.lastReadAt }
+                .take(recentLimit)
+                .mapNotNull { poolByPath[it.path] }
         }
 
         // 快速扫描书库：只为当前随机展示的这批书按需解析，不碰“全部展开”的海量结果。
@@ -267,12 +337,17 @@ fun RemoteEbookLibraryScreen(
                     }
                     item { Ios5SectionTitle(section) }
                     ios5Rows(displayBooks, key = { it.key }) { _, b ->
-                        BookDownloadRow(
+                        BookRow(
                             book = b,
                             lib = lib,
                             root = root,
                             wire = wireByPath[b.remotePath] ?: poolWireByPath[b.remotePath],
-                            onOpenBook = onOpenBook,
+                            randomMode = randomMode,
+                            onOpen = {
+                                if (randomMode) onOpenRandomBook(b, rootKey)
+                                else onOpenBook(b)
+                            },
+                            onSaveToShelf = { onSaveToShelf(b) },
                         )
                     }
                 } else if (!randomMode && dirs.isNotEmpty()) {
@@ -282,35 +357,30 @@ fun RemoteEbookLibraryScreen(
                     item { Ios5Empty("没有找到匹配的书") }
                 }
 
+                if (showRandom && randomRecentBooks.isNotEmpty()) {
+                    item { Ios5SectionTitle("最近阅读（${randomRecentBooks.size}）") }
+                    ios5Rows(randomRecentBooks, key = { "recent:${it.key}" }) { _, b ->
+                        BookRow(
+                            book = b,
+                            lib = lib,
+                            root = root,
+                            wire = wireByPath[b.remotePath] ?: poolWireByPath[b.remotePath],
+                            randomMode = true,
+                            onOpen = { onOpenRandomBook(b, rootKey) },
+                            onSaveToShelf = { onSaveToShelf(b) },
+                        )
+                    }
+                }
+
                 if (showRandom && history.isNotEmpty()) {
                     item { Ios5SectionTitle("历史随机") }
-                    history.forEachIndexed { index, batch ->
-                        val historyBooks = batch.paths.mapNotNull { poolByPath[it] }
-                        item(key = "history-head-$index") {
-                            HistoryHeader(
-                                batch = batch,
-                                visibleCount = historyBooks.size,
-                                onRestore = {
-                                    container.remoteLibrary.restoreEbookRandom(
-                                        deviceId, rootKey, batch, poolPaths,
-                                    )
-                                },
-                            )
-                        }
-                        ios5Rows(
-                            historyBooks,
-                            key = { "history-$index:${it.key}" },
-                            topInset = 0.dp,
-                            bottomInset = 8.dp,
-                        ) { _, b ->
-                            BookDownloadRow(
-                                book = b,
-                                lib = lib,
-                                root = root,
-                                wire = wireByPath[b.remotePath] ?: poolWireByPath[b.remotePath],
-                                onOpenBook = onOpenBook,
-                            )
-                        }
+                    ios5Rows(history, key = { "history:${it.createdAt}" }) { _, batch ->
+                        val visible = batch.paths.count { poolByPath.containsKey(it) }
+                        Ios5Cell(
+                            title = randomTimeLabel(batch.createdAt),
+                            subtitle = "$visible 本",
+                            onClick = { openedHistoryAt = batch.createdAt },
+                        )
                     }
                 }
             }
@@ -383,46 +453,39 @@ private fun RandomControls(
     }
 }
 
-@Composable
-private fun HistoryHeader(
-    batch: RemoteEbookRandomHistory,
-    visibleCount: Int,
-    onRestore: () -> Unit,
-) {
-    val label = remember(batch.createdAt) {
-        SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(batch.createdAt))
-    }
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                "$label · $visibleCount 本",
-                color = Ios5Colors.TextSecondary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                "上一次的随机结果",
-                color = Ios5Colors.TextSecondary.copy(alpha = 0.7f),
-                fontSize = 10.sp,
-            )
-        }
-        Ios5SmallButton(text = "恢复", onClick = onRestore)
-    }
-}
+private fun randomTimeLabel(createdAt: Long): String =
+    runCatching {
+        SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(createdAt))
+    }.getOrDefault("")
 
 @Composable
-private fun BookDownloadRow(
+private fun BookRow(
     book: RemoteEbookEntry,
     lib: RemoteDeviceLibrary,
     root: RemoteEbookRootWire,
     wire: RemoteEbookWire?,
-    onOpenBook: (RemoteEbookEntry) -> Unit,
+    randomMode: Boolean,
+    onOpen: () -> Unit,
+    onSaveToShelf: () -> Unit,
 ) {
     val downloads = (LocalContext.current.applicationContext as AuroraApplication)
         .container.remoteDownloads
+    if (randomMode) {
+        EbookRow(
+            title = book.displayTitle,
+            subtitle = authorAndProgress(book.author, 0f),
+            coverPath = book.coverUrl,
+            accentKey = book.key,
+            remote = true,
+            onClick = onOpen,
+            trailing = {
+                if (lib.online) {
+                    Ios5SmallButton(text = "存书架", onClick = onSaveToShelf)
+                }
+            },
+        )
+        return
+    }
     RemoteDownloadSwipeRow(
         kind = RemoteDownloadKind.EBOOK,
         deviceId = book.deviceId,
@@ -442,7 +505,7 @@ private fun BookDownloadRow(
             coverPath = book.coverUrl,
             accentKey = book.key,
             remote = true,
-            onClick = { onOpenBook(book) },
+            onClick = onOpen,
         )
     }
 }

@@ -330,7 +330,7 @@ musicPathOrder == false（MEDIA 栈）:
 
 #### 4.2.3.1 `GET /library/ebook/scan`
 
-快速扫描书库的按需解析接口。客户端在随机选到某本书、真正准备展示时才调用；服务端解析后会写回数据库，后续直接返回缓存，并把新的 `libraryUpdatedAt` 暴露给客户端。
+快速扫描书库的单本按需解析接口。服务端解析后写回数据库，后续直接返回缓存。该接口不会改变 `libraryUpdatedAt`，避免懒解析触发客户端全量同步。
 
 请求：
 
@@ -349,10 +349,36 @@ GET /library/ebook/scan?path=<urlencoded-path>
 }
 ```
 
+#### 4.2.3.2 `POST /library/ebook/scan`
+
+批量按需解析接口。客户端每次随机展示一批书时只发一次请求，服务端批量解析并一次写库。
+
+请求：
+
+```http
+POST /library/ebook/scan
+Content-Type: application/json
+
+{"paths":["/books/a.epub","/books/b.epub"]}
+```
+
+响应：
+
+```json
+{
+  "books": [
+    {"path": "/books/a.epub", "title": "A", "author": "Someone", "hasCover": true},
+    {"path": "/books/b.epub", "title": "B", "author": "", "hasCover": false}
+  ]
+}
+```
+
 约束：
 
 - 只接受已在资料库中登记过的电子书路径。
-- 老服务端没有该接口时返回 404，客户端应继续使用 `ebooks[]` 中的文件名占位信息。
+- 单次最多处理 200 个路径。
+- 老服务端没有批量接口时返回 404/405，客户端应继续使用 `ebooks[]` 中的文件名占位信息。
+- 懒解析不会改变资料库版本；客户端直接使用本响应更新本地缓存。
 - 服务端可能在每次解析后改变 `libraryUpdatedAt`，客户端应允许渐进刷新。
 
 #### 4.2.4 `audiobooks[]`
@@ -641,7 +667,7 @@ audiobook:remote:<deviceId>:<base64url(book.id)>#<chapterIndex>
 2. UDP 47823 处理 `probe` / 发送 `offer`（可选但推荐）；
 3. `GET /library/version`（推荐）；
 4. `GET /library/all`；
-5. `GET /library/ebook/scan`（快速扫描书库可选，用于按需解析）；
+5. `GET/POST /library/ebook/scan`（快速扫描书库可选，用于按需解析）；
 6. `GET /media/music`；
 7. `GET /media/audiobook`；
 8. `GET /media/ebook`；

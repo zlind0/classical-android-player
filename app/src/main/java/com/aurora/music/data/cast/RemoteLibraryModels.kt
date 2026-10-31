@@ -46,6 +46,11 @@ data class RemoteEbookDetail(
     val hasCover: Boolean = false,
 )
 
+/** `POST /library/ebook/scan` 的批量按需解析响应。 */
+data class RemoteEbookScanResponse(
+    val books: List<RemoteEbookDetail> = emptyList(),
+)
+
 /** 客户端为某个远程随机书库保存的当前随机结果；未点“重新随机”前保持不变。 */
 data class RemoteEbookRandomState(
     val deviceId: String = "",
@@ -65,6 +70,16 @@ data class RemoteEbookRandomHistory(
     val count: Int = 20,
     val createdAt: Long = 0L,
 )
+
+/** 随机书库自己的最近阅读，不进入电子书 Tab 的全局最近阅读。 */
+data class RemoteEbookRandomRecent(
+    val deviceId: String = "",
+    val rootKey: String = "",
+    val path: String = "",
+    val lastReadAt: Long = 0L,
+) {
+    val key: String get() = "$deviceId|$rootKey|$path"
+}
 
 data class RemoteEbookWire(
     val path: String = "",

@@ -8,6 +8,7 @@ use axum::extract::{Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use axum::Json;
 use axum::Router;
 use rusqlite::Connection;
 use serde_json::json;
@@ -30,7 +31,10 @@ pub fn build_router(state: HttpState) -> Router {
         .route("/", get(index))
         .route("/library/version", get(library_version))
         .route("/library/all", get(library_all))
-        .route("/library/ebook/scan", get(library_ebook_scan))
+        .route(
+            "/library/ebook/scan",
+            get(library_ebook_scan).post(library_ebook_scan_batch),
+        )
         .route("/media/music", get(media_music))
         .route("/media/audiobook", get(media_audiobook))
         .route("/media/ebook", get(media_ebook))
@@ -192,6 +196,65 @@ async fn library_ebook_scan(
             "text/plain; charset=utf-8",
         ),
     }
+}
+
+#[derive(serde::Deserialize)]
+struct EbookScanBatchRequest {
+    paths: Vec<String>,
+}
+
+/// Batch version of the lazy scan endpoint. One HTTP round trip per random batch,
+/// and deliberately no library-version bump: metadata is cached in the DB, while
+/// the requesting client already receives it in this response.
+async fn library_ebook_scan_batch(
+    State(state): State<HttpState>,
+    Json(request): Json<EbookScanBatchRequest>,
+) -> Response {
+    let mut books = Vec::new();
+    for path in request.paths.into_iter().take(200) {
+        let lookup_path = path.clone();
+        let info = match run_db(&state, move |conn| db::book_scan_info(conn, &lookup_path)).await {
+            Ok(Some(info)) => info,
+            _ => continue,
+        };
+        if info.meta_scanned {
+            books.push(json!({
+                "path": path,
+                "title": info.title,
+                "author": info.author,
+                "hasCover": info.has_cover,
+            }));
+            continue;
+        }
+        let source_path = info.path;
+        let ext = info.format;
+        let parsed = tokio::task::spawn_blocking(move || {
+            if ext == "epub" {
+                meta::read_epub(&source_path)
+            } else {
+                meta::BookMeta::default()
+            }
+        })
+        .await;
+        let parsed = match parsed {
+            Ok(meta) => meta,
+            Err(_) => continue,
+        };
+        let apply_path = path.clone();
+        let updated = run_db(&state, move |conn| {
+            db::apply_book_meta(conn, &apply_path, &parsed)
+        })
+        .await;
+        if let Ok((title, author, has_cover)) = updated {
+            books.push(json!({
+                "path": path,
+                "title": title,
+                "author": author,
+                "hasCover": has_cover,
+            }));
+        }
+    }
+    json_response(json!({ "books": books }))
 }
 
 async fn library_all(State(state): State<HttpState>) -> Response {

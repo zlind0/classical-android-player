@@ -1042,7 +1042,6 @@ pub fn apply_book_meta(
         params![path],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
-    refresh_library_version(conn)?;
     Ok((title, author, has_cover != 0))
 }
 

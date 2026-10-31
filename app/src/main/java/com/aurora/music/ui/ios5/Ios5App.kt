@@ -484,6 +484,36 @@ fun Ios5App() {
         }
     }
 
+    fun openRandomBook(
+        entry: com.aurora.music.data.cast.RemoteEbookEntry,
+        rootKey: String,
+    ) = scope.launch {
+        remoteBrowsing = true
+        val f = container.remoteLibrary.openEbook(entry, recordRecent = false)
+        if (f == null) {
+            confirm("无法从 ${entry.deviceName} 下载这本书")
+        } else {
+            container.remoteLibrary.noteRandomEbookOpened(entry.deviceId, rootKey, entry.remotePath)
+            navController.navigate(Ios5Routes.ebookReader(f.absolutePath))
+        }
+    }
+
+    fun saveRemoteBookToShelf(entry: com.aurora.music.data.cast.RemoteEbookEntry) = scope.launch {
+        val temp = container.remoteLibrary.fetchEbookFile(entry)
+        if (temp == null) {
+            confirm("无法从 ${entry.deviceName} 下载这本书")
+            return@launch
+        }
+        val name = entry.remotePath.substringAfterLast('/')
+        val saved = container.ebookStore.importShelfFile(temp, name)
+        runCatching { temp.delete() }
+        if (saved == null) {
+            confirm("保存到默认书架失败")
+        } else {
+            confirm("已保存到默认书架：${saved.displayTitle}")
+        }
+    }
+
     fun playRemoteAudiobook(entry: com.aurora.music.data.cast.RemoteAudiobookEntry) = scope.launch {
         val songs = container.remoteLibrary.songsForAudiobook(entry)
         if (songs.isEmpty()) {
@@ -704,6 +734,8 @@ fun Ios5App() {
                                     )
                                 },
                                 onOpenBook = { openRemoteBook(it) },
+                                onOpenRandomBook = { entry, rk -> openRandomBook(entry, rk) },
+                                onSaveToShelf = { saveRemoteBookToShelf(it) },
                             )
                         }
                         composable(

@@ -275,6 +275,53 @@ class EbookStore(context: Context, private val dao: EbookDao) {
         bookByPath(path)?.md5?.ifBlank { null } ?: fingerprintOf(File(path))
     }.getOrDefault("")
 
+    // ---- 从局域网随机书库保存到默认书架（纯本地文件 + 本地数据库） ----
+
+    /**
+     * 把一个已经下载到临时目录的电子书文件收进默认书架。
+     * 相同 md5 + 大小只保留一份；成功后它就只是普通本地书目，不再有远程记录。
+     */
+    suspend fun importShelfFile(source: File, displayName: String?): EbookBook? =
+        withContext(Dispatchers.IO) {
+            if (!source.isFile || source.length() <= 0) return@withContext null
+            val name = (displayName?.ifBlank { null }
+                ?: source.name.substringAfterLast('/')).ifBlank { "book.epub" }
+            if (!isEbookFile(name)) return@withContext null
+            val size = source.length()
+            val md5 = fingerprintOf(source)
+            if (md5.isBlank()) return@withContext null
+            dao.shelfByFingerprint(md5, size)?.let { return@withContext it.toBook() }
+            val shelfDir = File(appContext.filesDir, "ebooks/$EBOOK_SHELF_DIR_NAME")
+            shelfDir.mkdirs()
+            val safe = safeFileName(name)
+            var dest = File(shelfDir, safe)
+            var i = 1
+            while (dest.exists()) {
+                dest = File(
+                    shelfDir,
+                    safe.substringBeforeLast('.') + " ($i)." + safe.substringAfterLast('.', "epub"),
+                )
+                i++
+            }
+            runCatching { source.copyTo(dest, overwrite = false) }
+                .getOrElse { return@withContext null }
+            val meta = when (ebookFormatOf(dest.name)) {
+                EbookFormat.EPUB -> EpubParser.parseMeta(dest).let { it.title to it.author }
+                else -> MobiParser.parseMeta(dest).let { it.title to it.author }
+            }
+            val cover = extractCover(dest, md5)
+            val row = EbookRow(
+                path = dest.absolutePath, md5 = md5, size = size,
+                lastModified = dest.lastModified(),
+                title = meta.first.ifBlank { dest.nameWithoutExtension },
+                author = meta.second, coverPath = cover,
+                rootId = EBOOK_SHELF_ROOT_ID, inShelf = true,
+            )
+            dao.upsertBooks(listOf(row))
+            refresh()
+            row.toBook()
+        }
+
     // ---- 外部打开导入（默认书架，md5+size 去重） ----
 
     fun handleOpenUri(uri: Uri, displayName: String?) {
