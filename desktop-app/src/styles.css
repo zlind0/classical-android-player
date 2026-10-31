@@ -1275,6 +1275,51 @@ input[type="range"]::-webkit-slider-thumb {
   color: #3a44bd;
 }
 
+.check-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(16, 24, 40, 0.02);
+  cursor: pointer;
+}
+.check-card input {
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+}
+.check-card span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.check-card strong {
+  font-size: 12.5px;
+  color: var(--text);
+}
+.check-card em {
+  font-style: normal;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.check-card.active {
+  border-color: rgba(90, 99, 232, 0.55);
+  background: var(--accent-soft);
+}
+
+.random-toggle {
+  width: auto !important;
+  padding: 0 6px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.random-toggle.on {
+  color: #3f49c7;
+  background: var(--accent-soft);
+}
+
 .text-input {
   width: 100%;
   padding: 9px 12px;

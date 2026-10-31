@@ -34,6 +34,28 @@ data class RemoteEbookRootWire(
     val displayName: String = "",
     val shelf: Boolean = false,
     val bookCount: Int = 0,
+    /** 发送端在该书库勾选了“随机选书”，客户端进入后默认随机展示。 */
+    val randomPick: Boolean = false,
+)
+
+/** 客户端为某个远程随机书库保存的当前随机结果；未点“重新随机”前保持不变。 */
+data class RemoteEbookRandomState(
+    val deviceId: String = "",
+    val rootKey: String = "",
+    val paths: List<String> = emptyList(),
+    val count: Int = 20,
+    val updatedAt: Long = 0L,
+) {
+    val key: String get() = "$deviceId|$rootKey"
+}
+
+/** “历史随机”里的一批旧结果。 */
+data class RemoteEbookRandomHistory(
+    val deviceId: String = "",
+    val rootKey: String = "",
+    val paths: List<String> = emptyList(),
+    val count: Int = 20,
+    val createdAt: Long = 0L,
 )
 
 data class RemoteEbookWire(

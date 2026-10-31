@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS roots (
     path         TEXT NOT NULL UNIQUE,
     kind         TEXT NOT NULL CHECK (kind IN ('music','audiobook','book')),
     music_mode   TEXT,
+    random_pick  INTEGER NOT NULL DEFAULT 0,
     display_name TEXT NOT NULL,
     created_at   INTEGER NOT NULL,
     last_scan_at INTEGER,
@@ -145,6 +146,20 @@ fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(SCHEMA)?;
         conn.pragma_update(None, "user_version", 1)?;
     }
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 2 {
+        let has_column: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('roots') WHERE name = 'random_pick')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_column {
+            conn.execute_batch(
+                "ALTER TABLE roots ADD COLUMN random_pick INTEGER NOT NULL DEFAULT 0",
+            )?;
+        }
+        conn.pragma_update(None, "user_version", 2)?;
+    }
     Ok(())
 }
 
@@ -223,7 +238,7 @@ fn content_signature(conn: &Connection) -> Result<String> {
     let mut hasher: u64 = 1469598103934665603;
 
     let mut stmt = conn.prepare(
-        "SELECT id, path, kind, COALESCE(music_mode,''), display_name FROM roots ORDER BY id",
+        "SELECT id, path, kind, COALESCE(music_mode,''), display_name, random_pick FROM roots ORDER BY id",
     )?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
@@ -232,6 +247,7 @@ fn content_signature(conn: &Connection) -> Result<String> {
         feed_str(&mut hasher, &row.get::<_, String>(2)?);
         feed_str(&mut hasher, &row.get::<_, String>(3)?);
         feed_str(&mut hasher, &row.get::<_, String>(4)?);
+        feed_i64(&mut hasher, row.get(5)?);
     }
     drop(rows);
     drop(stmt);
@@ -336,16 +352,17 @@ fn row_to_root(row: &rusqlite::Row<'_>) -> rusqlite::Result<RootInfo> {
         path: row.get(1)?,
         kind: row.get(2)?,
         music_mode: row.get(3)?,
-        display_name: row.get(4)?,
-        created_at: row.get(5)?,
-        last_scan_at: row.get(6)?,
-        scan_state: row.get(7)?,
-        item_count: row.get(8)?,
+        random_pick: row.get::<_, i64>(4)? != 0,
+        display_name: row.get(5)?,
+        created_at: row.get(6)?,
+        last_scan_at: row.get(7)?,
+        scan_state: row.get(8)?,
+        item_count: row.get(9)?,
     })
 }
 
 const ROOT_COLUMNS: &str =
-    "id, path, kind, music_mode, display_name, created_at, last_scan_at, scan_state, item_count";
+    "id, path, kind, music_mode, random_pick, display_name, created_at, last_scan_at, scan_state, item_count";
 
 pub fn list_roots(conn: &Connection) -> Result<Vec<RootInfo>> {
     let mut stmt = conn.prepare(&format!(
@@ -375,6 +392,7 @@ pub fn add_root(
     kind: &str,
     music_mode: Option<&str>,
     display_name: Option<&str>,
+    random_pick: bool,
 ) -> Result<RootInfo> {
     if !matches!(kind, KIND_MUSIC | KIND_AUDIOBOOK | KIND_BOOK) {
         return Err(anyhow!("未知的目录类型: {kind}"));
@@ -419,9 +437,16 @@ pub fn add_root(
         });
 
     conn.execute(
-        "INSERT INTO roots(path, kind, music_mode, display_name, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![canonical, kind, mode, name, now_ms()],
+        "INSERT INTO roots(path, kind, music_mode, random_pick, display_name, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            canonical,
+            kind,
+            mode,
+            if random_pick { 1 } else { 0 },
+            name,
+            now_ms()
+        ],
     )?;
     let id = conn.last_insert_rowid();
     refresh_library_version(conn)?;
@@ -433,6 +458,7 @@ pub fn update_root(
     id: i64,
     display_name: Option<&str>,
     music_mode: Option<&str>,
+    random_pick: Option<bool>,
 ) -> Result<RootInfo> {
     let root = get_root(conn, id)?;
     if let Some(name) = display_name {
@@ -455,6 +481,14 @@ pub fn update_root(
             conn.execute(
                 "UPDATE roots SET music_mode = ?1 WHERE id = ?2",
                 params![mode, id],
+            )?;
+        }
+    }
+    if root.kind == KIND_BOOK {
+        if let Some(random_pick) = random_pick {
+            conn.execute(
+                "UPDATE roots SET random_pick = ?1 WHERE id = ?2",
+                params![if random_pick { 1 } else { 0 }, id],
             )?;
         }
     }
@@ -777,7 +811,7 @@ pub fn wire_snapshot(
     {
         let mut stmt = conn.prepare(
             "SELECT r.id, r.path, r.display_name,
-                    (SELECT COUNT(*) FROM books b WHERE b.root_id = r.id)
+                    (SELECT COUNT(*) FROM books b WHERE b.root_id = r.id), r.random_pick
              FROM roots r WHERE r.kind = 'book' ORDER BY r.created_at ASC, r.id ASC",
         )?;
         let mut rows = stmt.query([])?;
@@ -789,6 +823,7 @@ pub fn wire_snapshot(
                 display_name: row.get(2)?,
                 shelf: false,
                 book_count: row.get(3)?,
+                random_pick: row.get::<_, i64>(4)? != 0,
             });
         }
     }

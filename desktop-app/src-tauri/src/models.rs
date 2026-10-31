@@ -24,6 +24,8 @@ pub struct RootInfo {
     pub kind: String,
     /// `tag` or `folder`; only meaningful for `kind == "music"`.
     pub music_mode: Option<String>,
+    /// Client-side hint: open this book library in “random picks” mode.
+    pub random_pick: bool,
     pub display_name: String,
     pub created_at: i64,
     pub last_scan_at: Option<i64>,
@@ -203,6 +205,8 @@ pub struct WireEbookRoot {
     pub display_name: String,
     pub shelf: bool,
     pub book_count: i64,
+    /// Advertised to clients: browse this root with random picks enabled.
+    pub random_pick: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

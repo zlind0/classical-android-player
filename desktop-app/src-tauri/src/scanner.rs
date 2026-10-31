@@ -998,6 +998,7 @@ mod tests {
                 KIND_MUSIC,
                 Some(MODE_FOLDER),
                 None,
+                false,
             )
             .unwrap()
         };
@@ -1053,10 +1054,18 @@ mod tests {
                 KIND_AUDIOBOOK,
                 None,
                 None,
+                false,
             )
             .unwrap();
-            let books =
-                db::add_root(&conn, book_root.to_str().unwrap(), KIND_BOOK, None, None).unwrap();
+            let books = db::add_root(
+                &conn,
+                book_root.to_str().unwrap(),
+                KIND_BOOK,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
             (audio, books)
         };
 

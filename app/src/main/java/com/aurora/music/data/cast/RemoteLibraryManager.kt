@@ -74,6 +74,15 @@ class RemoteLibraryManager(
     private val _ebookRecents = MutableStateFlow<List<RemoteEbookEntry>>(emptyList())
     val ebookRecents: StateFlow<List<RemoteEbookEntry>> = _ebookRecents.asStateFlow()
 
+    /** 每个远程随机书库的当前结果；key = deviceId|rootKey。 */
+    private val _ebookRandoms = MutableStateFlow<Map<String, RemoteEbookRandomState>>(emptyMap())
+    val ebookRandoms: StateFlow<Map<String, RemoteEbookRandomState>> = _ebookRandoms.asStateFlow()
+
+    /** 每个远程随机书库的历史结果，最近的在前。 */
+    private val _ebookRandomHistory = MutableStateFlow<Map<String, List<RemoteEbookRandomHistory>>>(emptyMap())
+    val ebookRandomHistory: StateFlow<Map<String, List<RemoteEbookRandomHistory>>> =
+        _ebookRandomHistory.asStateFlow()
+
     private val _abookPlays = MutableStateFlow<Map<String, RemoteAbookPlay>>(emptyMap())
     val abookPlays: StateFlow<Map<String, RemoteAbookPlay>> = _abookPlays.asStateFlow()
 
@@ -511,6 +520,153 @@ class RemoteLibraryManager(
             )
         }
 
+    // ---- 随机选书 ----
+
+    fun ebookRandomState(deviceId: String, rootKey: String): RemoteEbookRandomState? =
+        _ebookRandoms.value["$deviceId|$rootKey"]
+
+    fun ebookRandomHistoryOf(deviceId: String, rootKey: String): List<RemoteEbookRandomHistory> =
+        _ebookRandomHistory.value["$deviceId|$rootKey"].orEmpty()
+
+    /**
+     * 首次进入随机书库时生成默认 20 本；之后只要用户没点“重新随机”，
+     * 即使重新进入页面或 App 重启也沿用上次保存的列表。
+     * 远端删掉的书会被悄悄剔除，并用同库其它书补齐，保持数量稳定。
+     */
+    fun ensureEbookRandom(
+        deviceId: String,
+        rootKey: String,
+        pool: List<String>,
+        defaultCount: Int = DEFAULT_RANDOM_COUNT,
+    ): RemoteEbookRandomState {
+        val key = "$deviceId|$rootKey"
+        val existing = _ebookRandoms.value[key]
+        if (existing == null) {
+            val count = defaultCount.coerceIn(MIN_RANDOM_COUNT, MAX_RANDOM_COUNT)
+            val picked = pool.shuffled().take(count.coerceAtMost(pool.size))
+            val state = RemoteEbookRandomState(
+                deviceId = deviceId,
+                rootKey = rootKey,
+                paths = picked,
+                count = count,
+                updatedAt = System.currentTimeMillis(),
+            )
+            _ebookRandoms.value = _ebookRandoms.value + (key to state)
+            persistRandoms()
+            return state
+        }
+        val poolSet = pool.toHashSet()
+        val kept = existing.paths.filter { it in poolSet }
+        val target = existing.count.coerceAtMost(pool.size)
+        val extra = if (kept.size < target) {
+            pool.filterNot { it in kept }.shuffled().take(target - kept.size)
+        } else {
+            emptyList()
+        }
+        val paths = kept + extra
+        if (paths != existing.paths) {
+            val updated = existing.copy(paths = paths)
+            _ebookRandoms.value = _ebookRandoms.value + (key to updated)
+            persistRandoms()
+            return updated
+        }
+        return existing
+    }
+
+    fun rerollEbookRandom(
+        deviceId: String,
+        rootKey: String,
+        pool: List<String>,
+        count: Int? = null,
+    ): RemoteEbookRandomState {
+        val key = "$deviceId|$rootKey"
+        val existing = _ebookRandoms.value[key]
+        val target = (count ?: existing?.count ?: DEFAULT_RANDOM_COUNT)
+            .coerceIn(MIN_RANDOM_COUNT, MAX_RANDOM_COUNT)
+        if (existing != null && existing.paths.isNotEmpty()) {
+            pushRandomHistory(existing)
+        }
+        val picked = pool.shuffled().take(target.coerceAtMost(pool.size))
+        val state = RemoteEbookRandomState(
+            deviceId = deviceId,
+            rootKey = rootKey,
+            paths = picked,
+            count = target,
+            updatedAt = System.currentTimeMillis(),
+        )
+        _ebookRandoms.value = _ebookRandoms.value + (key to state)
+        persistRandoms()
+        return state
+    }
+
+    /** 调整随机数量：保留已经看到的书，数量不够时从池子里补足。 */
+    fun setEbookRandomCount(
+        deviceId: String,
+        rootKey: String,
+        count: Int,
+        pool: List<String>,
+    ): RemoteEbookRandomState {
+        val key = "$deviceId|$rootKey"
+        val existing = _ebookRandoms.value[key]
+        val target = count.coerceIn(MIN_RANDOM_COUNT, MAX_RANDOM_COUNT)
+        val poolSet = pool.toHashSet()
+        val kept = existing?.paths.orEmpty().filter { it in poolSet }.take(target)
+        val extra = if (kept.size < target) {
+            pool.filterNot { it in kept }.shuffled().take((target - kept.size).coerceAtMost(pool.size))
+        } else {
+            emptyList()
+        }
+        val state = RemoteEbookRandomState(
+            deviceId = deviceId,
+            rootKey = rootKey,
+            paths = kept + extra,
+            count = target,
+            updatedAt = System.currentTimeMillis(),
+        )
+        _ebookRandoms.value = _ebookRandoms.value + (key to state)
+        persistRandoms()
+        return state
+    }
+
+    /** 从“历史随机”里恢复某一批结果（同时把当前批次记入历史）。 */
+    fun restoreEbookRandom(
+        deviceId: String,
+        rootKey: String,
+        history: RemoteEbookRandomHistory,
+        pool: List<String>,
+    ): RemoteEbookRandomState {
+        val key = "$deviceId|$rootKey"
+        val poolSet = pool.toHashSet()
+        _ebookRandoms.value[key]?.let { current ->
+            if (current.paths.isNotEmpty()) pushRandomHistory(current)
+        }
+        val paths = history.paths.filter { it in poolSet }.take(history.count)
+        val state = RemoteEbookRandomState(
+            deviceId = deviceId,
+            rootKey = rootKey,
+            paths = paths,
+            count = history.count.coerceIn(MIN_RANDOM_COUNT, MAX_RANDOM_COUNT),
+            updatedAt = System.currentTimeMillis(),
+        )
+        _ebookRandoms.value = _ebookRandoms.value + (key to state)
+        persistRandoms()
+        return state
+    }
+
+    private fun pushRandomHistory(state: RemoteEbookRandomState) {
+        val key = state.key
+        val entry = RemoteEbookRandomHistory(
+            deviceId = state.deviceId,
+            rootKey = state.rootKey,
+            paths = state.paths,
+            count = state.count,
+            createdAt = state.updatedAt,
+        )
+        val list = (listOf(entry) + _ebookRandomHistory.value[key].orEmpty())
+            .take(MAX_RANDOM_HISTORY)
+        _ebookRandomHistory.value = _ebookRandomHistory.value + (key to list)
+    }
+
     suspend fun openEbook(entry: RemoteEbookEntry): File? = withContext(Dispatchers.IO) {
         // 用户显式下载过：直接打开本地副本，设备离线也能读。
         val downloaded = downloads.localEbookPath(entry.deviceId, entry.remotePath)
@@ -840,6 +996,20 @@ class RemoteLibraryManager(
             val plays = gson.fromJson<List<RemoteAbookPlay>>(prefs.getString("abook_plays", "[]"), playType).orEmpty()
             _abookPlays.value = plays.associateBy { it.key }
         }
+        runCatching {
+            val stateType = object : TypeToken<List<RemoteEbookRandomState>>() {}.type
+            val states = gson.fromJson<List<RemoteEbookRandomState>>(
+                prefs.getString("ebook_random_states", "[]"), stateType,
+            ).orEmpty()
+            _ebookRandoms.value = states.associateBy { it.key }
+        }
+        runCatching {
+            val historyType = object : TypeToken<List<RemoteEbookRandomHistory>>() {}.type
+            val history = gson.fromJson<List<RemoteEbookRandomHistory>>(
+                prefs.getString("ebook_random_history", "[]"), historyType,
+            ).orEmpty()
+            _ebookRandomHistory.value = history.groupBy { it.deviceId + "|" + it.rootKey }
+        }
     }
 
     private fun persistRecents() {
@@ -847,6 +1017,18 @@ class RemoteLibraryManager(
             prefs.edit()
                 .putString("ebook_recents", gson.toJson(_ebookRecents.value))
                 .putString("abook_plays", gson.toJson(_abookPlays.value.values.toList()))
+                .apply()
+        }
+    }
+
+    private fun persistRandoms() {
+        runCatching {
+            prefs.edit()
+                .putString("ebook_random_states", gson.toJson(_ebookRandoms.value.values.toList()))
+                .putString(
+                    "ebook_random_history",
+                    gson.toJson(_ebookRandomHistory.value.values.flatten()),
+                )
                 .apply()
         }
     }
@@ -901,6 +1083,11 @@ class RemoteLibraryManager(
 
         /** 在线心跳只每小时落一次 meta，避免每 15 秒重写整张曲目表。 */
         const val LAST_SEEN_SAVE_INTERVAL_MS = 60L * 60 * 1000
+
+        const val DEFAULT_RANDOM_COUNT = 20
+        const val MIN_RANDOM_COUNT = 5
+        const val MAX_RANDOM_COUNT = 100
+        const val MAX_RANDOM_HISTORY = 12
     }
 
     private data class CachedPayload(

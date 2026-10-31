@@ -175,12 +175,12 @@ export default function App() {
     }
   };
 
-  const submitRoot = async (kind: RootKind, mode: MusicMode | null, name: string) => {
+  const submitRoot = async (kind: RootKind, mode: MusicMode | null, name: string, randomPick: boolean) => {
     if (!pendingPath) return;
     setAddBusy(true);
     setAddError(null);
     try {
-      const root = await api.addRoot(pendingPath, kind, mode, name);
+      const root = await api.addRoot(pendingPath, kind, mode, name, randomPick);
       setPendingPath(null);
       await refresh();
       showToast(`已添加「${root.displayName}」，开始扫描…`);
@@ -189,6 +189,16 @@ export default function App() {
       setAddError(String(err));
     } finally {
       setAddBusy(false);
+    }
+  };
+
+  const toggleRandomPick = async (root: RootInfo) => {
+    try {
+      await api.updateRoot(root.id, null, null, !root.randomPick);
+      await refresh();
+      showToast(`「${root.displayName}」${root.randomPick ? "已关闭" : "已开启"}随机选书`);
+    } catch (err) {
+      setError(String(err));
     }
   };
 
@@ -236,6 +246,7 @@ export default function App() {
         onAdd={pickFolder}
         onScan={(ids) => startScan(ids)}
         onRemove={removeRoot}
+        onToggleRandom={toggleRandomPick}
       />
 
       <main className="main">

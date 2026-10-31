@@ -10,6 +10,7 @@ export interface RootInfo {
   path: string;
   kind: RootKind;
   musicMode: MusicMode | null;
+  randomPick: boolean;
   displayName: string;
   createdAt: number;
   lastScanAt: number | null;
@@ -135,10 +136,19 @@ export interface ScanSummary {
 export const api = {
   getServerInfo: () => invoke<ServerInfo>("get_server_info"),
   listRoots: () => invoke<RootInfo[]>("list_roots"),
-  addRoot: (path: string, kind: RootKind, musicMode: MusicMode | null, displayName: string | null) =>
-    invoke<RootInfo>("add_root", { path, kind, musicMode, displayName }),
-  updateRoot: (id: number, displayName: string | null, musicMode: MusicMode | null) =>
-    invoke<RootInfo>("update_root", { id, displayName, musicMode }),
+  addRoot: (
+    path: string,
+    kind: RootKind,
+    musicMode: MusicMode | null,
+    displayName: string | null,
+    randomPick: boolean,
+  ) => invoke<RootInfo>("add_root", { path, kind, musicMode, displayName, randomPick }),
+  updateRoot: (
+    id: number,
+    displayName: string | null,
+    musicMode: MusicMode | null,
+    randomPick: boolean | null,
+  ) => invoke<RootInfo>("update_root", { id, displayName, musicMode, randomPick }),
   removeRoot: (id: number) => invoke<void>("remove_root", { id }),
   scanRoots: (ids: number[]) => invoke<ScanSummary[]>("scan_roots", { ids }),
   musicLibrary: () => invoke<MusicLibrary>("music_library"),

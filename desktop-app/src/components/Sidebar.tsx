@@ -14,6 +14,7 @@ interface SidebarProps {
   onAdd: () => void;
   onScan: (ids: number[]) => void;
   onRemove: (id: number) => void;
+  onToggleRandom: (root: RootInfo) => void;
 }
 
 const kindIcon = {
@@ -33,6 +34,7 @@ export function Sidebar({
   onAdd,
   onScan,
   onRemove,
+  onToggleRandom,
 }: SidebarProps) {
   const [confirming, setConfirming] = useState<number | null>(null);
 
@@ -88,6 +90,7 @@ export function Sidebar({
                 <span className="root-meta">
                   {kindLabel[root.kind]}
                   {root.kind === "music" && root.musicMode ? ` · ${modeLabel[root.musicMode]}` : ""}
+                  {root.kind === "book" && root.randomPick ? " · 随机选书" : ""}
                   {root.itemCount > 0 ? ` · ${root.itemCount}` : ""}
                 </span>
                 {percent !== null && (
@@ -97,6 +100,15 @@ export function Sidebar({
                 )}
               </span>
               <span className="root-actions" onClick={(event) => event.stopPropagation()}>
+                {root.kind === "book" && (
+                  <button
+                    className={`icon-btn small random-toggle ${root.randomPick ? "on" : ""}`}
+                    title={root.randomPick ? "关闭随机选书" : "开启随机选书"}
+                    onClick={() => onToggleRandom(root)}
+                  >
+                    随机
+                  </button>
+                )}
                 <button
                   className="icon-btn small"
                   title="重新扫描"

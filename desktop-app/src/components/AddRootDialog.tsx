@@ -7,7 +7,7 @@ interface AddRootDialogProps {
   busy: boolean;
   error: string | null;
   onCancel: () => void;
-  onSubmit: (kind: RootKind, musicMode: MusicMode | null, displayName: string) => void;
+  onSubmit: (kind: RootKind, musicMode: MusicMode | null, displayName: string, randomPick: boolean) => void;
 }
 
 const baseName = (path: string) => {
@@ -18,6 +18,7 @@ const baseName = (path: string) => {
 export function AddRootDialog({ path, busy, error, onCancel, onSubmit }: AddRootDialogProps) {
   const [kind, setKind] = useState<RootKind>("music");
   const [mode, setMode] = useState<MusicMode>("tag");
+  const [randomPick, setRandomPick] = useState(false);
   const [name, setName] = useState(() => baseName(path));
   const folderName = useMemo(() => baseName(path), [path]);
 
@@ -68,6 +69,23 @@ export function AddRootDialog({ path, busy, error, onCancel, onSubmit }: AddRoot
           </div>
         )}
 
+        {kind === "book" && (
+          <div className="field">
+            <label>客户端浏览方式</label>
+            <label className={`check-card ${randomPick ? "active" : ""}`}>
+              <input
+                type="checkbox"
+                checked={randomPick}
+                onChange={(event) => setRandomPick(event.target.checked)}
+              />
+              <span>
+                <strong>随机选书</strong>
+                <em>把此目录标记为随机书库，客户端进入后默认随机展示 20 本，可重新随机并查看历史。</em>
+              </span>
+            </label>
+          </div>
+        )}
+
         <div className="field">
           <label>显示名称</label>
           <input
@@ -93,7 +111,14 @@ export function AddRootDialog({ path, busy, error, onCancel, onSubmit }: AddRoot
           <button
             className="btn primary"
             disabled={busy || !name.trim()}
-            onClick={() => onSubmit(kind, kind === "music" ? mode : null, name.trim() || folderName)}
+            onClick={() =>
+              onSubmit(
+                kind,
+                kind === "music" ? mode : null,
+                name.trim() || folderName,
+                kind === "book" && randomPick,
+              )
+            }
           >
             {busy ? "正在添加…" : "添加并扫描"}
           </button>

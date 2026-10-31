@@ -33,7 +33,7 @@ internal data class RemoteLibrarySnapshot(
  */
 internal object RemoteLibraryDb {
 
-    private const val SCHEMA_VERSION = 1
+    private const val SCHEMA_VERSION = 2
     private const val DB_EXT = ".db"
 
     fun file(dir: File, deviceId: String): File = File(dir, safeId(deviceId) + DB_EXT)
@@ -80,7 +80,7 @@ internal object RemoteLibraryDb {
 
             val roots = ArrayList<RemoteEbookRootWire>()
             it.rawQuery(
-                "SELECT key, rootPath, displayName, shelf, bookCount FROM ebook_roots ORDER BY ord",
+                "SELECT key, rootPath, displayName, shelf, bookCount, randomPick FROM ebook_roots ORDER BY ord",
                 null,
             ).use { c ->
                 while (c.moveToNext()) {
@@ -90,6 +90,7 @@ internal object RemoteLibraryDb {
                         displayName = c.getString(2),
                         shelf = c.getInt(3) != 0,
                         bookCount = c.getInt(4),
+                        randomPick = c.getInt(5) != 0,
                     )
                 }
             }
@@ -225,6 +226,7 @@ internal object RemoteLibraryDb {
                     root.put("displayName", r.displayName)
                     root.put("shelf", if (r.shelf) 1 else 0)
                     root.put("bookCount", r.bookCount)
+                    root.put("randomPick", if (r.randomPick) 1 else 0)
                     it.insert("ebook_roots", null, root)
                 }
 
@@ -335,7 +337,8 @@ internal object RemoteLibraryDb {
                 db.execSQL(
                     "CREATE TABLE ebook_roots (" +
                         "ord INTEGER PRIMARY KEY NOT NULL, key TEXT NOT NULL, rootPath TEXT NOT NULL, " +
-                        "displayName TEXT NOT NULL, shelf INTEGER NOT NULL, bookCount INTEGER NOT NULL)",
+                        "displayName TEXT NOT NULL, shelf INTEGER NOT NULL, bookCount INTEGER NOT NULL, " +
+                        "randomPick INTEGER NOT NULL)",
                 )
                 db.execSQL(
                     "CREATE TABLE ebooks (" +
