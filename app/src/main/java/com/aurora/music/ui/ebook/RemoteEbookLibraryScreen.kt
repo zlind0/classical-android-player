@@ -17,11 +17,14 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -34,10 +37,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.cast.RemoteDeviceLibrary
 import com.aurora.music.data.cast.RemoteDownloadKind
+import com.aurora.music.data.cast.RemoteDownloadStatus
+import com.aurora.music.data.cast.RemoteDownloadUi
 import com.aurora.music.data.cast.RemoteEbookEntry
 import com.aurora.music.data.cast.RemoteEbookRootWire
 import com.aurora.music.data.cast.RemoteEbookWire
 import com.aurora.music.ui.components.Ios5RemoteStatusIcon
+import com.aurora.music.ui.components.Ios5SwipeRow
+import com.aurora.music.ui.components.LocalRemoteAvailable
 import com.aurora.music.ui.components.RemoteDownloadSwipeRow
 import com.aurora.music.ui.ios5.Ios5Cell
 import com.aurora.music.ui.ios5.Ios5Colors
@@ -55,6 +62,20 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.random.Random
+import kotlinx.coroutines.launch
+
+/** 当前这次随机批次的临时保存记录：remotePath -> 默认书架本地路径（进程内，不落盘）。 */
+private val randomSessionSaved = mutableStateMapOf<String, String>()
+private val randomSessionSaving = mutableStateMapOf<String, Boolean>()
+
+private fun randomSessionKey(deviceId: String, rootKey: String, batch: Long, path: String) =
+    "$deviceId|$rootKey|$batch|$path"
+
+private fun clearRandomSession(deviceId: String, rootKey: String) {
+    val prefix = "$deviceId|$rootKey|"
+    randomSessionSaved.keys.filter { it.startsWith(prefix) }.forEach { randomSessionSaved.remove(it) }
+    randomSessionSaving.keys.filter { it.startsWith(prefix) }.forEach { randomSessionSaving.remove(it) }
+}
 
 /**
  * 远程电子书库：完全照搬本地“书库 → 目录 → 电子书”的浏览方式。
@@ -79,10 +100,43 @@ fun RemoteEbookLibraryScreen(
     onOpenBook: (RemoteEbookEntry) -> Unit,
     /** 随机书库内阅读：只记随机书库自己的最近阅读。 */
     onOpenRandomBook: (RemoteEbookEntry, rootKey: String) -> Unit = { entry, _ -> onOpenBook(entry) },
-    /** 把随机书库里的书保存到默认书架。 */
-    onSaveToShelf: (RemoteEbookEntry) -> Unit = {},
+    /** 随机书库保存/删除本地副本后的提示。 */
+    onMessage: (String) -> Unit = {},
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
+    val scope = rememberCoroutineScope()
+    fun saveRandomCopy(book: RemoteEbookEntry, batch: Long) {
+        val key = randomSessionKey(deviceId, rootKey, batch, book.remotePath)
+        if (key in randomSessionSaved || randomSessionSaving[key] == true) return
+        randomSessionSaving[key] = true
+        scope.launch {
+            val temp = container.remoteLibrary.fetchEbookFile(book)
+            if (temp == null) {
+                randomSessionSaving.remove(key)
+                onMessage("无法从 ${book.deviceName} 下载这本书")
+                return@launch
+            }
+            val name = book.remotePath.substringAfterLast('/')
+            val saved = container.ebookStore.importShelfFile(temp, name)
+            runCatching { temp.delete() }
+            randomSessionSaving.remove(key)
+            if (saved == null) {
+                onMessage("保存到默认书架失败")
+            } else {
+                randomSessionSaved[key] = saved.path
+                onMessage("已保存到默认书架：${saved.displayTitle}")
+            }
+        }
+    }
+    fun deleteRandomCopy(book: RemoteEbookEntry, batch: Long) {
+        val key = randomSessionKey(deviceId, rootKey, batch, book.remotePath)
+        val localPath = randomSessionSaved[key] ?: return
+        scope.launch {
+            container.ebookStore.deleteShelf(listOf(localPath))
+            randomSessionSaved.remove(key)
+            onMessage("已删除默认书架里的本地副本")
+        }
+    }
     val libraries by container.remoteLibrary.libraries.collectAsStateWithLifecycle()
     val cachedLibraries by container.remoteLibrary.cachedLibraries.collectAsStateWithLifecycle()
     val recents by container.remoteLibrary.ebookRecents.collectAsStateWithLifecycle()
@@ -110,10 +164,13 @@ fun RemoteEbookLibraryScreen(
                 if (historyBatch != null) openedHistoryAt = 0L else onBack()
             },
         )
-        if (lib == null || root == null || (!lib.online && !allowOffline && !lib.hasDownloads)) {
+        if (lib == null || root == null ||
+            (!root.fastScan && !lib.online && !allowOffline && !lib.hasDownloads)
+        ) {
             Ios5Empty("这台设备的资料库暂时不可用")
             return@Column
         }
+        val online = lib.online
         val currentDir = when {
             root.shelf -> ""
             root.key == "all" -> ""
@@ -177,11 +234,11 @@ fun RemoteEbookLibraryScreen(
         }
 
         if (historyBatch != null && randomMode) {
-            val historyBooks = remember(historyBatch, poolByPath) {
-                historyBatch.paths.mapNotNull { poolByPath[it] }
+            val historyBooks = remember(historyBatch, poolByPath, online) {
+                if (online) historyBatch.paths.mapNotNull { poolByPath[it] } else emptyList()
             }
-            LaunchedEffect(deviceId, historyBatch.createdAt, historyBooks.map { it.remotePath }) {
-                if (root.fastScan) {
+            LaunchedEffect(deviceId, historyBatch.createdAt, online, historyBooks.map { it.remotePath }) {
+                if (online && root.fastScan) {
                     container.remoteLibrary.requestEbookDetails(
                         deviceId,
                         historyBooks.map { it.remotePath },
@@ -198,12 +255,18 @@ fun RemoteEbookLibraryScreen(
             ) {
                 item {
                     Ios5SectionTitle(
-                        "${randomTimeLabel(historyBatch.createdAt)} · ${historyBooks.size} 本",
+                        "${randomTimeLabel(historyBatch.createdAt)} · ${if (online) historyBooks.size else historyBatch.paths.size} 本",
                     )
                 }
                 if (historyBooks.isEmpty()) {
-                    item { Ios5Empty("这一批书已经不在书库里了") }
+                    item {
+                        Ios5Empty(
+                            if (!online) "设备离线，无法查看这一批书"
+                            else "这一批书已经不在书库里了",
+                        )
+                    }
                 } else {
+                    val batchKey = historyBatch.createdAt
                     ios5Rows(historyBooks, key = { it.key }) { _, b ->
                         BookRow(
                             book = b,
@@ -211,8 +274,10 @@ fun RemoteEbookLibraryScreen(
                             root = root,
                             wire = wireByPath[b.remotePath] ?: poolWireByPath[b.remotePath],
                             randomMode = true,
+                            savedKey = randomSessionKey(deviceId, rootKey, batchKey, b.remotePath),
                             onOpen = { onOpenRandomBook(b, rootKey) },
-                            onSaveToShelf = { onSaveToShelf(b) },
+                            onSave = { saveRandomCopy(b, batchKey) },
+                            onDelete = { deleteRandomCopy(b, batchKey) },
                         )
                     }
                 }
@@ -220,7 +285,7 @@ fun RemoteEbookLibraryScreen(
             return@Column
         }
 
-        if (randomMode) {
+        if (randomMode && online) {
             Ios5SearchBar(
                 value = query,
                 onValueChange = { query = it },
@@ -238,6 +303,7 @@ fun RemoteEbookLibraryScreen(
                     container.remoteLibrary.setEbookRandomCount(deviceId, rootKey, it, poolPaths)
                 },
                 onReroll = {
+                    clearRandomSession(deviceId, rootKey)
                     container.remoteLibrary.rerollEbookRandom(deviceId, rootKey, poolPaths)
                 },
                 onSearchReroll = { searchSeed += 1 },
@@ -245,24 +311,26 @@ fun RemoteEbookLibraryScreen(
             )
         }
 
-        val showRandom = randomMode && query.isBlank()
+        val showRandom = randomMode && (query.isBlank() || !online)
         val displayBooks = when {
             !randomMode -> books
+            !online -> emptyList()
             query.isNotBlank() -> searchBooks
             else -> randomBooks
         }
         val randomRecentBooks = remember(
-            randomRecents, deviceId, rootKey, recentLimit, poolByPath, showRandom,
+            randomRecents, deviceId, rootKey, recentLimit, poolByPath, showRandom, online,
         ) {
-            if (!showRandom) emptyList()
+            if (!showRandom || !online) emptyList()
             else randomRecents["$deviceId|$rootKey"].orEmpty()
                 .sortedByDescending { it.lastReadAt }
                 .take(recentLimit)
                 .mapNotNull { poolByPath[it.path] }
         }
+        val batchKey = randomState?.updatedAt ?: 0L
 
         // 快速扫描书库：只为当前随机展示的这批书按需解析，不碰“全部展开”的海量结果。
-        val warmDetails = randomMode && root.fastScan &&
+        val warmDetails = randomMode && online && root.fastScan &&
             !(query.isNotBlank() && searchExpanded && searchResults.size > count * 2)
         LaunchedEffect(deviceId, warmDetails, displayBooks.map { it.remotePath }) {
             if (warmDetails) {
@@ -275,7 +343,7 @@ fun RemoteEbookLibraryScreen(
 
         if (!randomMode && dirs.isEmpty() && books.isEmpty()) {
             Ios5Empty("这个文件夹是空的")
-        } else if (randomMode && poolBooks.isEmpty()) {
+        } else if (randomMode && online && poolBooks.isEmpty()) {
             Ios5Empty("这个书库是空的")
         } else {
             LazyColumn(
@@ -283,6 +351,9 @@ fun RemoteEbookLibraryScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 16.dp),
             ) {
+                if (randomMode && !online) {
+                    item { Ios5Empty("设备离线：随机书库需要在线连接") }
+                }
                 if (!randomMode && dirs.isNotEmpty()) {
                     item { Ios5SectionTitle("文件夹（${dirs.size}）") }
                     ios5Rows(dirs, key = { it.second }) { _, d ->
@@ -343,17 +414,19 @@ fun RemoteEbookLibraryScreen(
                             root = root,
                             wire = wireByPath[b.remotePath] ?: poolWireByPath[b.remotePath],
                             randomMode = randomMode,
+                            savedKey = randomSessionKey(deviceId, rootKey, batchKey, b.remotePath),
                             onOpen = {
                                 if (randomMode) onOpenRandomBook(b, rootKey)
                                 else onOpenBook(b)
                             },
-                            onSaveToShelf = { onSaveToShelf(b) },
+                            onSave = { saveRandomCopy(b, batchKey) },
+                            onDelete = { deleteRandomCopy(b, batchKey) },
                         )
                     }
                 } else if (!randomMode && dirs.isNotEmpty()) {
                     item { Ios5SectionTitle("电子书") }
                     item { Ios5Empty("这个目录下没有电子书") }
-                } else if (randomMode && query.isNotBlank()) {
+                } else if (randomMode && online && query.isNotBlank()) {
                     item { Ios5Empty("没有找到匹配的书") }
                 }
 
@@ -366,8 +439,10 @@ fun RemoteEbookLibraryScreen(
                             root = root,
                             wire = wireByPath[b.remotePath] ?: poolWireByPath[b.remotePath],
                             randomMode = true,
+                            savedKey = randomSessionKey(deviceId, rootKey, batchKey, b.remotePath),
                             onOpen = { onOpenRandomBook(b, rootKey) },
-                            onSaveToShelf = { onSaveToShelf(b) },
+                            onSave = { saveRandomCopy(b, batchKey) },
+                            onDelete = { deleteRandomCopy(b, batchKey) },
                         )
                     }
                 }
@@ -465,25 +540,44 @@ private fun BookRow(
     root: RemoteEbookRootWire,
     wire: RemoteEbookWire?,
     randomMode: Boolean,
+    savedKey: String,
     onOpen: () -> Unit,
-    onSaveToShelf: () -> Unit,
+    onSave: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     val downloads = (LocalContext.current.applicationContext as AuroraApplication)
         .container.remoteDownloads
     if (randomMode) {
-        EbookRow(
-            title = book.displayTitle,
-            subtitle = authorAndProgress(book.author, 0f),
-            coverPath = book.coverUrl,
-            accentKey = book.key,
-            remote = true,
-            onClick = onOpen,
-            trailing = {
-                if (lib.online) {
-                    Ios5SmallButton(text = "存书架", onClick = onSaveToShelf)
-                }
+        val savedPath = randomSessionSaved[savedKey]
+        val saving = randomSessionSaving[savedKey] == true
+        val state = RemoteDownloadUi(
+            status = when {
+                saving -> RemoteDownloadStatus.DOWNLOADING
+                savedPath != null -> RemoteDownloadStatus.DOWNLOADED
+                else -> RemoteDownloadStatus.IDLE
             },
+            progress = if (savedPath != null) 1f else 0f,
         )
+        CompositionLocalProvider(
+            LocalRemoteAvailable provides (lib.online || savedPath != null),
+        ) {
+            Ios5SwipeRow(
+                state = state,
+                onDownload = onSave,
+                onDelete = onDelete,
+                allowDownload = lib.online,
+                downloadLabel = "存书架",
+            ) {
+                EbookRow(
+                    title = book.displayTitle,
+                    subtitle = authorAndProgress(book.author, 0f),
+                    coverPath = book.coverUrl,
+                    accentKey = book.key,
+                    remote = true,
+                    onClick = onOpen,
+                )
+            }
+        }
         return
     }
     RemoteDownloadSwipeRow(

@@ -132,6 +132,7 @@ fun Ios5SwipeRow(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
     allowDownload: Boolean = true,
+    downloadLabel: String = "下载",
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
@@ -173,7 +174,7 @@ fun Ios5SwipeRow(
                         )
 
                         else -> Text(
-                            "下载",
+                            downloadLabel,
                             color = Color.White,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
