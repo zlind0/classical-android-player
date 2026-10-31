@@ -95,6 +95,12 @@ class RemoteLibraryManager(
     /** 远程专辑的曲名合成结果（只对发送端开启合并的专辑计算）。 */
     private val mergeRowsCache = ConcurrentHashMap<String, List<MergedRow>>()
 
+    /** 快速扫描书库已经按需解析过的书；避免同一次运行反复请求。 */
+    private val ebookDetailRequested = ConcurrentHashMap.newKeySet<String>()
+
+    /** 老服务端没有找书接口，整台设备只探测一次。 */
+    private val ebookDetailUnsupported = ConcurrentHashMap.newKeySet<String>()
+
     private val storeDir: File
         get() = File(appContext.filesDir, "remote_library").apply { if (!isDirectory) runCatching { mkdirs() } }
 
@@ -519,6 +525,90 @@ class RemoteLibraryManager(
                 ),
             )
         }
+
+    // ---- 快速扫描书库的按需解析 ----
+
+    /**
+     * 只对“真正被随机选到并展示”的书请求服务端解析元信息。
+     * 服务端会缓存解析结果，客户端拿到一条就立刻刷新一条。
+     */
+    fun requestEbookDetails(deviceId: String, paths: List<String>) {
+        if (paths.isEmpty() || deviceId in ebookDetailUnsupported) return
+        val snapshot = payloads[deviceId] ?: return
+        if (!snapshot.online) return
+        val pending = paths.distinct().filter { path ->
+            snapshot.payload.ebooks.any { it.path == path && !it.metaScanned }
+        }
+        if (pending.isEmpty()) return
+        val baseUrl = "http://${snapshot.host}:${snapshot.port}"
+        scope.launch {
+            var changed = false
+            for (path in pending) {
+                val key = "$deviceId|$path"
+                if (!ebookDetailRequested.add(key)) continue
+                val (detail, unsupported) = fetchEbookDetail(baseUrl, path)
+                if (unsupported) {
+                    ebookDetailUnsupported += deviceId
+                    break
+                }
+                if (detail == null) {
+                    // 临时网络失败：移出集合，下次进入页面还能重试。
+                    ebookDetailRequested.remove(key)
+                    continue
+                }
+                if (applyEbookDetail(deviceId, detail)) changed = true
+            }
+            if (changed) payloads[deviceId]?.let { persistPayload(it) }
+        }
+    }
+
+    private suspend fun fetchEbookDetail(
+        baseUrl: String,
+        path: String,
+    ): Pair<RemoteEbookDetail?, Boolean> = withContext(Dispatchers.IO) {
+        runCatching {
+            val req = Request.Builder()
+                .url("$baseUrl/library/ebook/scan?path=${enc(path)}")
+                .header("X-Aurora-Device", "1")
+                .get()
+                .build()
+            client.newCall(req).execute().use { r ->
+                if (r.code == 404) return@use null to true
+                if (!r.isSuccessful) return@use null to false
+                val body = r.body?.string() ?: return@use null to false
+                val detail = runCatching {
+                    gson.fromJson(body, RemoteEbookDetail::class.java)
+                }.getOrNull()
+                detail to false
+            }
+        }.getOrDefault(null to false)
+    }
+
+    private fun applyEbookDetail(deviceId: String, detail: RemoteEbookDetail): Boolean {
+        val cached = payloads[deviceId] ?: return false
+        var changed = false
+        val ebooks = cached.payload.ebooks.map { b ->
+            if (b.path != detail.path) return@map b
+            val title = detail.title.ifBlank { b.title }
+            val author = detail.author.ifBlank { b.author }
+            val hasCover = b.hasCover || detail.hasCover
+            if (title == b.title && author == b.author && hasCover == b.hasCover && b.metaScanned) {
+                b
+            } else {
+                changed = true
+                b.copy(
+                    title = title,
+                    author = author,
+                    hasCover = hasCover,
+                    metaScanned = true,
+                )
+            }
+        }
+        if (!changed) return false
+        payloads[deviceId] = cached.copy(payload = cached.payload.copy(ebooks = ebooks))
+        rebuildLibraries()
+        return true
+    }
 
     // ---- 随机选书 ----
 

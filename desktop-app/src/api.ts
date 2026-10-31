@@ -10,7 +10,7 @@ export interface RootInfo {
   path: string;
   kind: RootKind;
   musicMode: MusicMode | null;
-  randomPick: boolean;
+  fastScan: boolean;
   displayName: string;
   createdAt: number;
   lastScanAt: number | null;
@@ -141,14 +141,14 @@ export const api = {
     kind: RootKind,
     musicMode: MusicMode | null,
     displayName: string | null,
-    randomPick: boolean,
-  ) => invoke<RootInfo>("add_root", { path, kind, musicMode, displayName, randomPick }),
+    fastScan: boolean,
+  ) => invoke<RootInfo>("add_root", { path, kind, musicMode, displayName, fastScan }),
   updateRoot: (
     id: number,
     displayName: string | null,
     musicMode: MusicMode | null,
-    randomPick: boolean | null,
-  ) => invoke<RootInfo>("update_root", { id, displayName, musicMode, randomPick }),
+    fastScan: boolean | null,
+  ) => invoke<RootInfo>("update_root", { id, displayName, musicMode, fastScan }),
   removeRoot: (id: number) => invoke<void>("remove_root", { id }),
   scanRoots: (ids: number[]) => invoke<ScanSummary[]>("scan_roots", { ids }),
   musicLibrary: () => invoke<MusicLibrary>("music_library"),

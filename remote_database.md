@@ -308,6 +308,7 @@ musicPathOrder == false（MEDIA 栈）:
 | `displayName` | string | 显示名 |
 | `shelf` | boolean | 是否默认书架 |
 | `bookCount` | int | 该根下书数量 |
+| `fastScan` | boolean | 快速扫描书库：首轮只用文件名建索引，书籍元信息按需解析；启用后不可撤销 |
 
 `ebooks[].rootKey` 必须与该数组中的 `key` 对应。
 
@@ -322,9 +323,37 @@ musicPathOrder == false（MEDIA 栈）:
 | `author` | string | 作者 |
 | `size` | long | 字节数 |
 | `hasCover` | boolean | 是否有封面 |
+| `metaScanned` | boolean | 是否已解析过书名/作者/封面；`false` 表示仍是快速扫描占位，可调用 `/library/ebook/scan` |
 | `rootKey` | string | 所属根；对应 `ebookRoots[].key` |
 
 目录层级由 `path` 在 `rootPath` 下的相对路径推导。客户端不应自行扫描服务端文件系统。
+
+#### 4.2.3.1 `GET /library/ebook/scan`
+
+快速扫描书库的按需解析接口。客户端在随机选到某本书、真正准备展示时才调用；服务端解析后会写回数据库，后续直接返回缓存，并把新的 `libraryUpdatedAt` 暴露给客户端。
+
+请求：
+
+```http
+GET /library/ebook/scan?path=<urlencoded-path>
+```
+
+响应：
+
+```json
+{
+  "path": "/books/example.epub",
+  "title": "Example",
+  "author": "Someone",
+  "hasCover": true
+}
+```
+
+约束：
+
+- 只接受已在资料库中登记过的电子书路径。
+- 老服务端没有该接口时返回 404，客户端应继续使用 `ebooks[]` 中的文件名占位信息。
+- 服务端可能在每次解析后改变 `libraryUpdatedAt`，客户端应允许渐进刷新。
 
 #### 4.2.4 `audiobooks[]`
 
@@ -612,11 +641,12 @@ audiobook:remote:<deviceId>:<base64url(book.id)>#<chapterIndex>
 2. UDP 47823 处理 `probe` / 发送 `offer`（可选但推荐）；
 3. `GET /library/version`（推荐）；
 4. `GET /library/all`；
-5. `GET /media/music`；
-6. `GET /media/audiobook`；
-7. `GET /media/ebook`；
-8. `GET /media/songart`；
-9. `GET /media/cover`。
+5. `GET /library/ebook/scan`（快速扫描书库可选，用于按需解析）；
+6. `GET /media/music`；
+7. `GET /media/audiobook`；
+8. `GET /media/ebook`；
+9. `GET /media/songart`；
+10. `GET /media/cover`。
 
 没有 mDNS/UDP 时，也可以让用户手动输入 `host:port`，只要后续 HTTP 协议一致即可。
 

@@ -14,7 +14,7 @@ interface SidebarProps {
   onAdd: () => void;
   onScan: (ids: number[]) => void;
   onRemove: (id: number) => void;
-  onToggleRandom: (root: RootInfo) => void;
+  onToggleFastScan: (root: RootInfo) => void;
 }
 
 const kindIcon = {
@@ -34,7 +34,7 @@ export function Sidebar({
   onAdd,
   onScan,
   onRemove,
-  onToggleRandom,
+  onToggleFastScan,
 }: SidebarProps) {
   const [confirming, setConfirming] = useState<number | null>(null);
 
@@ -90,7 +90,7 @@ export function Sidebar({
                 <span className="root-meta">
                   {kindLabel[root.kind]}
                   {root.kind === "music" && root.musicMode ? ` · ${modeLabel[root.musicMode]}` : ""}
-                  {root.kind === "book" && root.randomPick ? " · 随机选书" : ""}
+                  {root.kind === "book" && root.fastScan ? " · 快速扫描" : ""}
                   {root.itemCount > 0 ? ` · ${root.itemCount}` : ""}
                 </span>
                 {percent !== null && (
@@ -102,11 +102,12 @@ export function Sidebar({
               <span className="root-actions" onClick={(event) => event.stopPropagation()}>
                 {root.kind === "book" && (
                   <button
-                    className={`icon-btn small random-toggle ${root.randomPick ? "on" : ""}`}
-                    title={root.randomPick ? "关闭随机选书" : "开启随机选书"}
-                    onClick={() => onToggleRandom(root)}
+                    className={`icon-btn small random-toggle ${root.fastScan ? "on" : ""}`}
+                    title={root.fastScan ? "快速扫描已启用，不可撤销" : "启用快速扫描（随机取书，不可撤销）"}
+                    disabled={root.fastScan}
+                    onClick={() => onToggleFastScan(root)}
                   >
-                    随机
+                    快速
                   </button>
                 )}
                 <button

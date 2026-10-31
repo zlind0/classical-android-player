@@ -77,6 +77,7 @@ class LocalLibraryHttpProvider(
                 author = it.author,
                 size = it.size,
                 hasCover = it.coverPath.isNotBlank(),
+                metaScanned = true,
                 rootKey = rootKeyOf(it),
             )
         }
@@ -152,7 +153,10 @@ class LocalLibraryHttpProvider(
             )
         }
         val ebookList = ebooks.distinctBy { it.path }.filter { it.path.isNotBlank() }.map {
-            RemoteEbookWire(path = it.path, title = it.displayTitle, author = it.author, size = it.size)
+            RemoteEbookWire(
+                path = it.path, title = it.displayTitle, author = it.author, size = it.size,
+                metaScanned = true,
+            )
         }
         val shelfCount = ebooks.count { it.inShelf || it.rootId == null }
         val rootList = buildList {

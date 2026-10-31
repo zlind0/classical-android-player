@@ -24,8 +24,9 @@ pub struct RootInfo {
     pub kind: String,
     /// `tag` or `folder`; only meaningful for `kind == "music"`.
     pub music_mode: Option<String>,
-    /// Client-side hint: open this book library in “random picks” mode.
-    pub random_pick: bool,
+    /// One-way fast-scan mode: books are indexed by file name only, and
+    /// metadata is parsed lazily when a client randomly picks them.
+    pub fast_scan: bool,
     pub display_name: String,
     pub created_at: i64,
     pub last_scan_at: Option<i64>,
@@ -163,6 +164,7 @@ pub struct BookDto {
     pub size: i64,
     pub format: String,
     pub has_cover: bool,
+    pub meta_scanned: bool,
     pub cover_url: Option<String>,
     pub download_url: String,
 }
@@ -205,8 +207,8 @@ pub struct WireEbookRoot {
     pub display_name: String,
     pub shelf: bool,
     pub book_count: i64,
-    /// Advertised to clients: browse this root with random picks enabled.
-    pub random_pick: bool,
+    /// One-way fast-scan mode hint for clients (random picks drive lazy parsing).
+    pub fast_scan: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -217,6 +219,7 @@ pub struct WireEbook {
     pub author: String,
     pub size: i64,
     pub has_cover: bool,
+    pub meta_scanned: bool,
     pub root_key: String,
 }
 

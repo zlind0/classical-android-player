@@ -641,6 +641,7 @@ struct PreparedBookFile {
     size: i64,
     mtime: i64,
     format: String,
+    meta_scanned: bool,
     cover: Option<ArtBlob>,
 }
 
@@ -675,7 +676,8 @@ fn collect_books<F: Fn(ScanProgress)>(
                 continue;
             }
         }
-        let meta = if file.ext == "epub" {
+        let fast_lazy = root.fast_scan && file.ext == "epub";
+        let meta = if !root.fast_scan && file.ext == "epub" {
             meta::read_epub(Path::new(&file.path))
         } else {
             meta::BookMeta::default()
@@ -693,6 +695,7 @@ fn collect_books<F: Fn(ScanProgress)>(
             size: file.size,
             mtime: file.mtime,
             format: file.ext.clone(),
+            meta_scanned: !fast_lazy,
             cover: meta.cover.map(|(mime, data)| ArtBlob { mime, data }),
         }));
     }
@@ -715,8 +718,8 @@ fn write_books(
     summary: &mut ScanSummary,
 ) -> Result<i64> {
     let mut stmt = tx.prepare_cached(
-        "INSERT INTO books(path, root_id, rel_path, file_name, title, author, size, mtime, format, has_cover, scan_token)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+        "INSERT INTO books(path, root_id, rel_path, file_name, title, author, size, mtime, format, has_cover, meta_scanned, scan_token)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT(path) DO UPDATE SET
             root_id = excluded.root_id,
             rel_path = excluded.rel_path,
@@ -727,6 +730,7 @@ fn write_books(
             mtime = excluded.mtime,
             format = excluded.format,
             has_cover = excluded.has_cover,
+            meta_scanned = excluded.meta_scanned,
             scan_token = excluded.scan_token",
     )?;
 
@@ -763,6 +767,7 @@ fn write_books(
                     book.mtime,
                     book.format,
                     has_cover as i64,
+                    if book.meta_scanned { 1 } else { 0 },
                     token,
                 ])?;
                 if existing.contains_key(&book.path) {

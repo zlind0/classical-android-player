@@ -38,7 +38,7 @@ pub async fn add_root(
     kind: String,
     music_mode: Option<String>,
     display_name: Option<String>,
-    random_pick: Option<bool>,
+    fast_scan: Option<bool>,
 ) -> CmdResult<RootInfo> {
     let db = state.db.clone();
     blocking(move || {
@@ -49,7 +49,7 @@ pub async fn add_root(
             &kind,
             music_mode.as_deref(),
             display_name.as_deref(),
-            random_pick.unwrap_or(false),
+            fast_scan.unwrap_or(false),
         )
     })
     .await
@@ -61,7 +61,7 @@ pub async fn update_root(
     id: i64,
     display_name: Option<String>,
     music_mode: Option<String>,
-    random_pick: Option<bool>,
+    fast_scan: Option<bool>,
 ) -> CmdResult<RootInfo> {
     let db = state.db.clone();
     blocking(move || {
@@ -71,7 +71,7 @@ pub async fn update_root(
             id,
             display_name.as_deref(),
             music_mode.as_deref(),
-            random_pick,
+            fast_scan,
         )
     })
     .await

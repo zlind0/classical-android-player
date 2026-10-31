@@ -166,7 +166,7 @@ fun EbooksTab(
                             title = r.displayName.ifBlank { "电子书" },
                             subtitle = when {
                                 r.shelf -> "外部打开的电子书都存在这里"
-                                r.randomPick -> "随机选书 · ${r.rootPath}"
+                                r.fastScan -> "快速扫描 · 随机取书 · ${r.rootPath}"
                                 else -> r.rootPath
                             },
                             count = "${r.bookCount}",

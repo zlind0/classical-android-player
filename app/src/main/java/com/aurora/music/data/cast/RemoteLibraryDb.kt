@@ -33,7 +33,7 @@ internal data class RemoteLibrarySnapshot(
  */
 internal object RemoteLibraryDb {
 
-    private const val SCHEMA_VERSION = 2
+    private const val SCHEMA_VERSION = 4
     private const val DB_EXT = ".db"
 
     fun file(dir: File, deviceId: String): File = File(dir, safeId(deviceId) + DB_EXT)
@@ -80,7 +80,7 @@ internal object RemoteLibraryDb {
 
             val roots = ArrayList<RemoteEbookRootWire>()
             it.rawQuery(
-                "SELECT key, rootPath, displayName, shelf, bookCount, randomPick FROM ebook_roots ORDER BY ord",
+                "SELECT key, rootPath, displayName, shelf, bookCount, fastScan FROM ebook_roots ORDER BY ord",
                 null,
             ).use { c ->
                 while (c.moveToNext()) {
@@ -90,14 +90,14 @@ internal object RemoteLibraryDb {
                         displayName = c.getString(2),
                         shelf = c.getInt(3) != 0,
                         bookCount = c.getInt(4),
-                        randomPick = c.getInt(5) != 0,
+                        fastScan = c.getInt(5) != 0,
                     )
                 }
             }
 
             val ebooks = ArrayList<RemoteEbookWire>()
             it.rawQuery(
-                "SELECT path, title, author, size, hasCover, rootKey FROM ebooks ORDER BY ord",
+                "SELECT path, title, author, size, hasCover, metaScanned, rootKey FROM ebooks ORDER BY ord",
                 null,
             ).use { c ->
                 while (c.moveToNext()) {
@@ -107,7 +107,8 @@ internal object RemoteLibraryDb {
                         author = c.getString(2),
                         size = c.getLong(3),
                         hasCover = c.getInt(4) != 0,
-                        rootKey = c.getString(5),
+                        metaScanned = c.getInt(5) != 0,
+                        rootKey = c.getString(6),
                     )
                 }
             }
@@ -226,7 +227,7 @@ internal object RemoteLibraryDb {
                     root.put("displayName", r.displayName)
                     root.put("shelf", if (r.shelf) 1 else 0)
                     root.put("bookCount", r.bookCount)
-                    root.put("randomPick", if (r.randomPick) 1 else 0)
+                    root.put("fastScan", if (r.fastScan) 1 else 0)
                     it.insert("ebook_roots", null, root)
                 }
 
@@ -239,6 +240,7 @@ internal object RemoteLibraryDb {
                     ebook.put("author", b.author)
                     ebook.put("size", b.size)
                     ebook.put("hasCover", if (b.hasCover) 1 else 0)
+                    ebook.put("metaScanned", if (b.metaScanned) 1 else 0)
                     ebook.put("rootKey", b.rootKey)
                     it.insert("ebooks", null, ebook)
                 }
@@ -338,13 +340,13 @@ internal object RemoteLibraryDb {
                     "CREATE TABLE ebook_roots (" +
                         "ord INTEGER PRIMARY KEY NOT NULL, key TEXT NOT NULL, rootPath TEXT NOT NULL, " +
                         "displayName TEXT NOT NULL, shelf INTEGER NOT NULL, bookCount INTEGER NOT NULL, " +
-                        "randomPick INTEGER NOT NULL)",
+                        "fastScan INTEGER NOT NULL)",
                 )
                 db.execSQL(
                     "CREATE TABLE ebooks (" +
                         "ord INTEGER PRIMARY KEY NOT NULL, path TEXT NOT NULL, title TEXT NOT NULL, " +
                         "author TEXT NOT NULL, size INTEGER NOT NULL, hasCover INTEGER NOT NULL, " +
-                        "rootKey TEXT NOT NULL)",
+                        "metaScanned INTEGER NOT NULL, rootKey TEXT NOT NULL)",
                 )
                 db.execSQL(
                     "CREATE TABLE audiobooks (" +

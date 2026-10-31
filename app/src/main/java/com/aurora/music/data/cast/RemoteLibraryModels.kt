@@ -34,8 +34,16 @@ data class RemoteEbookRootWire(
     val displayName: String = "",
     val shelf: Boolean = false,
     val bookCount: Int = 0,
-    /** 发送端在该书库勾选了“随机选书”，客户端进入后默认随机展示。 */
-    val randomPick: Boolean = false,
+    /** 发送端在该书库启用了快速扫描（随机取书），客户端进入后默认随机展示。 */
+    val fastScan: Boolean = false,
+)
+
+/** `GET /library/ebook/scan` 的按需解析结果；只有快速扫描书库会调用。 */
+data class RemoteEbookDetail(
+    val path: String = "",
+    val title: String = "",
+    val author: String = "",
+    val hasCover: Boolean = false,
 )
 
 /** 客户端为某个远程随机书库保存的当前随机结果；未点“重新随机”前保持不变。 */
@@ -64,6 +72,8 @@ data class RemoteEbookWire(
     val author: String = "",
     val size: Long = 0L,
     val hasCover: Boolean = false,
+    /** 发送端是否已经解析过这本书；false = 快速扫描占位，需要按需解析。 */
+    val metaScanned: Boolean = false,
     val rootKey: String = "",
 )
 

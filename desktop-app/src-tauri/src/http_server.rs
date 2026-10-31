@@ -1,5 +1,6 @@
 use crate::db::{self, Db};
 use crate::media;
+use crate::meta;
 use crate::models::{now_ms, ServerInfo};
 use crate::util;
 use axum::body::Body;
@@ -29,6 +30,7 @@ pub fn build_router(state: HttpState) -> Router {
         .route("/", get(index))
         .route("/library/version", get(library_version))
         .route("/library/all", get(library_all))
+        .route("/library/ebook/scan", get(library_ebook_scan))
         .route("/media/music", get(media_music))
         .route("/media/audiobook", get(media_audiobook))
         .route("/media/ebook", get(media_ebook))
@@ -101,6 +103,89 @@ where
 async fn library_version(State(state): State<HttpState>) -> Response {
     match run_db(&state, db::library_version).await {
         Ok(version) => json_response(json!({ "version": version })),
+        Err(err) => text_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            err.to_string(),
+            "text/plain; charset=utf-8",
+        ),
+    }
+}
+
+/// Lazily parses and caches metadata for one fast-scanned book.
+/// Clients call this only for books that were actually randomly selected.
+async fn library_ebook_scan(
+    State(state): State<HttpState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let Some(path) = query.get("path").cloned() else {
+        return text_response(
+            StatusCode::BAD_REQUEST,
+            "missing path".into(),
+            "text/plain; charset=utf-8",
+        );
+    };
+    let lookup_path = path.clone();
+    let info = match run_db(&state, move |conn| db::book_scan_info(conn, &lookup_path)).await {
+        Ok(Some(info)) => info,
+        Ok(None) => {
+            return text_response(
+                StatusCode::NOT_FOUND,
+                "unknown book".into(),
+                "text/plain; charset=utf-8",
+            )
+        }
+        Err(err) => {
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                err.to_string(),
+                "text/plain; charset=utf-8",
+            )
+        }
+    };
+
+    // Already parsed once: serve the cached result directly.
+    if info.meta_scanned {
+        return json_response(json!({
+            "path": path,
+            "title": info.title,
+            "author": info.author,
+            "hasCover": info.has_cover,
+        }));
+    }
+
+    let source_path = info.path;
+    let ext = info.format;
+    let parsed = tokio::task::spawn_blocking(move || {
+        if ext == "epub" {
+            meta::read_epub(&source_path)
+        } else {
+            meta::BookMeta::default()
+        }
+    })
+    .await;
+    let parsed = match parsed {
+        Ok(meta) => meta,
+        Err(err) => {
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                err.to_string(),
+                "text/plain; charset=utf-8",
+            )
+        }
+    };
+
+    let apply_path = path.clone();
+    let updated = run_db(&state, move |conn| {
+        db::apply_book_meta(conn, &apply_path, &parsed)
+    })
+    .await;
+    match updated {
+        Ok((title, author, has_cover)) => json_response(json!({
+            "path": path,
+            "title": title,
+            "author": author,
+            "hasCover": has_cover,
+        })),
         Err(err) => text_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             err.to_string(),

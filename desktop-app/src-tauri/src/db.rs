@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS roots (
     path         TEXT NOT NULL UNIQUE,
     kind         TEXT NOT NULL CHECK (kind IN ('music','audiobook','book')),
     music_mode   TEXT,
-    random_pick  INTEGER NOT NULL DEFAULT 0,
+    fast_scan    INTEGER NOT NULL DEFAULT 0,
     display_name TEXT NOT NULL,
     created_at   INTEGER NOT NULL,
     last_scan_at INTEGER,
@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS books (
     mtime     INTEGER NOT NULL DEFAULT 0,
     format    TEXT NOT NULL,
     has_cover INTEGER NOT NULL DEFAULT 0,
+    meta_scanned INTEGER NOT NULL DEFAULT 1,
     scan_token INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_books_root ON books(root_id);
@@ -147,18 +148,40 @@ fn migrate(conn: &Connection) -> Result<()> {
         conn.pragma_update(None, "user_version", 1)?;
     }
     let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version < 2 {
+    if version < 3 {
+        let has_fast: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('roots') WHERE name = 'fast_scan')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_fast {
+            let has_legacy: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('roots') WHERE name = 'random_pick')",
+                [],
+                |row| row.get(0),
+            )?;
+            conn.execute_batch(
+                "ALTER TABLE roots ADD COLUMN fast_scan INTEGER NOT NULL DEFAULT 0",
+            )?;
+            if has_legacy {
+                conn.execute_batch("UPDATE roots SET fast_scan = random_pick")?;
+            }
+        }
+        conn.pragma_update(None, "user_version", 3)?;
+    }
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 4 {
         let has_column: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('roots') WHERE name = 'random_pick')",
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('books') WHERE name = 'meta_scanned')",
             [],
             |row| row.get(0),
         )?;
         if !has_column {
             conn.execute_batch(
-                "ALTER TABLE roots ADD COLUMN random_pick INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE books ADD COLUMN meta_scanned INTEGER NOT NULL DEFAULT 1",
             )?;
         }
-        conn.pragma_update(None, "user_version", 2)?;
+        conn.pragma_update(None, "user_version", 4)?;
     }
     Ok(())
 }
@@ -238,7 +261,7 @@ fn content_signature(conn: &Connection) -> Result<String> {
     let mut hasher: u64 = 1469598103934665603;
 
     let mut stmt = conn.prepare(
-        "SELECT id, path, kind, COALESCE(music_mode,''), display_name, random_pick FROM roots ORDER BY id",
+        "SELECT id, path, kind, COALESCE(music_mode,''), display_name, fast_scan FROM roots ORDER BY id",
     )?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
@@ -275,13 +298,19 @@ fn content_signature(conn: &Connection) -> Result<String> {
     drop(rows);
     drop(stmt);
 
-    let mut stmt = conn.prepare("SELECT path, title, author, size FROM books ORDER BY path")?;
+    let mut stmt = conn.prepare(
+        "SELECT path, title, author, size, format, has_cover, meta_scanned
+         FROM books ORDER BY path",
+    )?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         feed_str(&mut hasher, &row.get::<_, String>(0)?);
         feed_str(&mut hasher, &row.get::<_, String>(1)?);
         feed_str(&mut hasher, &row.get::<_, String>(2)?);
         feed_i64(&mut hasher, row.get(3)?);
+        feed_str(&mut hasher, &row.get::<_, String>(4)?);
+        feed_i64(&mut hasher, row.get(5)?);
+        feed_i64(&mut hasher, row.get(6)?);
     }
     drop(rows);
     drop(stmt);
@@ -352,7 +381,7 @@ fn row_to_root(row: &rusqlite::Row<'_>) -> rusqlite::Result<RootInfo> {
         path: row.get(1)?,
         kind: row.get(2)?,
         music_mode: row.get(3)?,
-        random_pick: row.get::<_, i64>(4)? != 0,
+        fast_scan: row.get::<_, i64>(4)? != 0,
         display_name: row.get(5)?,
         created_at: row.get(6)?,
         last_scan_at: row.get(7)?,
@@ -362,7 +391,7 @@ fn row_to_root(row: &rusqlite::Row<'_>) -> rusqlite::Result<RootInfo> {
 }
 
 const ROOT_COLUMNS: &str =
-    "id, path, kind, music_mode, random_pick, display_name, created_at, last_scan_at, scan_state, item_count";
+    "id, path, kind, music_mode, fast_scan, display_name, created_at, last_scan_at, scan_state, item_count";
 
 pub fn list_roots(conn: &Connection) -> Result<Vec<RootInfo>> {
     let mut stmt = conn.prepare(&format!(
@@ -392,7 +421,7 @@ pub fn add_root(
     kind: &str,
     music_mode: Option<&str>,
     display_name: Option<&str>,
-    random_pick: bool,
+    fast_scan: bool,
 ) -> Result<RootInfo> {
     if !matches!(kind, KIND_MUSIC | KIND_AUDIOBOOK | KIND_BOOK) {
         return Err(anyhow!("未知的目录类型: {kind}"));
@@ -437,13 +466,13 @@ pub fn add_root(
         });
 
     conn.execute(
-        "INSERT INTO roots(path, kind, music_mode, random_pick, display_name, created_at)
+        "INSERT INTO roots(path, kind, music_mode, fast_scan, display_name, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
             canonical,
             kind,
             mode,
-            if random_pick { 1 } else { 0 },
+            if fast_scan { 1 } else { 0 },
             name,
             now_ms()
         ],
@@ -458,7 +487,7 @@ pub fn update_root(
     id: i64,
     display_name: Option<&str>,
     music_mode: Option<&str>,
-    random_pick: Option<bool>,
+    fast_scan: Option<bool>,
 ) -> Result<RootInfo> {
     let root = get_root(conn, id)?;
     if let Some(name) = display_name {
@@ -485,11 +514,13 @@ pub fn update_root(
         }
     }
     if root.kind == KIND_BOOK {
-        if let Some(random_pick) = random_pick {
-            conn.execute(
-                "UPDATE roots SET random_pick = ?1 WHERE id = ?2",
-                params![if random_pick { 1 } else { 0 }, id],
-            )?;
+        if let Some(fast_scan) = fast_scan {
+            if !fast_scan && root.fast_scan {
+                return Err(anyhow!("快速扫描模式启用后不能撤销"));
+            }
+            if fast_scan {
+                conn.execute("UPDATE roots SET fast_scan = 1 WHERE id = ?1", params![id])?;
+            }
         }
     }
     refresh_library_version(conn)?;
@@ -738,7 +769,7 @@ pub fn audiobooks(conn: &Connection) -> Result<Vec<AudiobookDto>> {
 
 pub fn books(conn: &Connection) -> Result<Vec<BookDto>> {
     let mut stmt = conn.prepare(
-        "SELECT path, root_id, rel_path, title, author, size, format, has_cover
+        "SELECT path, root_id, rel_path, title, author, size, format, has_cover, meta_scanned
          FROM books ORDER BY title COLLATE NOCASE, rel_path COLLATE NOCASE",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -759,6 +790,7 @@ pub fn books(conn: &Connection) -> Result<Vec<BookDto>> {
             size: row.get(5)?,
             format: row.get(6)?,
             has_cover: has_cover != 0,
+            meta_scanned: row.get::<_, i64>(8)? != 0,
         })
     })?;
     let mut out = Vec::new();
@@ -811,7 +843,7 @@ pub fn wire_snapshot(
     {
         let mut stmt = conn.prepare(
             "SELECT r.id, r.path, r.display_name,
-                    (SELECT COUNT(*) FROM books b WHERE b.root_id = r.id), r.random_pick
+                    (SELECT COUNT(*) FROM books b WHERE b.root_id = r.id), r.fast_scan
              FROM roots r WHERE r.kind = 'book' ORDER BY r.created_at ASC, r.id ASC",
         )?;
         let mut rows = stmt.query([])?;
@@ -823,7 +855,7 @@ pub fn wire_snapshot(
                 display_name: row.get(2)?,
                 shelf: false,
                 book_count: row.get(3)?,
-                random_pick: row.get::<_, i64>(4)? != 0,
+                fast_scan: row.get::<_, i64>(4)? != 0,
             });
         }
     }
@@ -836,6 +868,7 @@ pub fn wire_snapshot(
             author: b.author,
             size: b.size,
             has_cover: b.has_cover,
+            meta_scanned: b.meta_scanned,
             root_key: b.root_id.to_string(),
         })
         .collect();
@@ -928,6 +961,89 @@ pub fn book_source(conn: &Connection, path: &str) -> Result<Option<(PathBuf, Str
             .to_ascii_lowercase();
         (PathBuf::from(p), ext)
     }))
+}
+
+/// Metadata and lazy-scan state for one book, used by the on-demand endpoint.
+pub struct BookScanInfo {
+    pub path: PathBuf,
+    pub format: String,
+    pub title: String,
+    pub author: String,
+    pub has_cover: bool,
+    pub meta_scanned: bool,
+}
+
+pub fn book_scan_info(conn: &Connection, path: &str) -> Result<Option<BookScanInfo>> {
+    let row = conn
+        .query_row(
+            "SELECT path, format, title, author, has_cover, meta_scanned
+             FROM books WHERE path = ?1",
+            params![path],
+            |row| {
+                Ok(BookScanInfo {
+                    path: PathBuf::from(row.get::<_, String>(0)?),
+                    format: row.get(1)?,
+                    title: row.get(2)?,
+                    author: row.get(3)?,
+                    has_cover: row.get::<_, i64>(4)? != 0,
+                    meta_scanned: row.get::<_, i64>(5)? != 0,
+                })
+            },
+        )
+        .optional()?;
+    Ok(row)
+}
+
+/// Applies metadata parsed on demand to one fast-scanned book and persists it.
+/// Missing fields keep the existing values, so repeated lazy scans are cheap and safe.
+pub fn apply_book_meta(
+    conn: &Connection,
+    path: &str,
+    meta: &crate::meta::BookMeta,
+) -> Result<(String, String, bool)> {
+    let title = meta
+        .title
+        .clone()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+    let author = meta
+        .author
+        .clone()
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty());
+
+    if let Some((mime, data)) = &meta.cover {
+        conn.execute(
+            "INSERT OR REPLACE INTO art(key, mime, data, size) VALUES (?1, ?2, ?3, ?4)",
+            params![format!("book:{path}"), mime, data, data.len() as i64],
+        )?;
+    }
+
+    let updated = conn.execute(
+        "UPDATE books SET
+            title = COALESCE(?1, title),
+            author = COALESCE(?2, author),
+            has_cover = CASE WHEN ?3 = 1 THEN 1 ELSE has_cover END,
+            meta_scanned = 1
+         WHERE path = ?4",
+        params![
+            title,
+            author,
+            if meta.cover.is_some() { 1 } else { 0 },
+            path
+        ],
+    )?;
+    if updated == 0 {
+        return Err(anyhow!("书籍不存在: {path}"));
+    }
+
+    let (title, author, has_cover): (String, String, i64) = conn.query_row(
+        "SELECT title, author, has_cover FROM books WHERE path = ?1",
+        params![path],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    refresh_library_version(conn)?;
+    Ok((title, author, has_cover != 0))
 }
 
 pub fn art_by_key(conn: &Connection, key: &str) -> Result<Option<(String, Vec<u8>)>> {

@@ -60,7 +60,7 @@ import kotlin.random.Random
  * 远程电子书库：完全照搬本地“书库 → 目录 → 电子书”的浏览方式。
  * 顶层是对方设备的默认书架与各扫描根；文件夹按子路径即时聚合，点书直接下载打开。
  *
- * 如果对方在该书库勾选了“随机选书”，这里默认随机展示 20 本，并保留：
+ * 如果对方在该书库启用了“快速扫描（随机取书）”，这里默认随机展示 20 本，并保留：
  * - 顶部重新随机与数量调整；
  * - 搜索（结果超过随机数量 2 倍时可换一批或全部展开）；
  * - 页面最底部的“历史随机”，避免错过上一批里的好书。
@@ -116,8 +116,8 @@ fun RemoteEbookLibraryScreen(
             "remote_ebook:$deviceId:$rootKey:$currentDir",
         )
 
-        // “随机选书”只作用于书库根目录；进一步进入子目录时回到普通浏览。
-        val randomMode = root.randomPick && !root.shelf && dirPath.isBlank()
+        // “快速扫描（随机取书）”只作用于书库根目录；进一步进入子目录时回到普通浏览。
+        val randomMode = root.fastScan && !root.shelf && dirPath.isBlank()
         val poolWires = remember(lib, root) { booksInDir(lib, root, "") }
         val poolBooks = remember(lib, root, recents, poolWires) {
             poolWires.map { b -> toEntry(lib, b, recents, container.remoteLibrary, container.remoteDownloads) }
@@ -189,6 +189,18 @@ fun RemoteEbookLibraryScreen(
             !randomMode -> books
             query.isNotBlank() -> searchBooks
             else -> randomBooks
+        }
+
+        // 快速扫描书库：只为当前随机展示的这批书按需解析，不碰“全部展开”的海量结果。
+        val warmDetails = randomMode && root.fastScan &&
+            !(query.isNotBlank() && searchExpanded && searchResults.size > count * 2)
+        LaunchedEffect(deviceId, warmDetails, displayBooks.map { it.remotePath }) {
+            if (warmDetails) {
+                container.remoteLibrary.requestEbookDetails(
+                    deviceId,
+                    displayBooks.map { it.remotePath },
+                )
+            }
         }
 
         if (!randomMode && dirs.isEmpty() && books.isEmpty()) {

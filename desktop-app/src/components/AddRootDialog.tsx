@@ -7,7 +7,7 @@ interface AddRootDialogProps {
   busy: boolean;
   error: string | null;
   onCancel: () => void;
-  onSubmit: (kind: RootKind, musicMode: MusicMode | null, displayName: string, randomPick: boolean) => void;
+  onSubmit: (kind: RootKind, musicMode: MusicMode | null, displayName: string, fastScan: boolean) => void;
 }
 
 const baseName = (path: string) => {
@@ -18,7 +18,7 @@ const baseName = (path: string) => {
 export function AddRootDialog({ path, busy, error, onCancel, onSubmit }: AddRootDialogProps) {
   const [kind, setKind] = useState<RootKind>("music");
   const [mode, setMode] = useState<MusicMode>("tag");
-  const [randomPick, setRandomPick] = useState(false);
+  const [fastScan, setFastScan] = useState(false);
   const [name, setName] = useState(() => baseName(path));
   const folderName = useMemo(() => baseName(path), [path]);
 
@@ -72,15 +72,15 @@ export function AddRootDialog({ path, busy, error, onCancel, onSubmit }: AddRoot
         {kind === "book" && (
           <div className="field">
             <label>客户端浏览方式</label>
-            <label className={`check-card ${randomPick ? "active" : ""}`}>
+            <label className={`check-card ${fastScan ? "active" : ""}`}>
               <input
                 type="checkbox"
-                checked={randomPick}
-                onChange={(event) => setRandomPick(event.target.checked)}
+                checked={fastScan}
+                onChange={(event) => setFastScan(event.target.checked)}
               />
               <span>
-                <strong>随机选书</strong>
-                <em>把此目录标记为随机书库，客户端进入后默认随机展示 20 本，可重新随机并查看历史。</em>
+                <strong>快速扫描（随机取书）</strong>
+                <em>首次扫描只读取文件名，不解析书籍内容；客户端随机抽到书后再按需解析并缓存。启用后不可撤销。</em>
               </span>
             </label>
           </div>
@@ -116,7 +116,7 @@ export function AddRootDialog({ path, busy, error, onCancel, onSubmit }: AddRoot
                 kind,
                 kind === "music" ? mode : null,
                 name.trim() || folderName,
-                kind === "book" && randomPick,
+                kind === "book" && fastScan,
               )
             }
           >

@@ -175,12 +175,12 @@ export default function App() {
     }
   };
 
-  const submitRoot = async (kind: RootKind, mode: MusicMode | null, name: string, randomPick: boolean) => {
+  const submitRoot = async (kind: RootKind, mode: MusicMode | null, name: string, fastScan: boolean) => {
     if (!pendingPath) return;
     setAddBusy(true);
     setAddError(null);
     try {
-      const root = await api.addRoot(pendingPath, kind, mode, name, randomPick);
+      const root = await api.addRoot(pendingPath, kind, mode, name, fastScan);
       setPendingPath(null);
       await refresh();
       showToast(`已添加「${root.displayName}」，开始扫描…`);
@@ -192,11 +192,12 @@ export default function App() {
     }
   };
 
-  const toggleRandomPick = async (root: RootInfo) => {
+  const toggleFastScan = async (root: RootInfo) => {
+    if (root.fastScan) return;
     try {
-      await api.updateRoot(root.id, null, null, !root.randomPick);
+      await api.updateRoot(root.id, null, null, true);
       await refresh();
-      showToast(`「${root.displayName}」${root.randomPick ? "已关闭" : "已开启"}随机选书`);
+      showToast(`「${root.displayName}」已开启快速扫描，此模式不可撤销`);
     } catch (err) {
       setError(String(err));
     }
@@ -246,7 +247,7 @@ export default function App() {
         onAdd={pickFolder}
         onScan={(ids) => startScan(ids)}
         onRemove={removeRoot}
-        onToggleRandom={toggleRandomPick}
+        onToggleFastScan={toggleFastScan}
       />
 
       <main className="main">
