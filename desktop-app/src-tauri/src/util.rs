@@ -109,7 +109,9 @@ pub const VIDEO_EXTS: &[&str] = &[
     "mp4", "mkv", "webm", "mov", "m4v", "avi", "wmv", "flv", "ts", "m2ts", "mpg", "mpeg",
 ];
 
-pub const BOOK_EXTS: &[&str] = &["epub", "mobi", "azw", "azw3", "pdf", "txt"];
+// TODO(pdf): PDF 解析（元数据/封面/阅读）还没做完，先不把 pdf 纳入服务端索引；
+// 做完后把 "pdf" 加回 BOOK_EXTS 即可恢复索引。ebook_mime 里仍保留 pdf 映射。
+pub const BOOK_EXTS: &[&str] = &["epub", "mobi", "azw", "azw3", "txt"];
 
 pub fn is_audio_ext(ext: &str) -> bool {
     AUDIO_EXTS.contains(&ext)

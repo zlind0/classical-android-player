@@ -30,6 +30,8 @@ data class SavedUiState(
     val expanded: Map<String, List<String>>? = emptyMap(),
     /** 滑掉任务时正在播放：下次启动即使队列里 wasPlaying 被暂停事件写成 false 也强制续播。 */
     val resumeOnLaunch: Boolean = false,
+    /** 上次退出时正在阅读的书（阅读器是覆盖层，不在 NavHost 返回栈里，单独保存）。 */
+    val readerPath: String? = "",
     /**
      * 上次退出时仍在浏览远端内容。冷启动恢复远端页面时，
      * 在设备核对完成前把缓存内容画成灰色而不是直接隐藏，直到回到主屏幕。
@@ -85,6 +87,17 @@ class UiStateStore(context: Context) {
     }
 
     fun playerExpanded(): Boolean = synchronized(lock) { state.playerExpanded }
+
+    fun readerPath(): String = synchronized(lock) { state.readerPath.orEmpty() }
+
+    fun saveReaderPath(path: String) {
+        synchronized(lock) {
+            if (state.readerPath.orEmpty() == path) return
+            state = state.copy(readerPath = path)
+            dirty = true
+        }
+        requestFlush()
+    }
 
     fun remoteBrowsing(): Boolean = synchronized(lock) { state.remoteBrowsing == true }
 

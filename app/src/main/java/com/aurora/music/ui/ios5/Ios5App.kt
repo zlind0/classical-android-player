@@ -114,6 +114,21 @@ fun Ios5App() {
     val container = (context.applicationContext as AuroraApplication).container
 
     val navController = rememberNavController()
+
+    // 阅读器是覆盖在当前页面之上的全屏层，不占 NavHost 返回栈：
+    // 这样打开/返回时底层页面（书库、随机列表、滚动位置）始终留在组合里，
+    // 淡出阅读器时直接露出原来的 UI，不会先退回空白再重新加载，闪两下。
+    var readerPath by rememberSaveable { mutableStateOf<String?>(null) }
+    // 关闭时 readerPath 立刻变 null，但淡出动画还要用最后一次的路径，故单独留一份。
+    var lastReaderPath by rememberSaveable { mutableStateOf("") }
+    fun openReader(path: String) {
+        if (path.isBlank()) return
+        lastReaderPath = path
+        readerPath = path
+    }
+    fun closeReader() {
+        readerPath = null
+    }
     val playerVM: PlayerViewModel = viewModel()
     val browseVM: Ios5BrowseViewModel = viewModel()
 
@@ -238,7 +253,7 @@ fun Ios5App() {
         val p = pendingEbook
         if (p != null && sessionReady != null) {
             container.ebookStore.takeOpenRequest()
-            navController.navigate(Ios5Routes.ebookReader(p))
+            openReader(p)
         }
     }
     LaunchedEffect(ebookNotice) {
@@ -301,7 +316,7 @@ fun Ios5App() {
     // 所以详情页用 currentTab（从返回栈推出来的），不能用只在 Tab 根页更新的 lastTab
     val tabHighlight = if (currentRoute in ios5TabRoutes) currentRoute else currentTab
     // 阅读器全屏独占：不带 tab/mini 条，不参与翻转动画
-    val isEbookReader = currentRoute?.startsWith("ebook_reader") == true
+    val isEbookReader = readerPath != null
     // 是否真的有要重放的返回栈（只有首页时不用盖加载圈）
     val hasNavToRestore = remember(initialNavRoutes) {
         initialNavRoutes.size > 1 || initialNavRoutes.firstOrNull()?.let { it != Ios5Routes.HOME } == true
@@ -313,7 +328,12 @@ fun Ios5App() {
                 navRestored = true
                 return@LaunchedEffect
             }
-            val saved = initialNavRoutes
+            // 旧版本把阅读器当成普通路由压进返回栈；现在阅读器是覆盖层，
+            // 恢复时把它从导航栈里摘出来，改为冷启动后直接盖在原来的页面上。
+            val legacyReaderPath = initialNavRoutes.lastOrNull { it.startsWith("ebook_reader") }
+                ?.let { runCatching { Uri.parse(it).getQueryParameter("epath") }.getOrNull() }
+                ?.takeIf { it.isNotBlank() }
+            val saved = initialNavRoutes.filterNot { it.startsWith("ebook_reader") }
             if (saved.isNotEmpty()) {
                 val tab = saved.first()
                 // 首页是 NavHost 起点；恢复的 Tab 不是首页时先补上它。
@@ -326,8 +346,14 @@ fun Ios5App() {
                     runCatching { navController.navigate(route) { launchSingleTop = true } }
                 }
             }
+            legacyReaderPath?.let { openReader(it) }
+                ?: container.uiState.readerPath().takeIf { it.isNotBlank() }?.let { openReader(it) }
             navRestored = true
         }
+    }
+    // 阅读器不在 NavHost 返回栈里，单独把“上次读到哪本书”落盘，冷启动才能恢复。
+    LaunchedEffect(readerPath, navRestored) {
+        if (navRestored) container.uiState.saveReaderPath(readerPath.orEmpty())
     }
     // 每次导航都记下完整返回栈（含参数），下次冷启动原样重建
     LaunchedEffect(navController, navRestored) {
@@ -480,7 +506,7 @@ fun Ios5App() {
             confirm("无法从 ${entry.deviceName} 下载这本书")
         } else {
             container.remoteLibrary.touchEbook(entry.key)
-            navController.navigate(Ios5Routes.ebookReader(f.absolutePath))
+            openReader(f.absolutePath)
         }
     }
 
@@ -494,7 +520,7 @@ fun Ios5App() {
             confirm("无法从 ${entry.deviceName} 下载这本书")
         } else {
             container.remoteLibrary.noteRandomEbookOpened(entry.deviceId, rootKey, entry.remotePath)
-            navController.navigate(Ios5Routes.ebookReader(f.absolutePath))
+            openReader(f.absolutePath)
         }
     }
 
@@ -591,7 +617,7 @@ fun Ios5App() {
                                 state = homeState,
                                 onOpenDetail = { k, i, t -> openDetail(k, i, t) },
                                 onPlaySongs = { songs, index -> playerVM.playAll(songs, index) },
-                                onOpenBook = { p -> navController.navigate(Ios5Routes.ebookReader(p)) },
+                                onOpenBook = { p -> openReader(p) },
                                 onPlayAudiobook = { playAudiobook(it) },
                                 onOpenExport = { p -> navController.navigate(Ios5Routes.ebookExport(p)) },
                                 remoteEbookRecents = visibleRemoteEbookRecents,
@@ -632,7 +658,7 @@ fun Ios5App() {
                                         Ios5Routes.ebookLib(rootId = id, rootPath = dir, dir = dir, title = title),
                                     )
                                 },
-                                onOpenBook = { p -> navController.navigate(Ios5Routes.ebookReader(p)) },
+                                onOpenBook = { p -> openReader(p) },
                                 onOpenSearch = { navController.navigate(Ios5Routes.EBOOK_SEARCH) },
                                 onOpenExport = { p -> navController.navigate(Ios5Routes.ebookExport(p)) },
                                 remoteLibraries = browsingRemoteLibraries,
@@ -680,7 +706,7 @@ fun Ios5App() {
                                         Ios5Routes.ebookLib(rootId = rootId, rootPath = rootPath.ifBlank { dirArg }, dir = d, title = t),
                                     )
                                 },
-                                onOpenBook = { p -> navController.navigate(Ios5Routes.ebookReader(p)) },
+                                onOpenBook = { p -> openReader(p) },
                                 onOpenExport = { p -> navController.navigate(Ios5Routes.ebookExport(p)) },
                                 confirm = { confirm(it) },
                             )
@@ -688,7 +714,7 @@ fun Ios5App() {
                         composable(Ios5Routes.EBOOK_SEARCH) {
                             com.aurora.music.ui.ebook.EbookSearchScreen(
                                 onBack = { navController.popBackStack() },
-                                onOpenBook = { p -> navController.navigate(Ios5Routes.ebookReader(p)) },
+                                onOpenBook = { p -> openReader(p) },
                                 onOpenExport = { p -> navController.navigate(Ios5Routes.ebookExport(p)) },
                             )
                         }
@@ -738,15 +764,6 @@ fun Ios5App() {
                                 },
                                 confirm = { confirm(it) },
                             )
-                        }
-                        composable(
-                            Ios5Routes.EBOOK_READER,
-                            arguments = listOf(
-                                androidx.navigation.navArgument("epath") { defaultValue = "" },
-                            ),
-                        ) {
-                            // 阅读器全屏渲染在 NavHost 之外（见下），这里留空避免黑屏闪烁
-                            Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black))
                         }
                         composable(Ios5Routes.MORE) {
                             MoreTab(onOpenRoute = { navController.navigate(it) })
@@ -1502,21 +1519,31 @@ fun Ios5App() {
             }
 
             // ---- 阅读器：全屏覆盖在内容页之上 ----
-            // 不替换 ContentFace：NavHost、Tab 返回栈、列表滚动位置全部保活，
-            // 从阅读器返回时书库还停在原来的目录和位置。
-            if (isEbookReader) {
-                val epath = Uri.decode(backStackEntry?.arguments?.getString("epath").orEmpty())
-                Box(
-                    Modifier.fillMaxSize().clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) {},
-                )
-                Box(Modifier.fillMaxSize().background(Color.Black)) {
-                    com.aurora.music.ui.ebook.EbookReaderScreen(
-                        bookPath = epath,
-                        onClose = { navController.popBackStack() },
+            // 阅读器不占 NavHost 返回栈，也不替换 ContentFace：打开期间底层页面
+            // （NavHost、Tab、随机列表、滚动位置）一直留在组合里。关闭时只是这层
+            // 黑色覆盖层淡出，直接露出原来的 UI，不会先退回再重新加载。
+            AnimatedVisibility(
+                visible = isEbookReader,
+                enter = fadeIn(tween(260)),
+                exit = fadeOut(tween(260)),
+            ) {
+                Box(Modifier.fillMaxSize()) {
+                    // 挡住穿透到下层页面的点击
+                    Box(
+                        Modifier.fillMaxSize().clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) {},
                     )
+                    val epath = readerPath ?: lastReaderPath
+                    if (epath.isNotBlank()) {
+                        Box(Modifier.fillMaxSize().background(Color.Black)) {
+                            com.aurora.music.ui.ebook.EbookReaderScreen(
+                                bookPath = epath,
+                                onClose = { closeReader() },
+                            )
+                        }
+                    }
                 }
             }
 
