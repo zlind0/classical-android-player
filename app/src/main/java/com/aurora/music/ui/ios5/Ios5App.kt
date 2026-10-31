@@ -818,6 +818,18 @@ fun Ios5App() {
                                     onBack = { navController.popBackStack() },
                                     onSearch = { navController.navigate(Ios5Routes.search("songs")) },
                                     onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
+                                    onOpenAlbum = { a ->
+                                        remoteBrowsing = true
+                                        navController.navigate(
+                                            Ios5Routes.remoteGroup(
+                                                device = deviceId,
+                                                kind = "album",
+                                                key = a.id,
+                                                title = a.title,
+                                                subtitle = "${a.artist} · ${lib.deviceName} · 远程",
+                                            ),
+                                        )
+                                    },
                                 )
                             }
                         }

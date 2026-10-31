@@ -1,6 +1,5 @@
 package com.aurora.music.ui.browse
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -79,11 +78,11 @@ fun Ios5RemoteDetail(
     onBack: () -> Unit,
     onSearch: () -> Unit,
     onPlaySongs: (List<Song>, Int) -> Unit,
+    onOpenAlbum: (RemoteAlbumGroup) -> Unit = {},
 ) {
     val downloads = (LocalContext.current.applicationContext as AuroraApplication).container.remoteDownloads
-    var openedAlbumId by remember(title, songs) { mutableStateOf<String?>(null) }
-    // 从专辑列表直接进来时 singleAlbum 就是当前专辑；从艺人页点专辑时用 openedAlbumId 从最新库里取。
-    val album = openedAlbumId?.let { id -> albums.firstOrNull { it.id == id } } ?: singleAlbum
+    // 从专辑列表直接进来时 singleAlbum 就是当前专辑；从艺人页点专辑会导航到新的 album 路由。
+    val album = singleAlbum
     val shownSongs = album?.songs ?: songs
     val shownTitle = album?.title ?: title
     val shownSubtitle = album?.artist?.ifBlank { subtitle } ?: subtitle
@@ -102,13 +101,8 @@ fun Ios5RemoteDetail(
         album?.let { container.uiState.saveExpanded("remote_album_expand:${it.id}", expanded) }
     }
 
-    fun closeLevel() {
-        if (openedAlbumId != null) openedAlbumId = null else onBack()
-    }
-    BackHandler(enabled = openedAlbumId != null) { openedAlbumId = null }
-
     Column(Modifier.fillMaxSize()) {
-        Ios5NavBar(title = shownTitle, onBack = ::closeLevel, onSearch = onSearch)
+        Ios5NavBar(title = shownTitle, onBack = onBack, onSearch = onSearch)
         if (shownSongs.isEmpty()) {
             Ios5Empty("这里没有歌曲")
         } else {
@@ -214,7 +208,7 @@ fun Ios5RemoteDetail(
                                 title = a.title,
                                 subtitle = a.artist,
                                 count = "${a.songs.size}",
-                                onClick = { openedAlbumId = a.id },
+                                onClick = { onOpenAlbum(a) },
                                 leading = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Ios5RemoteStatusIcon()
@@ -258,6 +252,7 @@ fun Ios5RemoteDetail(
                         deviceName = deviceName,
                         downloads = downloads,
                         available = available,
+                        album = album,
                     )
                 } else {
                     ios5Rows(shownSongs, key = { it.id }) { i, s ->
@@ -295,6 +290,7 @@ private fun LazyListScope.remoteMergedAlbumRows(
     deviceName: String,
     downloads: RemoteDownloadManager,
     available: Boolean,
+    album: RemoteAlbumGroup,
 ) {
     var i = 0
     while (i < rows.size) {
@@ -304,33 +300,49 @@ private fun LazyListScope.remoteMergedAlbumRows(
                 val open = key in expanded
                 val hasCurrent = row.items.any { it.song.id == player.current.id }
                 val rowPlayable = available || row.items.any { it.song.streamUrl.startsWith("file:") }
+                val groupKey = "merged:${album.id}:${row.major}"
+                val groupSongs = row.items.map { it.song }
                 item(key = key) {
                     Ios5Group(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .alpha(if (rowPlayable) 1f else 0.45f)
-                                .padding(horizontal = 12.dp, vertical = 9.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                        RemoteDownloadSwipeRow(
+                            kind = RemoteDownloadKind.TRACK_GROUP,
+                            deviceId = deviceId,
+                            remoteKey = groupKey,
+                            remoteOnline = rowPlayable,
+                            onDownload = {
+                                downloads.downloadTrackGroup(
+                                    deviceId, deviceName, groupKey, row.major, album, groupSongs,
+                                )
+                            },
                         ) {
-                            Text(
-                                row.major,
-                                color = if (hasCurrent) Ios5Colors.IosBlue else Ios5Colors.TextPrimary,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
-                                    .clickable(enabled = rowPlayable) { onPlayAt(row.items.first().index) },
-                            )
-                            Icon(
-                                if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                                if (open) "收起" else "展开",
-                                tint = Ios5Colors.TextSecondary,
-                                modifier = Modifier.size(40.dp)
-                                    .clip(RoundedCornerShape(20.dp))
-                                    .clickable { onToggle(key) }
-                                    .padding(8.dp),
-                            )
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .alpha(if (rowPlayable) 1f else 0.45f)
+                                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Ios5RemoteStatusIcon()
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    row.major,
+                                    color = if (hasCurrent) Ios5Colors.IosBlue else Ios5Colors.TextPrimary,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                        .clickable(enabled = rowPlayable) { onPlayAt(row.items.first().index) },
+                                )
+                                Icon(
+                                    if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                                    if (open) "收起" else "展开",
+                                    tint = Ios5Colors.TextSecondary,
+                                    modifier = Modifier.size(40.dp)
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .clickable { onToggle(key) }
+                                        .padding(8.dp),
+                                )
+                            }
                         }
                         if (open) {
                             Ios5CellDivider()

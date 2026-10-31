@@ -501,7 +501,7 @@ fun Ios5Cell(
 }
 
 @Composable
-fun Ios5CellDivider(startInset: Dp = 12.dp) {
+fun Ios5CellDivider(startInset: Dp = 0.dp) {
     Box(Modifier.fillMaxWidth().padding(start = startInset).height(1.dp).background(Ios5Colors.CellDivider))
 }
 

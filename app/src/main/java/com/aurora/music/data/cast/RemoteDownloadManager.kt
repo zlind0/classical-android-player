@@ -27,6 +27,8 @@ import okhttp3.Request
 /** 用户显式下载的远程资料库条目类型。 */
 object RemoteDownloadKind {
     const val TRACK = "track"
+    /** 曲名合成后的一个聚合行（大标题下的一组曲目）。 */
+    const val TRACK_GROUP = "trackGroup"
     const val ALBUM = "album"
     const val ARTIST = "artist"
     const val EBOOK = "ebook"
@@ -241,8 +243,56 @@ class RemoteDownloadManager(context: Context) {
         enqueue(record, units, listOf(stateKey(RemoteDownloadKind.TRACK, deviceId, song.id)))
     }
 
-    fun downloadAlbum(deviceId: String, deviceName: String, album: RemoteAlbumGroup) {
-        val songs = album.songs.filter { it.streamUrl.startsWith("http") }
+    /** 下载曲名合成后的一个聚合行：把这一组曲目作为独立条目保存，远端删除/离线也能整组听。 */
+    fun downloadTrackGroup(
+        deviceId: String,
+        deviceName: String,
+        groupKey: String,
+        title: String,
+        album: RemoteAlbumGroup,
+        songs: List<Song>,
+    ) {
+        val targets = songs.filter { it.streamUrl.startsWith("http") }
+        if (targets.isEmpty()) return
+        val record = RemoteDownloadRecord(
+            kind = RemoteDownloadKind.TRACK_GROUP,
+            deviceId = deviceId,
+            deviceName = deviceName,
+            key = groupKey,
+            title = title,
+            subtitle = "${targets.size} 首",
+            cover = album.artworkUrl,
+            createdAt = System.currentTimeMillis(),
+            tracks = targets.map { snapshotOf(it, album.id, album.title, album.mergeTitles) },
+        )
+        val dir = recordDir(record)
+        val units = buildList {
+            if (album.artworkUrl.startsWith("http")) {
+                add(DownloadUnit(album.artworkUrl, File(dir, "cover.img"), 0L) { rec, path ->
+                    rec.copy(
+                        cover = fileUri(path),
+                        tracks = rec.tracks.map { it.copy(artworkUrl = fileUri(path)) },
+                    )
+                })
+            }
+            targets.forEachIndexed { i, song ->
+                add(
+                    DownloadUnit(song.streamUrl, File(dir, "group_$i.${audioExt(song)}"), 0L) { rec, path ->
+                        rec.copy(
+                            tracks = rec.tracks.mapIndexed { idx, t ->
+                                if (idx == i) {
+                                    t.copy(localPath = path, artworkUrl = rec.cover.ifBlank { t.artworkUrl })
+                                } else t
+                            },
+                        )
+                    },
+                )
+            }
+        }
+        enqueue(record, units, targets.map { stateKey(RemoteDownloadKind.TRACK, deviceId, it.id) })
+    }
+
+    fun downloadAlbum(deviceId: String, deviceName: String, album: RemoteAlbumGroup) {        val songs = album.songs.filter { it.streamUrl.startsWith("http") }
         if (songs.isEmpty()) return
         val record = RemoteDownloadRecord(
             kind = RemoteDownloadKind.ALBUM,
@@ -956,6 +1006,7 @@ class RemoteDownloadManager(context: Context) {
 
     private fun childKeysOf(rec: RemoteDownloadRecord): List<String> = when (rec.kind) {
         RemoteDownloadKind.TRACK,
+        RemoteDownloadKind.TRACK_GROUP,
         RemoteDownloadKind.ALBUM,
         RemoteDownloadKind.ARTIST,
         -> rec.tracks.map { stateKey(RemoteDownloadKind.TRACK, rec.deviceId, it.songId) }
@@ -971,6 +1022,7 @@ class RemoteDownloadManager(context: Context) {
     private companion object {
         val MUSIC_KINDS = setOf(
             RemoteDownloadKind.TRACK,
+            RemoteDownloadKind.TRACK_GROUP,
             RemoteDownloadKind.ALBUM,
             RemoteDownloadKind.ARTIST,
         )
