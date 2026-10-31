@@ -30,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -72,15 +73,17 @@ fun Ios5RemoteDetail(
     songs: List<Song>,
     albums: List<RemoteAlbumGroup>,
     singleAlbum: RemoteAlbumGroup? = null,
+    /** 远端当前是否在线；离线时缓存内容变灰不可点（已下载条目除外）。 */
+    available: Boolean = true,
     player: PlayerUiState,
     onBack: () -> Unit,
     onSearch: () -> Unit,
     onPlaySongs: (List<Song>, Int) -> Unit,
 ) {
     val downloads = (LocalContext.current.applicationContext as AuroraApplication).container.remoteDownloads
-    var openedAlbum by remember(title, songs) { mutableStateOf<RemoteAlbumGroup?>(null) }
-    // 从专辑列表直接进来时 singleAlbum 就是当前专辑；从艺人页点专辑时用 openedAlbum。
-    val album = openedAlbum ?: singleAlbum
+    var openedAlbumId by remember(title, songs) { mutableStateOf<String?>(null) }
+    // 从专辑列表直接进来时 singleAlbum 就是当前专辑；从艺人页点专辑时用 openedAlbumId 从最新库里取。
+    val album = openedAlbumId?.let { id -> albums.firstOrNull { it.id == id } } ?: singleAlbum
     val shownSongs = album?.songs ?: songs
     val shownTitle = album?.title ?: title
     val shownSubtitle = album?.artist?.ifBlank { subtitle } ?: subtitle
@@ -100,9 +103,9 @@ fun Ios5RemoteDetail(
     }
 
     fun closeLevel() {
-        if (openedAlbum != null) openedAlbum = null else onBack()
+        if (openedAlbumId != null) openedAlbumId = null else onBack()
     }
-    BackHandler(enabled = openedAlbum != null) { openedAlbum = null }
+    BackHandler(enabled = openedAlbumId != null) { openedAlbumId = null }
 
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = shownTitle, onBack = ::closeLevel, onSearch = onSearch)
@@ -130,8 +133,11 @@ fun Ios5RemoteDetail(
                     }
                     val headerKey = album?.id ?: headerArtist?.name.orEmpty()
                     val headerRow: @Composable () -> Unit = {
+                        val headerAvailable = com.aurora.music.ui.components.LocalRemoteAvailable.current
                         Row(
-                            Modifier.fillMaxWidth().padding(12.dp),
+                            Modifier.fillMaxWidth()
+                                .alpha(if (headerAvailable) 1f else 0.45f)
+                                .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Artwork(
@@ -177,6 +183,7 @@ fun Ios5RemoteDetail(
                                 kind = headerKind,
                                 deviceId = deviceId,
                                 remoteKey = headerKey,
+                                remoteOnline = available,
                                 onDownload = {
                                     if (album != null) {
                                         downloads.downloadAlbum(deviceId, deviceName, album)
@@ -200,13 +207,14 @@ fun Ios5RemoteDetail(
                             kind = RemoteDownloadKind.ALBUM,
                             deviceId = deviceId,
                             remoteKey = a.id,
+                            remoteOnline = available || a.songs.any { it.streamUrl.startsWith("file:") },
                             onDownload = { downloads.downloadAlbum(deviceId, deviceName, a) },
                         ) {
                             Ios5Cell(
                                 title = a.title,
                                 subtitle = a.artist,
                                 count = "${a.songs.size}",
-                                onClick = { openedAlbum = a },
+                                onClick = { openedAlbumId = a.id },
                                 leading = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Ios5RemoteStatusIcon()
@@ -225,11 +233,13 @@ fun Ios5RemoteDetail(
                             Ios5HeaderAction(
                                 text = "播放全部",
                                 icon = Icons.Filled.PlayArrow,
+                                enabled = available,
                                 onClick = { onPlaySongs(shownSongs, 0) },
                             ),
                             Ios5HeaderAction(
                                 text = "随机播放",
                                 icon = Icons.Filled.Shuffle,
+                                enabled = available,
                                 onClick = { onPlaySongs(shownSongs.shuffled(), 0) },
                             ),
                         ),
@@ -247,6 +257,7 @@ fun Ios5RemoteDetail(
                         deviceId = deviceId,
                         deviceName = deviceName,
                         downloads = downloads,
+                        available = available,
                     )
                 } else {
                     ios5Rows(shownSongs, key = { it.id }) { i, s ->
@@ -254,6 +265,7 @@ fun Ios5RemoteDetail(
                             kind = RemoteDownloadKind.TRACK,
                             deviceId = deviceId,
                             remoteKey = s.id,
+                            remoteOnline = available || s.streamUrl.startsWith("file:"),
                             onDownload = { downloads.downloadSong(deviceId, deviceName, s) },
                         ) {
                             Ios5SongRow(
@@ -282,6 +294,7 @@ private fun LazyListScope.remoteMergedAlbumRows(
     deviceId: String,
     deviceName: String,
     downloads: RemoteDownloadManager,
+    available: Boolean,
 ) {
     var i = 0
     while (i < rows.size) {
@@ -290,10 +303,13 @@ private fun LazyListScope.remoteMergedAlbumRows(
                 val key = "rg:${row.items.first().index}:${row.major}"
                 val open = key in expanded
                 val hasCurrent = row.items.any { it.song.id == player.current.id }
+                val rowPlayable = available || row.items.any { it.song.streamUrl.startsWith("file:") }
                 item(key = key) {
                     Ios5Group(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
                         Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
+                            Modifier.fillMaxWidth()
+                                .alpha(if (rowPlayable) 1f else 0.45f)
+                                .padding(horizontal = 12.dp, vertical = 9.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
@@ -304,7 +320,7 @@ private fun LazyListScope.remoteMergedAlbumRows(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
-                                    .clickable { onPlayAt(row.items.first().index) },
+                                    .clickable(enabled = rowPlayable) { onPlayAt(row.items.first().index) },
                             )
                             Icon(
                                 if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
@@ -325,6 +341,7 @@ private fun LazyListScope.remoteMergedAlbumRows(
                                     kind = RemoteDownloadKind.TRACK,
                                     deviceId = deviceId,
                                     remoteKey = sub.song.id,
+                                    remoteOnline = available || sub.song.streamUrl.startsWith("file:"),
                                     onDownload = { downloads.downloadSong(deviceId, deviceName, sub.song) },
                                 ) {
                                     Ios5SongRow(
@@ -352,6 +369,7 @@ private fun LazyListScope.remoteMergedAlbumRows(
                         kind = RemoteDownloadKind.TRACK,
                         deviceId = deviceId,
                         remoteKey = single.song.id,
+                        remoteOnline = available || single.song.streamUrl.startsWith("file:"),
                         onDownload = { downloads.downloadSong(deviceId, deviceName, single.song) },
                     ) {
                         Ios5SongRow(

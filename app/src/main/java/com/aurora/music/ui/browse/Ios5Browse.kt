@@ -109,6 +109,7 @@ fun Ios5SongsBrowse(
                             kind = RemoteDownloadKind.TRACK,
                             deviceId = lib.deviceId,
                             remoteKey = s.id,
+                            remoteOnline = lib.online || s.streamUrl.startsWith("file:"),
                             onDownload = { downloads.downloadSong(lib.deviceId, lib.deviceName, s) },
                         ) {
                             Ios5SongRow(s, s.id == player.current.id, player.isPlaying, remote = true) {
@@ -165,6 +166,7 @@ fun Ios5AlbumsBrowse(
                             kind = RemoteDownloadKind.ALBUM,
                             deviceId = lib.deviceId,
                             remoteKey = a.id,
+                            remoteOnline = lib.online || a.songs.any { it.streamUrl.startsWith("file:") },
                             onDownload = { downloads.downloadAlbum(lib.deviceId, lib.deviceName, a) },
                         ) {
                             Ios5Cell(

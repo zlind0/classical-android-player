@@ -30,6 +30,11 @@ data class SavedUiState(
     val expanded: Map<String, List<String>>? = emptyMap(),
     /** 滑掉任务时正在播放：下次启动即使队列里 wasPlaying 被暂停事件写成 false 也强制续播。 */
     val resumeOnLaunch: Boolean = false,
+    /**
+     * 上次退出时仍在浏览远端内容。冷启动恢复远端页面时，
+     * 在设备核对完成前把缓存内容画成灰色而不是直接隐藏，直到回到主屏幕。
+     */
+    val remoteBrowsing: Boolean? = false,
 )
 
 class UiStateStore(context: Context) {
@@ -80,6 +85,17 @@ class UiStateStore(context: Context) {
     }
 
     fun playerExpanded(): Boolean = synchronized(lock) { state.playerExpanded }
+
+    fun remoteBrowsing(): Boolean = synchronized(lock) { state.remoteBrowsing == true }
+
+    fun saveRemoteBrowsing(active: Boolean) {
+        synchronized(lock) {
+            if ((state.remoteBrowsing == true) == active) return
+            state = state.copy(remoteBrowsing = active)
+            dirty = true
+        }
+        requestFlush()
+    }
 
     fun savePlayerExpanded(expanded: Boolean) {
         synchronized(lock) {

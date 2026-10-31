@@ -19,6 +19,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -93,6 +94,7 @@ fun EbooksTab(
                         kind = RemoteDownloadKind.EBOOK,
                         deviceId = b.deviceId,
                         remoteKey = b.remotePath,
+                        remoteOnline = lib?.online == true,
                         onDownload = {
                             if (lib != null && wire != null) {
                                 container.remoteDownloads.downloadEbook(
@@ -145,13 +147,18 @@ fun EbooksTab(
                 }
                 val roots = container.remoteLibrary.ebookRootsOf(lib)
                 ios5Rows(roots, key = { "r:${lib.deviceId}:${it.key}" }) { _, r ->
+                    val rootBooks = remoteBooksInRoot(lib, r)
                     RemoteDownloadSwipeRow(
                         kind = RemoteDownloadKind.EBOOK_ROOT,
                         deviceId = lib.deviceId,
                         remoteKey = r.key,
+                        remoteOnline = lib.online ||
+                            rootBooks.any {
+                                container.remoteDownloads.isEbookDownloaded(lib.deviceId, it.path)
+                            },
                         onDownload = {
                             container.remoteDownloads.downloadEbookRoot(
-                                lib.deviceId, lib.deviceName, lib.baseUrl, r, remoteBooksInRoot(lib, r),
+                                lib.deviceId, lib.deviceName, lib.baseUrl, r, rootBooks,
                             )
                         },
                     ) {
@@ -216,9 +223,11 @@ internal fun EbookRow(
     trailing: (@Composable () -> Unit)? = null,
     remote: Boolean = false,
 ) {
+    val available = com.aurora.music.ui.components.LocalRemoteAvailable.current
     Row(
         Modifier.fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = available, onClick = onClick)
+            .alpha(if (available) 1f else 0.45f)
             .padding(horizontal = 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

@@ -37,7 +37,8 @@ import okhttp3.Request
  *
  * 发现沿用 [CastDiscovery]（启动后常驻浏览，不再只在投屏选择页开）；
  * 对每台设备定时拉 `/library/all`，把音乐/电子书/有声书元信息转成可直接播放的
- * [Song] / 列表条目。元信息落盘到 filesDir/remote_library，离线时仍显示上次快照。
+ * [Song] / 列表条目。元信息按设备落到 filesDir/remote_library/<id>.db（SQLite），
+ * 离线时仍显示上次快照。
  *
  * 缓存策略：
  * - 音乐：当前 + 下一首预取，保留上一首，继续往后播时删除更早的缓存；
@@ -63,6 +64,13 @@ class RemoteLibraryManager(
     private val _libraries = MutableStateFlow<List<RemoteDeviceLibrary>>(emptyList())
     val libraries: StateFlow<List<RemoteDeviceLibrary>> = _libraries.asStateFlow()
 
+    /**
+     * 完整缓存视图：设备离线时也保留上次同步到的整份目录（未下载条目标记为不可用）。
+     * 冷启动恢复远端页面时用它先把内容画成灰色，等设备上线立刻变为可用。
+     */
+    private val _cachedLibraries = MutableStateFlow<List<RemoteDeviceLibrary>>(emptyList())
+    val cachedLibraries: StateFlow<List<RemoteDeviceLibrary>> = _cachedLibraries.asStateFlow()
+
     private val _ebookRecents = MutableStateFlow<List<RemoteEbookEntry>>(emptyList())
     val ebookRecents: StateFlow<List<RemoteEbookEntry>> = _ebookRecents.asStateFlow()
 
@@ -70,7 +78,7 @@ class RemoteLibraryManager(
     val abookPlays: StateFlow<Map<String, RemoteAbookPlay>> = _abookPlays.asStateFlow()
 
     /** 每一台设备的最近一次快照（含 offline），UI 直接读。 */
-    private val payloads = ConcurrentHashMap<String, CachedPayload>()
+    private val payloads = ConcurrentHashMap<String, RemoteLibrarySnapshot>()
 
     /** 所有远程歌曲（音乐 + 有声书章节）按播放用 id 索引，缓存维护用。 */
     private val songsById = ConcurrentHashMap<String, Song>()
@@ -173,7 +181,7 @@ class RemoteLibraryManager(
             payloads[device.id] = updated
             // lastSeen 每 15 秒写一次盘没必要；一小时落一次足够判断 30 天过期。
             if (!sameEndpoint || now - cached.lastSeenAt > LAST_SEEN_SAVE_INTERVAL_MS) {
-                persistPayload(updated)
+                RemoteLibraryDb.updateMeta(storeDir, updated)
             }
             if (!wasOnline) rebuildLibraries()
             return
@@ -204,7 +212,7 @@ class RemoteLibraryManager(
             // 封面可能随资料库变化：版本变化时清掉旧封面，让下面的预取重新下载。
             RemoteArtCache.clearDevice(appContext, device.id)
         }
-        val fresh = CachedPayload(
+        val fresh = RemoteLibrarySnapshot(
             deviceId = device.id,
             deviceName = device.name,
             host = device.host,
@@ -243,7 +251,7 @@ class RemoteLibraryManager(
     }
 
     /** 艺术家/专辑/图书/有声书封面一次性补到本地，之后 UI 直接用 file://。 */
-    private suspend fun prefetchArtwork(cached: CachedPayload) {
+    private suspend fun prefetchArtwork(cached: RemoteLibrarySnapshot) {
         val lib = runCatching { cached.toLibrary(appContext) }.getOrNull() ?: return
         val urls = LinkedHashSet<String>()
         lib.albums.forEach { if (it.artworkUrl.isNotBlank()) urls += it.artworkUrl }
@@ -273,20 +281,33 @@ class RemoteLibraryManager(
         if (expired.isEmpty()) return
         expired.forEach {
             payloads.remove(it.deviceId)
-            runCatching { File(storeDir, "${safeId(it.deviceId)}.json").delete() }
+            RemoteLibraryDb.delete(storeDir, it.deviceId)
             RemoteArtCache.clearDevice(appContext, it.deviceId)
         }
         rebuildLibraries()
     }
 
     private fun rebuildLibraries() {
-        val merged = payloads.values
-            .map { it.toLibrary(appContext) }
-            .associateBy { it.deviceId }
-            .toMutableMap()
+        val recsByDevice = downloads.records.value.groupBy { it.deviceId }
+        val displayMerged = HashMap<String, RemoteDeviceLibrary>()
+        val fullMerged = HashMap<String, RemoteDeviceLibrary>()
+        payloads.values.forEach { cached ->
+            val base = cached.toLibrary(appContext)
+            val recs = recsByDevice[cached.deviceId].orEmpty()
+            // 完整视图：始终保留上次同步的整份目录，离线只影响 online/可点击状态。
+            val full = mergeDownloaded(base, recs, includeBase = true)
+            fullMerged[cached.deviceId] = full
+            // 常规展示：离线设备只留用户显式下载过的内容（冷启动远端页面除外）。
+            displayMerged[cached.deviceId] = if (base.online) {
+                full
+            } else {
+                mergeDownloaded(base, recs, includeBase = false)
+            }
+        }
         // 下载记录按设备补进资料库：远端没同步到/已删除/设备离线时，本地仍然展示这些条目。
-        downloads.records.value.groupBy { it.deviceId }.forEach { (deviceId, recs) ->
-            val base = merged[deviceId] ?: RemoteDeviceLibrary(
+        recsByDevice.forEach { (deviceId, recs) ->
+            if (deviceId in fullMerged) return@forEach
+            val base = RemoteDeviceLibrary(
                 deviceId = deviceId,
                 deviceName = downloads.deviceNameOf(deviceId) ?: "远程设备",
                 host = "",
@@ -294,9 +315,12 @@ class RemoteLibraryManager(
                 online = false,
                 fetchedAt = 0L,
             )
-            merged[deviceId] = mergeDownloaded(base, recs)
+            val merged = mergeDownloaded(base, recs, includeBase = false)
+            displayMerged[deviceId] = merged
+            fullMerged[deviceId] = merged
         }
-        val out = merged.values.sortedBy { it.deviceName.lowercase() }
+        val out = displayMerged.values.sortedBy { it.deviceName.lowercase() }
+        _cachedLibraries.value = fullMerged.values.sortedBy { it.deviceName.lowercase() }
         val allSongs = ConcurrentHashMap<String, Song>()
         out.forEach { lib -> lib.songs.forEach { allSongs[it.id] = it } }
         songsById.putAll(allSongs)
@@ -312,17 +336,21 @@ class RemoteLibraryManager(
 
     /**
      * 把用户已下载的条目合并进设备资料库。
-     * - 设备在线时用远端元信息为主，已下载的曲目换成 file:// 播放地址，远端已消失的条目用快照补回；
-     * - 设备离线时只保留用户下载过的内容，未下载的远端目录/条目不再展示；
+     * - [includeBase] 为 true 时保留远端元信息（离线时用于灰色展示），已下载的曲目换成 file://；
+     * - [includeBase] 为 false 时只保留用户下载过的内容（常规离线展示）；
+     * - 远端已消失的条目用下载快照补回；
      * - 电子书/有声书封面优先使用下载目录里的本地文件，设备离线也不会缺图。
      */
-    private fun mergeDownloaded(base: RemoteDeviceLibrary, recs: List<RemoteDownloadRecord>): RemoteDeviceLibrary {
-        // 离线设备只展示已下载的内容，不展示上次同步到的整份远端目录。
-        val baseAlbums = if (base.online) base.albums else emptyList()
-        val baseEbooks = if (base.online) base.ebooks else emptyList()
-        val baseRoots = if (base.online) base.ebookRoots else emptyList()
-        val baseAudiobooks = if (base.online) base.audiobooks else emptyList()
-        val baseArtistImages = if (base.online) base.artists.associate { it.name to it.imageUrl } else emptyMap()
+    private fun mergeDownloaded(
+        base: RemoteDeviceLibrary,
+        recs: List<RemoteDownloadRecord>,
+        includeBase: Boolean,
+    ): RemoteDeviceLibrary {
+        val baseAlbums = if (includeBase) base.albums else emptyList()
+        val baseEbooks = if (includeBase) base.ebooks else emptyList()
+        val baseRoots = if (includeBase) base.ebookRoots else emptyList()
+        val baseAudiobooks = if (includeBase) base.audiobooks else emptyList()
+        val baseArtistImages = if (includeBase) base.artists.associate { it.name to it.imageUrl } else emptyMap()
 
         val albumsById = LinkedHashMap<String, RemoteAlbumGroup>()
         baseAlbums.forEach { albumsById[it.id] = it }
@@ -748,22 +776,57 @@ class RemoteLibraryManager(
     // ---- 持久化 ----
 
     private fun loadCachedPayloads() {
-        runCatching {
-            storeDir.listFiles { f -> f.isFile && f.name.endsWith(".json") }?.forEach { f ->
-                val type = object : TypeToken<CachedPayload>() {}.type
-                val c = gson.fromJson<CachedPayload>(f.readText(), type) ?: return@forEach
-                if (c.deviceId.isNotBlank()) payloads[c.deviceId] = c.copy(online = false)
-            }
+        // 旧版本把整份资料库塞进一个大 JSON；启动时一次性迁到每设备一个 SQLite 文件，然后删掉 JSON。
+        migrateLegacyJson()
+        RemoteLibraryDb.readAll(storeDir).forEach { c ->
+            if (c.deviceId.isNotBlank()) payloads[c.deviceId] = c
         }
         pruneExpired()
         rebuildLibraries()
     }
 
-    private fun persistPayload(c: CachedPayload) {
-        runCatching {
-            File(storeDir, "${safeId(c.deviceId)}.json").writeText(gson.toJson(c))
+    private fun migrateLegacyJson() {
+        storeDir.listFiles { f -> f.isFile && f.name.endsWith(".json") }?.forEach { f ->
+            runCatching {
+                val legacy = gson.fromJson(f.readText(), CachedPayload::class.java)
+                if (legacy != null && legacy.deviceId.isNotBlank() &&
+                    !RemoteLibraryDb.file(storeDir, legacy.deviceId).isFile
+                ) {
+                    RemoteLibraryDb.write(
+                        storeDir,
+                        RemoteLibrarySnapshot(
+                            deviceId = legacy.deviceId,
+                            deviceName = legacy.deviceName,
+                            host = legacy.host,
+                            port = legacy.port,
+                            fetchedAt = legacy.fetchedAt,
+                            lastSeenAt = legacy.lastSeenAt,
+                            online = false,
+                            payload = legacy.payload,
+                        ),
+                    )
+                }
+            }
+            runCatching { f.delete() }
         }
     }
+
+    private fun persistPayload(c: RemoteLibrarySnapshot) {
+        runCatching { RemoteLibraryDb.write(storeDir, c) }
+    }
+
+    /** 把磁盘快照转成 UI 可直接用的只读资料库（转换逻辑复用旧 [CachedPayload]）。 */
+    private fun RemoteLibrarySnapshot.toLibrary(context: Context): RemoteDeviceLibrary =
+        CachedPayload(
+            deviceId = deviceId,
+            deviceName = deviceName,
+            host = host,
+            port = port,
+            fetchedAt = fetchedAt,
+            lastSeenAt = lastSeenAt,
+            payload = payload,
+            online = online,
+        ).toLibrary(context)
 
     private fun loadRecents() {
         runCatching {
@@ -794,9 +857,6 @@ class RemoteLibraryManager(
         if (current.isEmpty()) return
         _libraries.value = _libraries.value.toList()
     }
-
-    private fun CachedPayload.toLibraryOrNull(): RemoteDeviceLibrary? =
-        runCatching { toLibrary(appContext) }.getOrNull()
 
     private fun parseAudiobookSongId(id: String): Triple<String, String, Int>? {
         // audiobook:remote:<deviceId>:<base64(bookId)>#<index>
@@ -839,7 +899,7 @@ class RemoteLibraryManager(
         /** 30 天没成功连上（版本探测也算）就清掉 meta 与封面缓存。 */
         const val CACHE_TTL_MS = 30L * 24 * 60 * 60 * 1000
 
-        /** 在线心跳只每小时落一次盘，避免每 15 秒重写整份大 JSON。 */
+        /** 在线心跳只每小时落一次 meta，避免每 15 秒重写整张曲目表。 */
         const val LAST_SEEN_SAVE_INTERVAL_MS = 60L * 60 * 1000
     }
 

@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -82,6 +83,7 @@ fun AudiobooksTab(
                         kind = RemoteDownloadKind.AUDIOBOOK,
                         deviceId = b.deviceId,
                         remoteKey = b.bookId,
+                        remoteOnline = lib?.online == true,
                         onDownload = {
                             if (lib != null && wire != null) {
                                 container.remoteDownloads.downloadAudiobook(
@@ -138,6 +140,7 @@ fun AudiobooksTab(
                         kind = RemoteDownloadKind.AUDIOBOOK,
                         deviceId = lib.deviceId,
                         remoteKey = b.id,
+                        remoteOnline = lib.online,
                         onDownload = {
                             container.remoteDownloads.downloadAudiobook(
                                 lib.deviceId, lib.deviceName, lib.baseUrl, b,
@@ -180,9 +183,11 @@ internal fun AudiobookRow(
     onClick: () -> Unit,
     remote: Boolean = false,
 ) {
+    val available = com.aurora.music.ui.components.LocalRemoteAvailable.current
     Row(
         Modifier.fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = available, onClick = onClick)
+            .alpha(if (available) 1f else 0.45f)
             .padding(horizontal = 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

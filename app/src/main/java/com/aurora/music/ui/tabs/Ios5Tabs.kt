@@ -110,6 +110,7 @@ fun HomeTab(
                         kind = RemoteDownloadKind.EBOOK,
                         deviceId = b.deviceId,
                         remoteKey = b.remotePath,
+                        remoteOnline = lib?.online == true,
                         onDownload = {
                             if (lib != null && wire != null) {
                                 container.remoteDownloads.downloadEbook(
@@ -151,6 +152,7 @@ fun HomeTab(
                         kind = RemoteDownloadKind.AUDIOBOOK,
                         deviceId = b.deviceId,
                         remoteKey = b.bookId,
+                        remoteOnline = lib?.online == true,
                         onDownload = {
                             if (lib != null && wire != null) {
                                 container.remoteDownloads.downloadAudiobook(
@@ -389,6 +391,7 @@ fun ArtistsTab(
                             kind = RemoteDownloadKind.ARTIST,
                             deviceId = lib.deviceId,
                             remoteKey = g.name,
+                            remoteOnline = lib.online || g.songs.any { it.streamUrl.startsWith("file:") },
                             onDownload = { downloads.downloadArtist(lib.deviceId, lib.deviceName, g) },
                         ) {
                             Ios5Cell(

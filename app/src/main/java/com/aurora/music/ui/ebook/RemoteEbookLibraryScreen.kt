@@ -53,20 +53,23 @@ fun RemoteEbookLibraryScreen(
     rootKey: String,
     dirPath: String,
     title: String,
+    /** 冷启动恢复远端页面时允许显示灰色缓存（设备还没核对完）。 */
+    allowOffline: Boolean = false,
     onBack: () -> Unit,
     onOpenDir: (dir: String, title: String) -> Unit,
     onOpenBook: (RemoteEbookEntry) -> Unit,
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val libraries by container.remoteLibrary.libraries.collectAsStateWithLifecycle()
+    val cachedLibraries by container.remoteLibrary.cachedLibraries.collectAsStateWithLifecycle()
     val recents by container.remoteLibrary.ebookRecents.collectAsStateWithLifecycle()
-    val lib = libraries.firstOrNull { it.deviceId == deviceId }
+    val lib = (if (allowOffline) cachedLibraries else libraries).firstOrNull { it.deviceId == deviceId }
     val root = lib?.let { container.remoteLibrary.ebookRootsOf(it) }
         ?.firstOrNull { it.key == rootKey }
 
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = title.ifBlank { root?.displayName ?: "电子书" }, onBack = onBack)
-        if (lib == null || root == null || (!lib.online && !lib.hasDownloads)) {
+        if (lib == null || root == null || (!lib.online && !allowOffline && !lib.hasDownloads)) {
             Ios5Empty("这台设备的资料库暂时不可用")
             return@Column
         }
@@ -124,6 +127,8 @@ fun RemoteEbookLibraryScreen(
                             kind = RemoteDownloadKind.EBOOK_FOLDER,
                             deviceId = lib.deviceId,
                             remoteKey = "${root.key}|${d.second}",
+                            remoteOnline = lib.online ||
+                                dirBooks.any { downloads.isEbookDownloaded(lib.deviceId, it.path) },
                             onDownload = {
                                 downloads.downloadEbookFolder(
                                     lib.deviceId, lib.deviceName, lib.baseUrl, root, d.second, d.first, dirBooks,
@@ -157,6 +162,7 @@ fun RemoteEbookLibraryScreen(
                             kind = RemoteDownloadKind.EBOOK,
                             deviceId = b.deviceId,
                             remoteKey = b.remotePath,
+                            remoteOnline = lib.online || downloads.isEbookDownloaded(lib.deviceId, b.remotePath),
                             onDownload = {
                                 if (wire != null) {
                                     downloads.downloadEbook(

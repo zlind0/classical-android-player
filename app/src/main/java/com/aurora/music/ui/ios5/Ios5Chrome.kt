@@ -83,6 +83,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.aurora.music.ui.components.LocalRemoteAvailable
 import com.aurora.music.model.Song
 import com.aurora.music.navigation.ios5Tabs
 import com.aurora.music.ui.components.Artwork
@@ -358,6 +359,7 @@ data class Ios5HeaderAction(
     val icon: ImageVector,
     val onClick: () -> Unit,
     val danger: Boolean = false,
+    val enabled: Boolean = true,
 )
 
 /**
@@ -389,7 +391,7 @@ fun Ios5ActionsHeader(
         )
         actions.forEachIndexed { i, a ->
             if (i > 0) Spacer(Modifier.width(8.dp))
-            Ios5MiniButton(text = a.text, icon = a.icon, onClick = a.onClick, danger = a.danger)
+            Ios5MiniButton(text = a.text, icon = a.icon, onClick = a.onClick, danger = a.danger, enabled = a.enabled)
         }
     }
 }
@@ -401,6 +403,7 @@ fun Ios5MiniButton(
     icon: ImageVector,
     onClick: () -> Unit,
     danger: Boolean = false,
+    enabled: Boolean = true,
 ) {
     val ink = if (danger) Color(0xFFC03232) else Color(0xFF3E444D)
     val shape = RoundedCornerShape(6.dp)
@@ -414,7 +417,8 @@ fun Ios5MiniButton(
                 ),
             )
             .border(1.dp, Color(0xFF9AA0A8), shape)
-            .clickable(onClick = onClick)
+            .alpha(if (enabled) 1f else 0.45f)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -454,10 +458,12 @@ fun Ios5Cell(
     leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
+    val available = LocalRemoteAvailable.current
     Row(
         Modifier.fillMaxWidth()
             .heightIn(min = Ios5Dimens.CellHeight)
-            .clickable(onClick = onClick)
+            .alpha(if (available) 1f else 0.45f)
+            .clickable(enabled = available, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -967,10 +973,12 @@ fun Ios5SongRow(
     remote: Boolean = false,
     onClick: () -> Unit,
 ) {
+    val remoteAvailable = LocalRemoteAvailable.current
+    val available = song.available && remoteAvailable
     Row(
         Modifier.fillMaxWidth()
-            .clickable(onClick = onClick)
-            .alpha(if (song.available) 1f else 0.45f)
+            .clickable(enabled = available, onClick = onClick)
+            .alpha(if (available) 1f else 0.45f)
             .padding(horizontal = 12.dp, vertical = 5.dp)
             .heightIn(min = Ios5Dimens.CellHeight),
         verticalAlignment = Alignment.CenterVertically,

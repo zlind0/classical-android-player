@@ -25,7 +25,16 @@ object Ios5Routes {
     const val MORE_FOLDERS = "ios5_more_folders"
 
     /** 局域网艺人/专辑的曲目页（内容来自 RemoteLibraryManager，不经过本地 repository）。 */
-    const val REMOTE_GROUP = "ios5_remote_group"
+    const val REMOTE_GROUP =
+        "ios5_remote_group?device={device}&kind={kind}&key={key}&title={title}&subtitle={subtitle}"
+    fun remoteGroup(
+        device: String,
+        kind: String,
+        key: String,
+        title: String = "",
+        subtitle: String = "",
+    ) = "ios5_remote_group?device=${Uri.encode(device)}&kind=${Uri.encode(kind)}&key=${Uri.encode(key)}" +
+        "&title=${Uri.encode(title)}&subtitle=${Uri.encode(subtitle)}"
     const val FOLDER = "ios5_folder?fid={fid}&title={title}"
     fun folder(fid: String = "", title: String = "") =
         "ios5_folder?fid=${Uri.encode(fid)}&title=${Uri.encode(title)}"

@@ -58,6 +58,12 @@ val LocalIos5SwipeReveal = compositionLocalOf { 0f }
 val LocalRemoteDownloadState = compositionLocalOf { RemoteDownloadUi() }
 
 /**
+ * 当前远端条目是否可用（设备在线，或条目本身已下载）。
+ * 行组件读取它来变灰并禁止点击；默认 true，本地条目不受影响。
+ */
+val LocalRemoteAvailable = compositionLocalOf { true }
+
+/**
  * 远程条目的左侧状态图标：未下载 = WiFi，下载中 = 进度环，已下载 = 蓝色勾。
  * 右滑时会淡出，把位置让给蓝色下载按钮。
  */
@@ -125,12 +131,13 @@ fun Ios5SwipeRow(
     onDownload: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
+    allowDownload: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
     val actionWidth = 78.dp
     val actionPx = with(density) { actionWidth.toPx() }.coerceAtLeast(1f)
-    val canDownload = state.status != RemoteDownloadStatus.DOWNLOADED
+    val canDownload = allowDownload && state.status != RemoteDownloadStatus.DOWNLOADED
     val canDelete = state.status == RemoteDownloadStatus.DOWNLOADED
     val maxLeft = if (canDelete) actionPx else 0f
     val maxRight = if (canDownload) actionPx else 0f
@@ -252,17 +259,23 @@ fun RemoteDownloadSwipeRow(
     remoteKey: String,
     onDownload: () -> Unit,
     modifier: Modifier = Modifier,
+    remoteOnline: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val context = LocalContext.current
     val downloads = (context.applicationContext as AuroraApplication).container.remoteDownloads
     val all by downloads.ui.collectAsStateWithLifecycle()
     val state = all[downloads.stateKey(kind, deviceId, remoteKey)] ?: RemoteDownloadUi()
-    Ios5SwipeRow(
-        state = state,
-        onDownload = onDownload,
-        onDelete = { downloads.delete(kind, deviceId, remoteKey) },
-        modifier = modifier,
-        content = content,
-    )
+    // 设备离线时未下载的条目变灰禁点；已下载条目仍可离线使用/删除。
+    val enabled = remoteOnline || state.status == RemoteDownloadStatus.DOWNLOADED
+    CompositionLocalProvider(LocalRemoteAvailable provides enabled) {
+        Ios5SwipeRow(
+            state = state,
+            onDownload = onDownload,
+            onDelete = { downloads.delete(kind, deviceId, remoteKey) },
+            modifier = modifier,
+            allowDownload = remoteOnline,
+            content = content,
+        )
+    }
 }
