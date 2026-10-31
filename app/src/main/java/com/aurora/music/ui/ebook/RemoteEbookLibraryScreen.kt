@@ -28,9 +28,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.cast.RemoteDeviceLibrary
+import com.aurora.music.data.cast.RemoteDownloadKind
 import com.aurora.music.data.cast.RemoteEbookEntry
 import com.aurora.music.data.cast.RemoteEbookRootWire
-import com.aurora.music.ui.components.Ios5WifiIcon
+import com.aurora.music.ui.components.Ios5RemoteStatusIcon
+import com.aurora.music.ui.components.RemoteDownloadSwipeRow
 import com.aurora.music.ui.ios5.Ios5Cell
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5Empty
@@ -64,7 +66,7 @@ fun RemoteEbookLibraryScreen(
 
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = title.ifBlank { root?.displayName ?: "电子书" }, onBack = onBack)
-        if (lib == null || !lib.online || root == null) {
+        if (lib == null || root == null || (!lib.online && !lib.hasDownloads)) {
             Ios5Empty("这台设备的资料库暂时不可用")
             return@Column
         }
@@ -74,8 +76,11 @@ fun RemoteEbookLibraryScreen(
             dirPath.isNotBlank() -> dirPath
             else -> root.rootPath
         }
-        val books = remember(lib, root, recents, currentDir) {
-            booksInDir(lib, root, currentDir).map { b ->
+        val bookWires = remember(lib, root, currentDir) {
+            booksInDir(lib, root, currentDir)
+        }
+        val books = remember(lib, root, recents, currentDir, bookWires) {
+            bookWires.map { b ->
                 val cached = recents.firstOrNull {
                     it.deviceId == lib.deviceId && it.remotePath == b.path
                 }
@@ -87,11 +92,14 @@ fun RemoteEbookLibraryScreen(
                     author = b.author,
                     coverUrl = container.remoteLibrary.ebookCoverUrl(lib, b.path, b.hasCover),
                     size = b.size,
-                    localPath = cached?.localPath.orEmpty(),
+                    localPath = container.remoteDownloads.localEbookPath(lib.deviceId, b.path)
+                        ?: cached?.localPath.orEmpty(),
                     lastReadAt = cached?.lastReadAt ?: 0L,
                 )
             }.sortedBy { it.displayTitle.lowercase() }
         }
+        val wireByPath = remember(bookWires) { bookWires.associateBy { it.path } }
+        val downloads = container.remoteDownloads
         val dirs = remember(lib, root, currentDir) {
             subDirs(lib, root, currentDir)
         }
@@ -109,35 +117,63 @@ fun RemoteEbookLibraryScreen(
                 if (dirs.isNotEmpty()) {
                     item { Ios5SectionTitle("文件夹（${dirs.size}）") }
                     ios5Rows(dirs, key = { it.second }) { _, d ->
-                        Ios5Cell(
-                            title = d.first,
-                            onClick = { onOpenDir(d.second, d.first) },
-                            leading = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Ios5WifiIcon()
-                                    Spacer(Modifier.width(8.dp))
-                                    Icon(
-                                        Icons.Filled.Folder,
-                                        null,
-                                        tint = Ios5Colors.IosBlue,
-                                        modifier = Modifier.size(40.dp),
-                                    )
-                                }
+                        val dirBooks = remember(lib, root, d.second) {
+                            booksUnderDir(lib, root, d.second)
+                        }
+                        RemoteDownloadSwipeRow(
+                            kind = RemoteDownloadKind.EBOOK_FOLDER,
+                            deviceId = lib.deviceId,
+                            remoteKey = "${root.key}|${d.second}",
+                            onDownload = {
+                                downloads.downloadEbookFolder(
+                                    lib.deviceId, lib.deviceName, lib.baseUrl, root, d.second, d.first, dirBooks,
+                                )
                             },
-                        )
+                        ) {
+                            Ios5Cell(
+                                title = d.first,
+                                onClick = { onOpenDir(d.second, d.first) },
+                                leading = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Ios5RemoteStatusIcon()
+                                        Spacer(Modifier.width(8.dp))
+                                        Icon(
+                                            Icons.Filled.Folder,
+                                            null,
+                                            tint = Ios5Colors.IosBlue,
+                                            modifier = Modifier.size(40.dp),
+                                        )
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
                 if (books.isNotEmpty()) {
                     item { Ios5SectionTitle("电子书（${books.size}）") }
                     ios5Rows(books, key = { it.key }) { _, b ->
-                        EbookRow(
-                            title = b.displayTitle,
-                            subtitle = authorAndProgress(b.author, 0f),
-                            coverPath = b.coverUrl,
-                            accentKey = b.key,
-                            remote = true,
-                            onClick = { onOpenBook(b) },
-                        )
+                        val wire = wireByPath[b.remotePath]
+                        RemoteDownloadSwipeRow(
+                            kind = RemoteDownloadKind.EBOOK,
+                            deviceId = b.deviceId,
+                            remoteKey = b.remotePath,
+                            onDownload = {
+                                if (wire != null) {
+                                    downloads.downloadEbook(
+                                        b.deviceId, b.deviceName, lib.baseUrl, wire, b.coverUrl, root,
+                                    )
+                                }
+                            },
+                        ) {
+                            EbookRow(
+                                title = b.displayTitle,
+                                subtitle = authorAndProgress(b.author, 0f),
+                                coverPath = b.coverUrl,
+                                accentKey = b.key,
+                                remote = true,
+                                onClick = { onOpenBook(b) },
+                            )
+                        }
                     }
                 } else if (dirs.isNotEmpty()) {
                     item { Ios5SectionTitle("电子书") }
@@ -165,6 +201,17 @@ private fun booksInDir(
     }
     if (root.shelf || dir.isBlank()) return scoped
     return scoped.filter { File(it.path).parent == dir }
+}
+
+/** 目录下载用：包含所有子目录里的书。 */
+private fun booksUnderDir(
+    lib: RemoteDeviceLibrary,
+    root: RemoteEbookRootWire,
+    dir: String,
+): List<com.aurora.music.data.cast.RemoteEbookWire> {
+    if (dir.isBlank()) return emptyList()
+    val prefix = dir.trimEnd('/') + "/"
+    return booksInDir(lib, root, "").filter { it.path.startsWith(prefix) }
 }
 
 private fun subDirs(

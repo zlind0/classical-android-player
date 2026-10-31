@@ -45,12 +45,14 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.AlbumRow
 import com.aurora.music.data.LibrarySource
+import com.aurora.music.data.cast.RemoteDownloadKind
 import com.aurora.music.data.mapMergeRows
 import com.aurora.music.data.mergeEnabledFor
 import com.aurora.music.model.Album
 import com.aurora.music.model.Song
 import com.aurora.music.navigation.Ios5Routes
 import com.aurora.music.ui.components.Artwork
+import com.aurora.music.ui.components.RemoteDownloadSwipeRow
 import com.aurora.music.ui.ios5.Ios5Cell
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5Empty
@@ -80,6 +82,7 @@ fun Ios5SongsBrowse(
     onPlaySongs: (List<Song>, Int) -> Unit,
     remote: List<com.aurora.music.data.cast.RemoteDeviceLibrary> = emptyList(),
 ) {
+    val downloads = (LocalContext.current.applicationContext as AuroraApplication).container.remoteDownloads
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "歌曲", onBack = onBack, onSearch = onSearch)
         val remoteWithSongs = remote.filter { it.songs.isNotEmpty() }
@@ -102,8 +105,15 @@ fun Ios5SongsBrowse(
                         Ios5SectionTitle("${lib.deviceName}${if (lib.online) "" else "（离线）"} - 远程（${lib.songs.size}）")
                     }
                     ios5Rows(lib.songs, key = { "r:${lib.deviceId}:${it.id}" }) { i, s ->
-                        Ios5SongRow(s, s.id == player.current.id, player.isPlaying, remote = true) {
-                            onPlaySongs(lib.songs, i)
+                        RemoteDownloadSwipeRow(
+                            kind = RemoteDownloadKind.TRACK,
+                            deviceId = lib.deviceId,
+                            remoteKey = s.id,
+                            onDownload = { downloads.downloadSong(lib.deviceId, lib.deviceName, s) },
+                        ) {
+                            Ios5SongRow(s, s.id == player.current.id, player.isPlaying, remote = true) {
+                                onPlaySongs(lib.songs, i)
+                            }
                         }
                     }
                 }
@@ -124,6 +134,7 @@ fun Ios5AlbumsBrowse(
     remote: List<com.aurora.music.data.cast.RemoteDeviceLibrary> = emptyList(),
     onOpenRemoteAlbum: (com.aurora.music.data.cast.RemoteDeviceLibrary, com.aurora.music.data.cast.RemoteAlbumGroup) -> Unit = { _, _ -> },
 ) {
+    val downloads = (LocalContext.current.applicationContext as AuroraApplication).container.remoteDownloads
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "专辑", onBack = onBack, onSearch = onSearch)
         val remoteWithAlbums = remote.filter { it.albums.isNotEmpty() }
@@ -150,19 +161,26 @@ fun Ios5AlbumsBrowse(
                         Ios5SectionTitle("${lib.deviceName}${if (lib.online) "" else "（离线）"} - 远程（${lib.albums.size}）")
                     }
                     ios5Rows(lib.albums, key = { "r:${lib.deviceId}:${it.id}" }) { _, a ->
-                        Ios5Cell(
-                            title = a.title,
-                            subtitle = a.artist,
-                            count = "${a.songs.size}",
-                            onClick = { onOpenRemoteAlbum(lib, a) },
-                            leading = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    com.aurora.music.ui.components.Ios5WifiIcon()
-                                    Spacer(Modifier.width(8.dp))
-                                    Artwork(a.artworkUrl, accentFor(a.id), Modifier.size(44.dp), corner = 6.dp)
-                                }
-                            },
-                        )
+                        RemoteDownloadSwipeRow(
+                            kind = RemoteDownloadKind.ALBUM,
+                            deviceId = lib.deviceId,
+                            remoteKey = a.id,
+                            onDownload = { downloads.downloadAlbum(lib.deviceId, lib.deviceName, a) },
+                        ) {
+                            Ios5Cell(
+                                title = a.title,
+                                subtitle = a.artist,
+                                count = "${a.songs.size}",
+                                onClick = { onOpenRemoteAlbum(lib, a) },
+                                leading = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        com.aurora.music.ui.components.Ios5RemoteStatusIcon()
+                                        Spacer(Modifier.width(8.dp))
+                                        Artwork(a.artworkUrl, accentFor(a.id), Modifier.size(44.dp), corner = 6.dp)
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             }

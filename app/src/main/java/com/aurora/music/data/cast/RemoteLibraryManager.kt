@@ -48,6 +48,7 @@ class RemoteLibraryManager(
     context: Context,
     private val discovery: CastDiscovery,
     private val ebookRecentLimit: () -> Int,
+    private val downloads: RemoteDownloadManager,
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -104,6 +105,8 @@ class RemoteLibraryManager(
             loadRecents()
             syncLoop()
         }
+        // 用户下载/删除后，资料库里“只存在于本地”的条目要立刻出现在原设备页面下。
+        scope.launch { downloads.records.collect { rebuildLibraries() } }
     }
 
     // ---- 同步 ----
@@ -264,7 +267,9 @@ class RemoteLibraryManager(
     /** 30 天没连上过：删掉该设备的 meta 与封面缓存。 */
     private fun pruneExpired() {
         val cutoff = System.currentTimeMillis() - CACHE_TTL_MS
-        val expired = payloads.values.filter { it.lastSeenAt == 0L || it.lastSeenAt < cutoff }
+        val expired = payloads.values.filter {
+            (it.lastSeenAt == 0L || it.lastSeenAt < cutoff) && !downloads.hasDownloads(it.deviceId)
+        }
         if (expired.isEmpty()) return
         expired.forEach {
             payloads.remove(it.deviceId)
@@ -275,7 +280,23 @@ class RemoteLibraryManager(
     }
 
     private fun rebuildLibraries() {
-        val out = payloads.values.map { it.toLibrary(appContext) }.sortedBy { it.deviceName.lowercase() }
+        val merged = payloads.values
+            .map { it.toLibrary(appContext) }
+            .associateBy { it.deviceId }
+            .toMutableMap()
+        // 下载记录按设备补进资料库：远端没同步到/已删除/设备离线时，本地仍然展示这些条目。
+        downloads.records.value.groupBy { it.deviceId }.forEach { (deviceId, recs) ->
+            val base = merged[deviceId] ?: RemoteDeviceLibrary(
+                deviceId = deviceId,
+                deviceName = downloads.deviceNameOf(deviceId) ?: "远程设备",
+                host = "",
+                port = 0,
+                online = false,
+                fetchedAt = 0L,
+            )
+            merged[deviceId] = mergeDownloaded(base, recs)
+        }
+        val out = merged.values.sortedBy { it.deviceName.lowercase() }
         val allSongs = ConcurrentHashMap<String, Song>()
         out.forEach { lib -> lib.songs.forEach { allSongs[it.id] = it } }
         songsById.putAll(allSongs)
@@ -287,6 +308,102 @@ class RemoteLibraryManager(
         lastQueueSignature = ""
         // 远程有声书在听列表：以设备快照为元信息，播放记录为进度
         rebuildAbookRecents()
+    }
+
+    /**
+     * 把用户已下载的条目合并进设备资料库。
+     * - 设备在线时用远端元信息为主，已下载的曲目换成 file:// 播放地址，远端已消失的条目用快照补回；
+     * - 设备离线时只保留用户下载过的内容，未下载的远端目录/条目不再展示；
+     * - 电子书/有声书封面优先使用下载目录里的本地文件，设备离线也不会缺图。
+     */
+    private fun mergeDownloaded(base: RemoteDeviceLibrary, recs: List<RemoteDownloadRecord>): RemoteDeviceLibrary {
+        // 离线设备只展示已下载的内容，不展示上次同步到的整份远端目录。
+        val baseAlbums = if (base.online) base.albums else emptyList()
+        val baseEbooks = if (base.online) base.ebooks else emptyList()
+        val baseRoots = if (base.online) base.ebookRoots else emptyList()
+        val baseAudiobooks = if (base.online) base.audiobooks else emptyList()
+        val baseArtistImages = if (base.online) base.artists.associate { it.name to it.imageUrl } else emptyMap()
+
+        val albumsById = LinkedHashMap<String, RemoteAlbumGroup>()
+        baseAlbums.forEach { albumsById[it.id] = it }
+        downloads.downloadedAlbums(base.deviceId).forEach { group ->
+            val old = albumsById[group.id]
+            albumsById[group.id] = if (old == null) {
+                group
+            } else {
+                old.copy(
+                    songs = mergeSongs(old.songs, group.songs),
+                    artworkUrl = old.artworkUrl.ifBlank { group.artworkUrl },
+                )
+            }
+        }
+        val albums = albumsById.values.sortedBy { it.title.lowercase() }
+        val songs = albums.flatMap { it.songs }
+
+        val downloadedArtistCovers = downloads.artistCovers(base.deviceId)
+        val artists = songs.groupBy { it.artist.ifBlank { "未知艺人" } }
+            .map { (name, list) ->
+                RemoteArtistGroup(
+                    name = name,
+                    songs = list,
+                    imageUrl = downloadedArtistCovers[name]?.takeIf { it.isNotBlank() }
+                        ?: baseArtistImages[name].orEmpty()
+                        .ifBlank { list.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl.orEmpty() },
+                )
+            }
+            .sortedBy { it.name.lowercase() }
+
+        val ebooksByPath = LinkedHashMap<String, RemoteEbookWire>()
+        baseEbooks.forEach { ebooksByPath[it.path] = it }
+        downloads.downloadedEbooks(base.deviceId).forEach { ebooksByPath.putIfAbsent(it.path, it) }
+        val ebooks = ebooksByPath.values.toList()
+
+        val rootsByKey = LinkedHashMap<String, RemoteEbookRootWire>()
+        baseRoots.forEach { rootsByKey[it.key] = it }
+        downloads.downloadedEbookRoots(base.deviceId).forEach { rootsByKey.putIfAbsent(it.key, it) }
+        // 远端根目录被删掉/改 key 时，给本地书一个能点进去的兜底根。
+        ebooks.forEach { b ->
+            val key = b.rootKey.ifBlank { "downloaded" }
+            if (key !in rootsByKey) {
+                rootsByKey[key] = RemoteEbookRootWire(
+                    key = key,
+                    rootPath = "",
+                    displayName = "已下载",
+                    shelf = false,
+                    bookCount = ebooks.count { it.rootKey == b.rootKey },
+                )
+            }
+        }
+
+        val audiobooksById = LinkedHashMap<String, RemoteAudiobookWire>()
+        baseAudiobooks.forEach { audiobooksById[it.id] = it }
+        downloads.downloadedAudiobooks(base.deviceId).forEach { audiobooksById.putIfAbsent(it.id, it) }
+
+        return base.copy(
+            songs = songs,
+            albums = albums,
+            artists = artists,
+            ebookRoots = rootsByKey.values.toList(),
+            ebooks = ebooks,
+            audiobooks = audiobooksById.values.toList(),
+            hasDownloads = recs.isNotEmpty(),
+        )
+    }
+
+    private fun mergeSongs(base: List<Song>, downloaded: List<Song>): List<Song> {
+        val byId = downloaded.associateBy { it.id }
+        val baseIds = base.map { it.id }.toSet()
+        return base.map { s ->
+            byId[s.id]?.let { d ->
+                d.copy(
+                    artist = d.artist.ifBlank { s.artist },
+                    album = d.album.ifBlank { s.album },
+                    albumId = d.albumId.ifBlank { s.albumId },
+                    artworkUrl = d.artworkUrl.ifBlank { s.artworkUrl },
+                    durationSec = d.durationSec.takeIf { it > 0 } ?: s.durationSec,
+                )
+            } ?: s
+        } + downloaded.filter { it.id !in baseIds }
     }
 
     // ---- 曲名合成（与本地专辑同一套 lib-titlemerge 规则） ----
@@ -328,7 +445,7 @@ class RemoteLibraryManager(
                     author = b.author,
                     coverUrl = ebookCoverUrl(lib, b.path, b.hasCover),
                     size = b.size,
-                    localPath = cached?.localPath.orEmpty(),
+                    localPath = downloads.localEbookPath(lib.deviceId, b.path) ?: cached?.localPath.orEmpty(),
                     lastReadAt = cached?.lastReadAt ?: 0L,
                 )
             }
@@ -337,15 +454,19 @@ class RemoteLibraryManager(
     fun ebookEntriesOf(deviceId: String): List<RemoteEbookEntry> =
         ebookEntries().filter { it.deviceId == deviceId }
 
-    fun ebookCoverUrl(lib: RemoteDeviceLibrary, path: String, hasCover: Boolean): String =
-        if (!hasCover) "" else RemoteArtCache.cachedOrRemote(
+    fun ebookCoverUrl(lib: RemoteDeviceLibrary, path: String, hasCover: Boolean): String {
+        downloads.ebookCover(lib.deviceId, path)?.let { return it }
+        return if (!hasCover) "" else RemoteArtCache.cachedOrRemote(
             appContext, lib.deviceId, "${lib.baseUrl}/media/cover?kind=ebook&key=${enc(path)}",
         )
+    }
 
-    fun audiobookCoverUrl(lib: RemoteDeviceLibrary, bookId: String, hasCover: Boolean): String =
-        if (!hasCover) "" else RemoteArtCache.cachedOrRemote(
+    fun audiobookCoverUrl(lib: RemoteDeviceLibrary, bookId: String, hasCover: Boolean): String {
+        downloads.audiobookCover(lib.deviceId, bookId)?.let { return it }
+        return if (!hasCover) "" else RemoteArtCache.cachedOrRemote(
             appContext, lib.deviceId, "${lib.baseUrl}/media/cover?kind=audiobook&key=${enc(bookId)}",
         )
+    }
 
     /** 老版本设备没有根目录元信息时兜底：按路径给出一个平铺根。 */
     fun ebookRootsOf(lib: RemoteDeviceLibrary): List<RemoteEbookRootWire> =
@@ -363,6 +484,22 @@ class RemoteLibraryManager(
         }
 
     suspend fun openEbook(entry: RemoteEbookEntry): File? = withContext(Dispatchers.IO) {
+        // 用户显式下载过：直接打开本地副本，设备离线也能读。
+        val downloaded = downloads.localEbookPath(entry.deviceId, entry.remotePath)
+        if (downloaded != null) {
+            val f = File(downloaded)
+            val now = System.currentTimeMillis()
+            val updated = (listOf(
+                entry.copy(
+                    localPath = f.absolutePath,
+                    deviceName = entry.deviceName,
+                    lastReadAt = now,
+                ),
+            ) + _ebookRecents.value.filterNot { it.key == entry.key })
+                .sortedByDescending { it.lastReadAt }
+            setEbookRecents(updated)
+            return@withContext f
+        }
         val lib = _libraries.value.firstOrNull { it.deviceId == entry.deviceId }
             ?: return@withContext null
         val dir = File(ebookDir, safeId(entry.deviceId)).apply { mkdirs() }
@@ -473,6 +610,7 @@ class RemoteLibraryManager(
         val lib = _libraries.value.firstOrNull { it.deviceId == entry.deviceId } ?: return emptyList()
         return entry.chapters.mapIndexed { i, c ->
             val id = remoteAudiobookSongId(entry.deviceId, entry.bookId, i)
+            val localChapter = downloads.localChapterPath(entry.deviceId, c.path)
             val song = Song(
                 id = id,
                 title = c.title.ifBlank { c.path.substringAfterLast('/').substringBeforeLast('.') },
@@ -480,13 +618,14 @@ class RemoteLibraryManager(
                 album = entry.displayTitle,
                 artworkUrl = entry.coverUrl,
                 durationSec = c.durationSec,
-                streamUrl = "${lib.baseUrl}/media/audiobook?path=${enc(c.path)}",
+                streamUrl = localChapter?.let { Uri.fromFile(File(it)).toString() }
+                    ?: "${lib.baseUrl}/media/audiobook?path=${enc(c.path)}",
                 suffix = c.path.substringAfterLast('.', ""),
-                path = c.path,
+                path = localChapter.orEmpty(),
                 accent = accentFor(c.path),
                 trackNumber = c.trackNumber,
-                // 离线时只有已缓存的三章可点；其余 UI 会按 available=false 显示灰色。
-                available = lib.online || chapterCached(entry.deviceId, c.path),
+                // 离线时只有已下载/已缓存的章节可点；其余 UI 会按 available=false 显示灰色。
+                available = localChapter != null || lib.online || chapterCached(entry.deviceId, c.path),
             )
             songsById[id] = song
             song
@@ -510,6 +649,7 @@ class RemoteLibraryManager(
     }
 
     fun chapterCached(deviceId: String, path: String): Boolean {
+        if (downloads.localChapterPath(deviceId, path) != null) return true
         val lib = _libraries.value.firstOrNull { it.deviceId == deviceId } ?: return false
         return RemoteMediaCache.isCached("${lib.baseUrl}/media/audiobook?path=${enc(path)}")
     }

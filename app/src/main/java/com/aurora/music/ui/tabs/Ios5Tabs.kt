@@ -36,11 +36,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
+import com.aurora.music.data.cast.RemoteDownloadKind
 import com.aurora.music.model.Artist
 import com.aurora.music.model.Playlist
 import com.aurora.music.model.Song
 import com.aurora.music.navigation.Ios5Routes
 import com.aurora.music.ui.components.Artwork
+import com.aurora.music.ui.components.RemoteDownloadSwipeRow
 import com.aurora.music.ui.ios5.Ios5Cell
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5Empty
@@ -102,14 +104,30 @@ fun HomeTab(
                     )
                 }
                 ios5Rows(remoteBooks, key = { it.key }) { _, b ->
-                    EbookRow(
-                        title = b.displayTitle,
-                        subtitle = b.deviceName,
-                        coverPath = b.coverUrl,
-                        accentKey = b.key,
-                        remote = true,
-                        onClick = { onOpenRemoteBook(b) },
-                    )
+                    val lib = container.remoteLibrary.libraries.value.firstOrNull { it.deviceId == b.deviceId }
+                    val wire = lib?.ebooks?.firstOrNull { it.path == b.remotePath }
+                    RemoteDownloadSwipeRow(
+                        kind = RemoteDownloadKind.EBOOK,
+                        deviceId = b.deviceId,
+                        remoteKey = b.remotePath,
+                        onDownload = {
+                            if (lib != null && wire != null) {
+                                container.remoteDownloads.downloadEbook(
+                                    b.deviceId, b.deviceName, lib.baseUrl, wire, b.coverUrl,
+                                    container.remoteLibrary.ebookRootsOf(lib).firstOrNull { it.key == wire.rootKey },
+                                )
+                            }
+                        },
+                    ) {
+                        EbookRow(
+                            title = b.displayTitle,
+                            subtitle = b.deviceName,
+                            coverPath = b.coverUrl,
+                            accentKey = b.key,
+                            remote = true,
+                            onClick = { onOpenRemoteBook(b) },
+                        )
+                    }
                 }
             }
             // 最近听的 3 本有声书（点行整本续播）
@@ -127,14 +145,29 @@ fun HomeTab(
                     )
                 }
                 ios5Rows(remoteAbooks, key = { it.key }) { _, b ->
-                    AudiobookRow(
-                        title = b.displayTitle,
-                        subtitle = bookSubtitle(b.chapters.size, b.currentIndex, 0f, 0, played = true),
-                        coverPath = b.coverUrl,
-                        accentKey = b.key,
-                        remote = true,
-                        onClick = { onPlayRemoteAudiobook(b) },
-                    )
+                    val lib = container.remoteLibrary.libraries.value.firstOrNull { it.deviceId == b.deviceId }
+                    val wire = lib?.audiobooks?.firstOrNull { it.id == b.bookId }
+                    RemoteDownloadSwipeRow(
+                        kind = RemoteDownloadKind.AUDIOBOOK,
+                        deviceId = b.deviceId,
+                        remoteKey = b.bookId,
+                        onDownload = {
+                            if (lib != null && wire != null) {
+                                container.remoteDownloads.downloadAudiobook(
+                                    b.deviceId, b.deviceName, lib.baseUrl, wire,
+                                )
+                            }
+                        },
+                    ) {
+                        AudiobookRow(
+                            title = b.displayTitle,
+                            subtitle = bookSubtitle(b.chapters.size, b.currentIndex, 0f, 0, played = true),
+                            coverPath = b.coverUrl,
+                            accentKey = b.key,
+                            remote = true,
+                            onClick = { onPlayRemoteAudiobook(b) },
+                        )
+                    }
                 }
             }
             if (d.recentlyPlayed.isNotEmpty()) {
@@ -324,6 +357,8 @@ fun ArtistsTab(
     onOpenRemoteArtist: (com.aurora.music.data.cast.RemoteDeviceLibrary, com.aurora.music.data.cast.RemoteArtistGroup) -> Unit = { _, _ -> },
     onOpenSearch: () -> Unit,
 ) {
+    val downloads = (androidx.compose.ui.platform.LocalContext.current.applicationContext as AuroraApplication)
+        .container.remoteDownloads
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "艺人", onSearch = onOpenSearch)
         val remoteWithArtists = remote.filter { it.artists.isNotEmpty() }
@@ -350,18 +385,25 @@ fun ArtistsTab(
                         )
                     }
                     ios5Rows(lib.artists, key = { "r:${lib.deviceId}:${it.name}" }) { _, g ->
-                        Ios5Cell(
-                            title = g.name,
-                            count = "${g.songs.size}",
-                            onClick = { onOpenRemoteArtist(lib, g) },
-                            leading = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    com.aurora.music.ui.components.Ios5WifiIcon()
-                                    Spacer(Modifier.width(8.dp))
-                                    Artwork(g.imageUrl, accentFor(g.name), Modifier.size(40.dp), corner = 20.dp)
-                                }
-                            },
-                        )
+                        RemoteDownloadSwipeRow(
+                            kind = RemoteDownloadKind.ARTIST,
+                            deviceId = lib.deviceId,
+                            remoteKey = g.name,
+                            onDownload = { downloads.downloadArtist(lib.deviceId, lib.deviceName, g) },
+                        ) {
+                            Ios5Cell(
+                                title = g.name,
+                                count = "${g.songs.size}",
+                                onClick = { onOpenRemoteArtist(lib, g) },
+                                leading = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        com.aurora.music.ui.components.Ios5RemoteStatusIcon()
+                                        Spacer(Modifier.width(8.dp))
+                                        Artwork(g.imageUrl, accentFor(g.name), Modifier.size(40.dp), corner = 20.dp)
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             }

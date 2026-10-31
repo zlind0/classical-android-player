@@ -26,8 +26,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
+import com.aurora.music.data.cast.RemoteDownloadKind
 import com.aurora.music.data.ebook.EBOOK_SHELF_ROOT_ID
 import com.aurora.music.ui.components.Artwork
+import com.aurora.music.ui.components.RemoteDownloadSwipeRow
 import com.aurora.music.ui.ios5.Ios5Cell
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5Colors
@@ -85,14 +87,30 @@ fun EbooksTab(
                     )
                 }
                 ios5Rows(remoteRecent, key = { it.key }) { _, b ->
-                    EbookRow(
-                        title = b.displayTitle,
-                        subtitle = b.deviceName,
-                        coverPath = b.coverUrl,
-                        accentKey = b.key,
-                        remote = true,
-                        onClick = { onOpenRemoteBook(b) },
-                    )
+                    val lib = remoteLibraries.firstOrNull { it.deviceId == b.deviceId }
+                    val wire = lib?.ebooks?.firstOrNull { it.path == b.remotePath }
+                    RemoteDownloadSwipeRow(
+                        kind = RemoteDownloadKind.EBOOK,
+                        deviceId = b.deviceId,
+                        remoteKey = b.remotePath,
+                        onDownload = {
+                            if (lib != null && wire != null) {
+                                container.remoteDownloads.downloadEbook(
+                                    b.deviceId, b.deviceName, lib.baseUrl, wire, b.coverUrl,
+                                    container.remoteLibrary.ebookRootsOf(lib).firstOrNull { it.key == wire.rootKey },
+                                )
+                            }
+                        },
+                    ) {
+                        EbookRow(
+                            title = b.displayTitle,
+                            subtitle = b.deviceName,
+                            coverPath = b.coverUrl,
+                            accentKey = b.key,
+                            remote = true,
+                            onClick = { onOpenRemoteBook(b) },
+                        )
+                    }
                 }
             }
             item { Ios5SectionTitle("书库") }
@@ -127,29 +145,56 @@ fun EbooksTab(
                 }
                 val roots = container.remoteLibrary.ebookRootsOf(lib)
                 ios5Rows(roots, key = { "r:${lib.deviceId}:${it.key}" }) { _, r ->
-                    Ios5Cell(
-                        title = r.displayName.ifBlank { "电子书" },
-                        subtitle = if (r.shelf) "外部打开的电子书都存在这里" else r.rootPath,
-                        count = "${r.bookCount}",
-                        onClick = { onOpenRemoteRoot(lib.deviceId, r.key, r.displayName) },
-                        leading = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                com.aurora.music.ui.components.Ios5WifiIcon()
-                                Spacer(Modifier.width(8.dp))
-                                Icon(
-                                    if (r.shelf) Icons.Filled.Book else Icons.Filled.Folder,
-                                    null,
-                                    tint = Ios5Colors.IosBlue,
-                                    modifier = Modifier.size(40.dp),
-                                )
-                            }
+                    RemoteDownloadSwipeRow(
+                        kind = RemoteDownloadKind.EBOOK_ROOT,
+                        deviceId = lib.deviceId,
+                        remoteKey = r.key,
+                        onDownload = {
+                            container.remoteDownloads.downloadEbookRoot(
+                                lib.deviceId, lib.deviceName, lib.baseUrl, r, remoteBooksInRoot(lib, r),
+                            )
                         },
-                    )
+                    ) {
+                        Ios5Cell(
+                            title = r.displayName.ifBlank { "电子书" },
+                            subtitle = if (r.shelf) "外部打开的电子书都存在这里" else r.rootPath,
+                            count = "${r.bookCount}",
+                            onClick = { onOpenRemoteRoot(lib.deviceId, r.key, r.displayName) },
+                            leading = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    com.aurora.music.ui.components.Ios5RemoteStatusIcon()
+                                    Spacer(Modifier.width(8.dp))
+                                    Icon(
+                                        if (r.shelf) Icons.Filled.Book else Icons.Filled.Folder,
+                                        null,
+                                        tint = Ios5Colors.IosBlue,
+                                        modifier = Modifier.size(40.dp),
+                                    )
+                                }
+                            },
+                        )
+                    }
                 }
             }
             if (recent.isEmpty() && remoteRecent.isEmpty() && enabledRoots.isEmpty() && remoteLibraries.all { it.ebooks.isEmpty() }) {
                 item { Ios5Empty("还没有电子书\n请到 设置 → 电子书来源 添加目录并扫描\n也可以用其他应用打开 epub/mobi/azw3 存入默认书架") }
             }
+        }
+    }
+}
+
+private fun remoteBooksInRoot(
+    lib: com.aurora.music.data.cast.RemoteDeviceLibrary,
+    root: com.aurora.music.data.cast.RemoteEbookRootWire,
+): List<com.aurora.music.data.cast.RemoteEbookWire> {
+    if (root.key == "all") return lib.ebooks
+    return lib.ebooks.filter { b ->
+        when {
+            root.shelf -> b.rootKey == "shelf" || (b.rootKey.isBlank() && b.path.contains("/ebooks/shelf/"))
+            b.rootKey == root.key -> true
+            b.rootKey.isBlank() && root.rootPath.isNotBlank() ->
+                b.path == root.rootPath || b.path.startsWith(root.rootPath.trimEnd('/') + "/")
+            else -> false
         }
     }
 }
@@ -178,7 +223,7 @@ internal fun EbookRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (remote) {
-            com.aurora.music.ui.components.Ios5WifiIcon()
+            com.aurora.music.ui.components.Ios5RemoteStatusIcon()
             Spacer(Modifier.width(8.dp))
         }
         if (coverPath.isNotBlank()) {

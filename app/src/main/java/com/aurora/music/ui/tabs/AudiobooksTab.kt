@@ -27,7 +27,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
+import com.aurora.music.data.cast.RemoteDownloadKind
 import com.aurora.music.ui.components.Artwork
+import com.aurora.music.ui.components.RemoteDownloadSwipeRow
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5Empty
 import com.aurora.music.ui.ios5.Ios5NavBar
@@ -74,14 +76,29 @@ fun AudiobooksTab(
                     )
                 }
                 ios5Rows(remoteRecents, key = { it.key }) { _, b ->
-                    AudiobookRow(
-                        title = b.displayTitle,
-                        subtitle = bookSubtitle(b.chapters.size, b.currentIndex, 0f, 0, played = true),
-                        coverPath = b.coverUrl,
-                        accentKey = b.key,
-                        remote = true,
-                        onClick = { onPlayRemoteBook(b) },
-                    )
+                    val lib = remoteLibraries.firstOrNull { it.deviceId == b.deviceId }
+                    val wire = lib?.audiobooks?.firstOrNull { it.id == b.bookId }
+                    RemoteDownloadSwipeRow(
+                        kind = RemoteDownloadKind.AUDIOBOOK,
+                        deviceId = b.deviceId,
+                        remoteKey = b.bookId,
+                        onDownload = {
+                            if (lib != null && wire != null) {
+                                container.remoteDownloads.downloadAudiobook(
+                                    b.deviceId, b.deviceName, lib.baseUrl, wire,
+                                )
+                            }
+                        },
+                    ) {
+                        AudiobookRow(
+                            title = b.displayTitle,
+                            subtitle = bookSubtitle(b.chapters.size, b.currentIndex, 0f, 0, played = true),
+                            coverPath = b.coverUrl,
+                            accentKey = b.key,
+                            remote = true,
+                            onClick = { onPlayRemoteBook(b) },
+                        )
+                    }
                 }
             }
             item { Ios5SectionTitle("书库（${books.size}）") }
@@ -117,14 +134,25 @@ fun AudiobooksTab(
                             it.deviceId == lib.deviceId && it.bookId == b.id
                         }?.lastPlayedAt ?: 0L,
                     )
-                    AudiobookRow(
-                        title = entry.displayTitle,
-                        subtitle = bookSubtitle(entry.chapters.size, entry.currentIndex, 0f, 0, played = entry.lastPlayedAt > 0),
-                        coverPath = entry.coverUrl,
-                        accentKey = entry.key,
-                        remote = true,
-                        onClick = { onPlayRemoteBook(entry) },
-                    )
+                    RemoteDownloadSwipeRow(
+                        kind = RemoteDownloadKind.AUDIOBOOK,
+                        deviceId = lib.deviceId,
+                        remoteKey = b.id,
+                        onDownload = {
+                            container.remoteDownloads.downloadAudiobook(
+                                lib.deviceId, lib.deviceName, lib.baseUrl, b,
+                            )
+                        },
+                    ) {
+                        AudiobookRow(
+                            title = entry.displayTitle,
+                            subtitle = bookSubtitle(entry.chapters.size, entry.currentIndex, 0f, 0, played = entry.lastPlayedAt > 0),
+                            coverPath = entry.coverUrl,
+                            accentKey = entry.key,
+                            remote = true,
+                            onClick = { onPlayRemoteBook(entry) },
+                        )
+                    }
                 }
             }
             if (recents.isEmpty() && books.isEmpty() && enabledRoots.isEmpty() && remoteLibraries.all { it.audiobooks.isEmpty() }) {
@@ -159,7 +187,7 @@ internal fun AudiobookRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (remote) {
-            com.aurora.music.ui.components.Ios5WifiIcon()
+            com.aurora.music.ui.components.Ios5RemoteStatusIcon()
             Spacer(Modifier.width(8.dp))
         }
         if (coverPath.isNotBlank()) {

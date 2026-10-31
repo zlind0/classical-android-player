@@ -39,9 +39,12 @@ import androidx.compose.ui.unit.sp
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.AlbumRow
 import com.aurora.music.data.cast.RemoteAlbumGroup
+import com.aurora.music.data.cast.RemoteDownloadKind
+import com.aurora.music.data.cast.RemoteDownloadManager
 import com.aurora.music.model.Song
 import com.aurora.music.ui.components.Artwork
-import com.aurora.music.ui.components.Ios5WifiIcon
+import com.aurora.music.ui.components.Ios5RemoteStatusIcon
+import com.aurora.music.ui.components.RemoteDownloadSwipeRow
 import com.aurora.music.ui.ios5.Ios5ActionsHeader
 import com.aurora.music.ui.ios5.Ios5Cell
 import com.aurora.music.ui.ios5.Ios5CellDivider
@@ -64,6 +67,8 @@ import com.aurora.music.viewmodel.PlayerUiState
 fun Ios5RemoteDetail(
     title: String,
     subtitle: String,
+    deviceId: String,
+    deviceName: String,
     songs: List<Song>,
     albums: List<RemoteAlbumGroup>,
     singleAlbum: RemoteAlbumGroup? = null,
@@ -72,6 +77,7 @@ fun Ios5RemoteDetail(
     onSearch: () -> Unit,
     onPlaySongs: (List<Song>, Int) -> Unit,
 ) {
+    val downloads = (LocalContext.current.applicationContext as AuroraApplication).container.remoteDownloads
     var openedAlbum by remember(title, songs) { mutableStateOf<RemoteAlbumGroup?>(null) }
     // 从专辑列表直接进来时 singleAlbum 就是当前专辑；从艺人页点专辑时用 openedAlbum。
     val album = openedAlbum ?: singleAlbum
@@ -110,7 +116,20 @@ fun Ios5RemoteDetail(
             ) {
                 item {
                     Spacer(Modifier.height(8.dp))
-                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
+                    val headerArtist = if (album == null) {
+                        container.remoteLibrary.libraries.value
+                            .firstOrNull { it.deviceId == deviceId }
+                            ?.artists?.firstOrNull { it.name == title }
+                    } else {
+                        null
+                    }
+                    val headerKind = when {
+                        album != null -> RemoteDownloadKind.ALBUM
+                        headerArtist != null -> RemoteDownloadKind.ARTIST
+                        else -> null
+                    }
+                    val headerKey = album?.id ?: headerArtist?.name.orEmpty()
+                    val headerRow: @Composable () -> Unit = {
                         Row(
                             Modifier.fillMaxWidth().padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -124,7 +143,7 @@ fun Ios5RemoteDetail(
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Ios5WifiIcon()
+                                    Ios5RemoteStatusIcon()
                                     Spacer(Modifier.width(6.dp))
                                     Text(
                                         shownTitle.ifBlank { "远程资料库" },
@@ -152,23 +171,51 @@ fun Ios5RemoteDetail(
                             }
                         }
                     }
+                    Ios5Group(Modifier.padding(horizontal = 12.dp)) {
+                        if (headerKind != null) {
+                            RemoteDownloadSwipeRow(
+                                kind = headerKind,
+                                deviceId = deviceId,
+                                remoteKey = headerKey,
+                                onDownload = {
+                                    if (album != null) {
+                                        downloads.downloadAlbum(deviceId, deviceName, album)
+                                    } else {
+                                        headerArtist?.let {
+                                            downloads.downloadArtist(deviceId, deviceName, it)
+                                        }
+                                    }
+                                },
+                                content = headerRow,
+                            )
+                        } else {
+                            headerRow()
+                        }
+                    }
                 }
                 if (album == null && albums.isNotEmpty()) {
                     item { Ios5SectionTitle("专辑（${albums.size}）") }
                     ios5Rows(albums, key = { it.id }) { _, a ->
-                        Ios5Cell(
-                            title = a.title,
-                            subtitle = a.artist,
-                            count = "${a.songs.size}",
-                            onClick = { openedAlbum = a },
-                            leading = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Ios5WifiIcon()
-                                    Spacer(Modifier.width(8.dp))
-                                    Artwork(a.artworkUrl, accentFor(a.id), Modifier.size(44.dp), corner = 6.dp)
-                                }
-                            },
-                        )
+                        RemoteDownloadSwipeRow(
+                            kind = RemoteDownloadKind.ALBUM,
+                            deviceId = deviceId,
+                            remoteKey = a.id,
+                            onDownload = { downloads.downloadAlbum(deviceId, deviceName, a) },
+                        ) {
+                            Ios5Cell(
+                                title = a.title,
+                                subtitle = a.artist,
+                                count = "${a.songs.size}",
+                                onClick = { openedAlbum = a },
+                                leading = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Ios5RemoteStatusIcon()
+                                        Spacer(Modifier.width(8.dp))
+                                        Artwork(a.artworkUrl, accentFor(a.id), Modifier.size(44.dp), corner = 6.dp)
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
                 item {
@@ -197,16 +244,26 @@ fun Ios5RemoteDetail(
                             expanded = if (key in expanded) expanded - key else expanded + key
                         },
                         onPlayAt = { index -> onPlaySongs(album.songs, index) },
+                        deviceId = deviceId,
+                        deviceName = deviceName,
+                        downloads = downloads,
                     )
                 } else {
                     ios5Rows(shownSongs, key = { it.id }) { i, s ->
-                        Ios5SongRow(
-                            s,
-                            s.id == player.current.id,
-                            player.isPlaying,
-                            remote = true,
+                        RemoteDownloadSwipeRow(
+                            kind = RemoteDownloadKind.TRACK,
+                            deviceId = deviceId,
+                            remoteKey = s.id,
+                            onDownload = { downloads.downloadSong(deviceId, deviceName, s) },
                         ) {
-                            onPlaySongs(shownSongs, i)
+                            Ios5SongRow(
+                                s,
+                                s.id == player.current.id,
+                                player.isPlaying,
+                                remote = true,
+                            ) {
+                                onPlaySongs(shownSongs, i)
+                            }
                         }
                     }
                 }
@@ -222,6 +279,9 @@ private fun LazyListScope.remoteMergedAlbumRows(
     expanded: Set<String>,
     onToggle: (String) -> Unit,
     onPlayAt: (Int) -> Unit,
+    deviceId: String,
+    deviceName: String,
+    downloads: RemoteDownloadManager,
 ) {
     var i = 0
     while (i < rows.size) {
@@ -261,14 +321,21 @@ private fun LazyListScope.remoteMergedAlbumRows(
                             row.items.forEachIndexed { vi, sub ->
                                 if (vi > 0) Ios5CellDivider()
                                 val subSong = sub.song.copy(title = sub.minor.ifBlank { sub.song.title })
-                                Ios5SongRow(
-                                    subSong,
-                                    sub.song.id == player.current.id,
-                                    player.isPlaying,
-                                    showArtwork = false,
-                                    showSubtitle = false,
-                                    remote = true,
-                                ) { onPlayAt(sub.index) }
+                                RemoteDownloadSwipeRow(
+                                    kind = RemoteDownloadKind.TRACK,
+                                    deviceId = deviceId,
+                                    remoteKey = sub.song.id,
+                                    onDownload = { downloads.downloadSong(deviceId, deviceName, sub.song) },
+                                ) {
+                                    Ios5SongRow(
+                                        subSong,
+                                        sub.song.id == player.current.id,
+                                        player.isPlaying,
+                                        showArtwork = false,
+                                        showSubtitle = false,
+                                        remote = true,
+                                    ) { onPlayAt(sub.index) }
+                                }
                             }
                         }
                     }
@@ -281,14 +348,21 @@ private fun LazyListScope.remoteMergedAlbumRows(
                 while (end < rows.size && rows[end] is AlbumRow.Single) end++
                 val run = rows.subList(i, end).map { it as AlbumRow.Single }
                 ios5Rows(run, key = { "s:${it.song.id}" }) { _, single ->
-                    Ios5SongRow(
-                        single.song,
-                        single.song.id == player.current.id,
-                        player.isPlaying,
-                        showArtwork = false,
-                        showSubtitle = false,
-                        remote = true,
-                    ) { onPlayAt(single.index) }
+                    RemoteDownloadSwipeRow(
+                        kind = RemoteDownloadKind.TRACK,
+                        deviceId = deviceId,
+                        remoteKey = single.song.id,
+                        onDownload = { downloads.downloadSong(deviceId, deviceName, single.song) },
+                    ) {
+                        Ios5SongRow(
+                            single.song,
+                            single.song.id == player.current.id,
+                            player.isPlaying,
+                            showArtwork = false,
+                            showSubtitle = false,
+                            remote = true,
+                        ) { onPlayAt(single.index) }
+                    }
                 }
                 i = end
             }

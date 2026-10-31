@@ -976,7 +976,7 @@ fun Ios5SongRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (remote) {
-            com.aurora.music.ui.components.Ios5WifiIcon()
+            com.aurora.music.ui.components.Ios5RemoteStatusIcon()
             Spacer(Modifier.width(8.dp))
         }
         if (showArtwork) {

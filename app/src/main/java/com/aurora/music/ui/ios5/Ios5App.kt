@@ -128,21 +128,26 @@ fun Ios5App() {
     val remoteLibraries by container.remoteLibrary.libraries.collectAsStateWithLifecycle()
     val remoteEbookRecents by container.remoteLibrary.ebookRecents.collectAsStateWithLifecycle()
     val remoteAbookPlays by container.remoteLibrary.abookPlays.collectAsStateWithLifecycle()
-    // 离线设备不展示资料库（但已入队的歌继续播，播放器不读这份过滤后的列表）。
-    val onlineRemoteLibraries = remember(remoteLibraries) {
-        remoteLibraries.filter { it.online }
+    // 离线设备只要有用户下载的条目就继续展示；下载条目永远留在原设备页面下。
+    val visibleRemoteLibraries = remember(remoteLibraries) {
+        remoteLibraries.filter { it.online || it.hasDownloads }
     }
-    val onlineDeviceIds = remember(onlineRemoteLibraries) {
-        onlineRemoteLibraries.map { it.deviceId }.toSet()
+    val visibleDeviceIds = remember(visibleRemoteLibraries) {
+        visibleRemoteLibraries.map { it.deviceId }.toSet()
     }
-    val visibleRemoteEbookRecents = remember(remoteEbookRecents, onlineDeviceIds) {
-        remoteEbookRecents.filter { it.deviceId in onlineDeviceIds }
+    val visibleRemoteEbookRecents = remember(remoteEbookRecents, visibleRemoteLibraries, container.remoteDownloads) {
+        val byId = visibleRemoteLibraries.associateBy { it.deviceId }
+        remoteEbookRecents.filter { e ->
+            val lib = byId[e.deviceId] ?: return@filter false
+            // 离线设备只在“最近阅读”里保留已下载到本机的书。
+            lib.online || container.remoteDownloads.localEbookPath(e.deviceId, e.remotePath) != null
+        }
     }
     val remoteAbookRecents = remember(remoteLibraries, remoteAbookPlays) {
         container.remoteLibrary.abookRecents()
     }
-    val visibleRemoteAbookRecents = remember(remoteAbookRecents, onlineDeviceIds) {
-        remoteAbookRecents.filter { it.deviceId in onlineDeviceIds }
+    val visibleRemoteAbookRecents = remember(remoteAbookRecents, visibleDeviceIds) {
+        remoteAbookRecents.filter { it.deviceId in visibleDeviceIds }
     }
     // 远程艺人/专辑的详情页内容（路由只带一个固定 route，内容由这里提供）
     var remoteDetail by remember { mutableStateOf<RemoteDetailTarget?>(null) }
@@ -409,6 +414,7 @@ fun Ios5App() {
             .sortedBy { it.title.lowercase() }
         remoteDetail = RemoteDetailTarget(
             deviceId = lib.deviceId,
+            deviceName = lib.deviceName,
             title = group.name,
             subtitle = "${lib.deviceName} · 远程",
             songs = group.songs,
@@ -424,6 +430,7 @@ fun Ios5App() {
         if (album.songs.isEmpty()) return
         remoteDetail = RemoteDetailTarget(
             deviceId = lib.deviceId,
+            deviceName = lib.deviceName,
             title = album.title,
             subtitle = "${album.artist} · ${lib.deviceName} · 远程",
             songs = album.songs,
@@ -562,7 +569,7 @@ fun Ios5App() {
                             ArtistsTab(
                                 artists = browseState.artists,
                                 loading = browseState.loading,
-                                remote = onlineRemoteLibraries,
+                                remote = visibleRemoteLibraries,
                                 onOpenDetail = { k, i, t -> openDetail(k, i, t) },
                                 onOpenRemoteArtist = { lib, g -> openRemoteArtist(lib, g) },
                                 onOpenSearch = { navController.navigate(Ios5Routes.search("artists")) },
@@ -579,7 +586,7 @@ fun Ios5App() {
                                 onOpenBook = { p -> navController.navigate(Ios5Routes.ebookReader(p)) },
                                 onOpenSearch = { navController.navigate(Ios5Routes.EBOOK_SEARCH) },
                                 onOpenExport = { p -> navController.navigate(Ios5Routes.ebookExport(p)) },
-                                remoteLibraries = onlineRemoteLibraries,
+                                remoteLibraries = visibleRemoteLibraries,
                                 remoteRecents = visibleRemoteEbookRecents,
                                 onOpenRemoteBook = { openRemoteBook(it) },
                                 onOpenRemoteRoot = { deviceId, rootKey, rootTitle ->
@@ -592,7 +599,7 @@ fun Ios5App() {
                         composable(Ios5Routes.AUDIOBOOKS) {
                             AudiobooksTab(
                                 onPlayBook = { playAudiobook(it) },
-                                remoteLibraries = onlineRemoteLibraries,
+                                remoteLibraries = visibleRemoteLibraries,
                                 remoteRecents = visibleRemoteAbookRecents,
                                 onPlayRemoteBook = { playRemoteAudiobook(it) },
                             )
@@ -705,7 +712,7 @@ fun Ios5App() {
                                 onBack = { navController.popBackStack() },
                                 onSearch = { navController.navigate(Ios5Routes.search("songs")) },
                                 onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
-                                remote = onlineRemoteLibraries,
+                                remote = visibleRemoteLibraries,
                             )
                         }
                         composable(Ios5Routes.MORE_ALBUMS) {
@@ -715,23 +722,35 @@ fun Ios5App() {
                                 onBack = { navController.popBackStack() },
                                 onSearch = { navController.navigate(Ios5Routes.search("albums")) },
                                 onOpenDetail = { k, i, t -> openDetail(k, i, t) },
-                                remote = onlineRemoteLibraries,
+                                remote = visibleRemoteLibraries,
                                 onOpenRemoteAlbum = { lib, a -> openRemoteAlbum(lib, a) },
                             )
                         }
                         composable(Ios5Routes.REMOTE_GROUP) {
                             val target = remoteDetail
-                            if (target == null || target.deviceId !in onlineDeviceIds) {
+                            val lib = visibleRemoteLibraries.firstOrNull { it.deviceId == target?.deviceId }
+                            if (target == null || target.deviceId !in visibleDeviceIds || lib == null) {
                                 com.aurora.music.ui.browse.Ios5RemoteDetailEmpty(
                                     onBack = { navController.popBackStack() },
                                 )
                             } else {
+                                // 设备离线后详情页也只保留已下载的曲目/专辑，避免看到整份远端目录。
+                                val offline = !lib.online
+                                val detailSongs = if (!offline) target.songs else target.songs
+                                    .mapNotNull { t -> lib.songs.firstOrNull { it.id == t.id } }
+                                val detailAlbums = if (!offline) target.albums else target.albums
+                                    .mapNotNull { a -> lib.albums.firstOrNull { it.id == a.id } }
+                                val detailSingleAlbum = target.singleAlbum?.let { sa ->
+                                    if (!offline) sa else lib.albums.firstOrNull { it.id == sa.id }
+                                }
                                 com.aurora.music.ui.browse.Ios5RemoteDetail(
                                     title = target.title,
                                     subtitle = target.subtitle,
-                                    songs = target.songs,
-                                    albums = target.albums,
-                                    singleAlbum = target.singleAlbum,
+                                    deviceId = target.deviceId,
+                                    deviceName = target.deviceName,
+                                    songs = detailSongs,
+                                    albums = detailAlbums,
+                                    singleAlbum = detailSingleAlbum,
                                     player = playerState,
                                     onBack = { navController.popBackStack() },
                                     onSearch = { navController.navigate(Ios5Routes.search("songs")) },
@@ -1438,6 +1457,7 @@ fun Ios5App() {
 
 private data class RemoteDetailTarget(
     val deviceId: String,
+    val deviceName: String,
     val title: String,
     val subtitle: String,
     val songs: List<com.aurora.music.model.Song>,

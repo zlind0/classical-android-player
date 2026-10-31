@@ -121,10 +121,13 @@ class AppContainer(context: Context) {
     // 远程资料库：发现常驻（不再只在投屏选择页开），启动即开始同步别的设备元信息。
     // 远程音乐/有声书的边播边缓存也在这里初始化（播放器数据源共用同一个 SimpleCache）。
     val remoteMediaCache = com.aurora.music.data.cast.RemoteMediaCache.also { it.init(appContext) }
+    // 用户显式“下载”的远程条目：独立于边播边缓存，永不被播放窗口清理。
+    val remoteDownloads = com.aurora.music.data.cast.RemoteDownloadManager(appContext)
     val remoteLibrary = com.aurora.music.data.cast.RemoteLibraryManager(
         appContext,
         castDiscovery,
         ebookRecentLimit = { ebookPrefs.recentLimit.value },
+        downloads = remoteDownloads,
     )
 
     val ebookCast = com.aurora.music.data.ebook.EbookCastController(
