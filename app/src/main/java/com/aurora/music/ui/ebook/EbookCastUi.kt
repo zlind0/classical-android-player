@@ -821,7 +821,7 @@ private fun CastPageKey(
 // Material 的 ArrowBackIos / ArrowForwardIos 字形在 24dp 画布里是偏心的（尖端不在正中），
 // 放大后看起来没对齐；这里自己画两条线，包围盒严格以画布中心对称。
 @Composable
-private fun CastChevron(pointsLeft: Boolean, size: Dp, color: Color = Color.White) {
+internal fun CastChevron(pointsLeft: Boolean, size: Dp, color: Color = Color.White) {
     Canvas(Modifier.size(size)) {
         val w = this.size.width
         val h = this.size.height

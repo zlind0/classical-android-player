@@ -294,7 +294,6 @@ fun RemoteEbookLibraryScreen(
             RandomControls(
                 randomMode = true,
                 count = count,
-                poolSize = poolBooks.size,
                 searching = query.isNotBlank(),
                 searchCount = searchResults.size,
                 searchTruncated = searchTruncated,
@@ -467,7 +466,6 @@ fun RemoteEbookLibraryScreen(
 private fun RandomControls(
     randomMode: Boolean,
     count: Int,
-    poolSize: Int,
     searching: Boolean,
     searchCount: Int,
     searchTruncated: Boolean,
@@ -478,40 +476,36 @@ private fun RandomControls(
     onToggleExpand: () -> Unit,
 ) {
     if (!randomMode) return
-    Column(
+    Row(
         Modifier.fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 7.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                if (searching) "找到 $searchCount 本" else "随机选书 · 共 $poolSize 本",
-                color = Ios5Colors.TextSecondary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f),
-            )
-            Ios5SmallButton(
-                text = "−",
-                onClick = { onCountChange(count - 10) },
-                modifier = Modifier.width(38.dp),
-            )
-            Spacer(Modifier.width(4.dp))
-            Text(
-                "每次 $count 本",
-                color = Ios5Colors.TextPrimary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-            )
-            Spacer(Modifier.width(4.dp))
-            Ios5SmallButton(
-                text = "+",
-                onClick = { onCountChange(count + 10) },
-                modifier = Modifier.width(38.dp),
-            )
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (searching) {
+        Text(
+            "每次 $count 本",
+            color = Ios5Colors.TextSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Ios5SmallButton(
+            text = "",
+            onClick = { onCountChange(count - 10) },
+            modifier = Modifier.width(44.dp),
+            leading = { CastChevron(pointsLeft = true, size = 12.dp) },
+        )
+        Ios5SmallButton(
+            text = "",
+            onClick = { onCountChange(count + 10) },
+            modifier = Modifier.width(44.dp),
+            leading = { CastChevron(pointsLeft = false, size = 12.dp) },
+        )
+        if (searching) {
+            Row(
+                Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 if (searchTruncated) {
                     Ios5GlossButton(text = "换一批", onClick = onSearchReroll)
                     Ios5SmallButton(
@@ -521,9 +515,14 @@ private fun RandomControls(
                 } else if (searchExpanded && searchCount > count * 2) {
                     Ios5SmallButton(text = "收起", onClick = onToggleExpand)
                 }
-            } else {
-                Ios5GlossButton(text = "重新随机", onClick = onReroll)
             }
+        } else {
+            // 右侧剩余宽度全部给“重新随机”
+            Ios5GlossButton(
+                text = "重新随机",
+                onClick = onReroll,
+                modifier = Modifier.weight(1f),
+            )
         }
     }
 }

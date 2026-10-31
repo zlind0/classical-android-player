@@ -586,6 +586,8 @@ fun Ios5SmallButton(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     tone: Ios5ButtonTone = Ios5ButtonTone.Grey,
+    /** 自定义前置图标（例如投屏遥控器的 < > 手绘 chevron）。 */
+    leading: (@Composable () -> Unit)? = null,
 ) {
     val brush = when (tone) {
         Ios5ButtonTone.Blue -> Ios5Colors.buttonBlueBrush
@@ -604,25 +606,30 @@ fun Ios5SmallButton(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
+        if (leading != null) {
+            leading()
+        }
         if (icon != null) {
             Icon(icon, null, tint = Color.White, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(5.dp))
         }
-        Text(
-            text,
-            color = Color.White,
-            fontSize = Ios5Type.Button,
-            fontWeight = FontWeight.Bold,
-            fontFamily = Ios5Sans,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            style = androidx.compose.ui.text.TextStyle(
-                shadow = androidx.compose.ui.graphics.Shadow(
-                    color = Color.Black.copy(alpha = 0.6f),
-                    offset = Offset(0f, 1f),
+        if (text.isNotEmpty()) {
+            Text(
+                text,
+                color = Color.White,
+                fontSize = Ios5Type.Button,
+                fontWeight = FontWeight.Bold,
+                fontFamily = Ios5Sans,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = androidx.compose.ui.text.TextStyle(
+                    shadow = androidx.compose.ui.graphics.Shadow(
+                        color = Color.Black.copy(alpha = 0.6f),
+                        offset = Offset(0f, 1f),
+                    ),
                 ),
-            ),
-        )
+            )
+        }
     }
 }
 
