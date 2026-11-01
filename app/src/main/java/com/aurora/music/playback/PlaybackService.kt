@@ -919,7 +919,7 @@ class PlaybackService : MediaLibraryService() {
         if (snap.musicWasPlaying && !player.isPlaying) runCatching { player.play() }
         val para = snap.bookPara
         if (para != null && !ebookPlaying) {
-            runCatching { container.ebookTts.playFrom(para.chapter, para.block, para.startChar) }
+            runCatching { container.ebookTts.playFromBookmark(para.chapter, para.block, para.startChar) }
         }
         // 快照里两路都在播 → 回到双播；否则按实际播的状态自然落位。
         if (snap.musicWasPlaying && para != null) dualArmed = true
@@ -1620,7 +1620,7 @@ class PlaybackService : MediaLibraryService() {
                         externalSnapshot = null
                         if (snap?.musicWasPlaying == true) runCatching { player.play() }
                         val para = snap?.bookPara ?: up.peekPara() ?: lastBookPara
-                        if (para != null) runCatching { container.ebookTts.playFrom(para.chapter, para.block, para.startChar) }
+                        if (para != null) runCatching { container.ebookTts.playFromBookmark(para.chapter, para.block, para.startChar) }
                         if (snap?.musicWasPlaying == true && para != null) dualArmed = true
                         refreshArbitration()
                     }
@@ -1638,7 +1638,7 @@ class PlaybackService : MediaLibraryService() {
                         val snap = externalSnapshot
                         externalSnapshot = null
                         val para = snap?.bookPara ?: up.peekPara() ?: lastBookPara
-                        if (para != null) runCatching { container.ebookTts.playFrom(para.chapter, para.block, para.startChar) }
+                        if (para != null) runCatching { container.ebookTts.playFromBookmark(para.chapter, para.block, para.startChar) }
                     }
                 } else {
                     if (player.isPlaying) player.pause() else player.play()

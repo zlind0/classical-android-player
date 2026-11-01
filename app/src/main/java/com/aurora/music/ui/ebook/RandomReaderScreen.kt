@@ -253,7 +253,7 @@ fun RandomReaderScreen(
      * 切书统一入口：耳机/通知栏、上下滑都走它。
      * @param autoRead 切好后是否停顿一下再朗读（耳机切书总是读；手势只在原本正在朗读时才续读）。
      */
-    fun switchBook(direction: Int, autoRead: Boolean) {
+    fun switchBook(direction: Int, autoRead: Boolean, announce: Boolean = false) {
         if (manager.state.value.loading) {
             // 还在换书：先把 pager 收回中间，别停在相邻页上。
             scope.launch { runCatching { pager.scrollToPage(1) } }
@@ -277,9 +277,15 @@ fun RandomReaderScreen(
             // 切过去就先把新书的目标位置记下：后台听书时进程被杀也能恢复到最后切到的那本。
             persistResume()
             if (!autoRead) return@launch
-            // 先让旧书的音频彻底停下，再按新书随机位置开口。
-            delay(750)
             val book = manager.state.value.current ?: return@launch
+            // 只要切书前 TTS 正在朗读，不管手势/耳机/投屏页触发，都先响提示音，
+            // 再报“上一本/下一本书名”，然后接着读新书正文。
+            // 耳机键即使原本静音也保留 announce=true 的旧行为。
+            if (announce || wasPlaying) {
+                tts.playBookSwitchAnnouncement(direction, book.title)
+            } else {
+                delay(750)
+            }
             val chapter = manager.loadChapter(book.path, book.chapterIndex) ?: return@launch
             val parsed = feedParsed(book, book.chapterIndex, chapter)
             tts.setBook("feed:${book.path}", parsed, book.path, force = true)
@@ -341,11 +347,12 @@ fun RandomReaderScreen(
     }
 
     // 耳机/通知栏上一首/下一首：随机阅读里切成上一本/下一本，并接着朗读。
-    DisposableEffect(Unit) {        val hook: (Int) -> Boolean = { direction ->
+    DisposableEffect(Unit) {
+        val hook: (Int) -> Boolean = { direction ->
             if (manager.state.value.current == null) {
                 false
             } else {
-                switchBook(direction, autoRead = true)
+                switchBook(direction, autoRead = true, announce = true)
                 true
             }
         }
@@ -354,10 +361,13 @@ fun RandomReaderScreen(
         tts.chapterTailLoader = { chapter -> manager.loadChapter(tts.bookPath, chapter)?.blocks }
         // 随机阅读不写本地书库进度（远程相对路径在本地没有条目）。
         tts.persistProgress = false
+        // 熄屏/通知栏恢复没有排版：从上次那个字所在段落开头读，而不是段落中间。
+        tts.resumeFromBlockStart = true
         onDispose {
             if (tts.onBookTurn === hook) tts.onBookTurn = null
             tts.chapterTailLoader = null
             tts.persistProgress = true
+            tts.resumeFromBlockStart = false
             autoReadJob[0]?.cancel()
         }
     }

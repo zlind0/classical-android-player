@@ -1,7 +1,9 @@
 package com.aurora.music.data.ebook
 
 import android.content.Context
+import android.media.MediaPlayer
 import android.speech.tts.Voice
+import com.aurora.music.R
 import com.aurora.music.data.SettingsStore
 import com.aurora.music.data.SleepTimer
 import com.aurora.music.data.SleepTimerWorker
@@ -21,6 +23,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 
 /**
  * 电子书听书控制器（App 作用域，阅读界面驱动）：
@@ -53,6 +58,11 @@ class EbookTtsController(context: Context) {
      * 随机阅读的书只有远程相对路径，本地没有对应条目，写入既无效也会污染“最近阅读”口径。
      */
     @Volatile var persistProgress: Boolean = true
+    /**
+     * 随机阅读：从通知栏/耳机恢复播放时屏幕多半是熄的，没有排版可参考。
+     * 此时从上次那个字所在的段落（<p>）开头读，而不是段落中间的字。
+     */
+    @Volatile var resumeFromBlockStart: Boolean = false
     private var _player: EbookTtsPlayer? = null
     var player: EbookTtsPlayer?
         get() = _player
@@ -278,6 +288,48 @@ class EbookTtsController(context: Context) {
         // 否则 turn 会翻回上一页；读完本句后按整句继续
         pendingStartChar = charOffset.coerceIn(0, base.text.length)
         startAt(idx, true)
+    }
+
+    /**
+     * 系统/通知栏恢复播放：随机阅读没有屏幕排版时，从锚点所在段落开头起读。
+     * 普通阅读仍按原来的块内字偏移续播。
+     */
+    fun playFromBookmark(chapter: Int, block: Int, charOffset: Int = 0) {
+        playFrom(chapter, block, if (resumeFromBlockStart) 0 else charOffset)
+    }
+
+    /**
+     * 随机阅读耳机切书提示：先播 switchsound.m4a，再朗读
+     * “上一本书，书名 / 下一本书，书名”，返回时提示音已播完，调用方可以接着读正文。
+     */
+    suspend fun playBookSwitchAnnouncement(direction: Int, title: String) {
+        playRawSound(R.raw.switchsound)
+        val label = if (direction < 0) "上一本书" else "下一本书"
+        val text = if (title.isBlank()) label else "$label，$title"
+        val (eff, _) = tts.resolvePrefs()
+        val stream = tts.openStream(TtsOwner.EBOOK, restartPlayer = true)
+        // 不在这里主动 stop：播完立即接正文，旧流会被下一次 openStream 自然作废。
+        stream.append(text, eff)
+        stream.awaitDone()
+    }
+
+    /** 播完一个 res/raw 音效（切书提示音）后再返回；协程取消时也会释放播放器。 */
+    private suspend fun playRawSound(resId: Int) = withContext(Dispatchers.IO) {
+        val mp = runCatching { MediaPlayer.create(appContext, resId) }.getOrNull()
+            ?: return@withContext
+        try {
+            suspendCancellableCoroutine { cont ->
+                mp.setOnCompletionListener { if (cont.isActive) cont.resume(Unit) }
+                mp.setOnErrorListener { _, _, _ ->
+                    if (cont.isActive) cont.resume(Unit)
+                    true
+                }
+                cont.invokeOnCancellation { runCatching { mp.stop() } }
+                mp.start()
+            }
+        } finally {
+            runCatching { mp.release() }
+        }
     }
 
     /** 停止：什么都不读，高亮清除。没有暂停状态。睡眠定时是全局后台，手动停止不清定时。

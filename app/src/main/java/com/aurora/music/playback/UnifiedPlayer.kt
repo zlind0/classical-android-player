@@ -293,7 +293,7 @@ class UnifiedPlayer(
                 if (resumeBook) {
                     if (p != null && !tts.playing.value) {
                         bookPlaying = true
-                        tts.playFrom(p.chapter, p.block, p.startChar)
+                        tts.playFromBookmark(p.chapter, p.block, p.startChar)
                     } else if (tts.playing.value) {
                         bookPlaying = true
                     }
@@ -305,7 +305,7 @@ class UnifiedPlayer(
                     val p = lastPara
                     if (p != null) {
                         bookPlaying = true
-                        tts.playFrom(p.chapter, p.block, p.startChar)
+                        tts.playFromBookmark(p.chapter, p.block, p.startChar)
                     }
                 }
             }
