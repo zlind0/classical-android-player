@@ -213,21 +213,81 @@ fun RemoteEbookLibraryScreen(
         var query by rememberSaveable(deviceId, rootKey) { mutableStateOf("") }
         var searchSeed by rememberSaveable(deviceId, rootKey) { mutableIntStateOf(0) }
         var searchExpanded by rememberSaveable(deviceId, rootKey) { mutableStateOf(false) }
-        LaunchedEffect(deviceId, rootKey, randomMode, poolPaths) {
-            if (randomMode && poolPaths.isNotEmpty()) {
+        var remoteSearchResults by remember(deviceId, rootKey) {
+            mutableStateOf<List<RemoteEbookEntry>>(emptyList())
+        }
+        var remoteRandomLoading by remember(deviceId, rootKey) { mutableStateOf(false) }
+
+        // 快速扫描书库不再整表下发：首次进入/切换数量时向服务端要一批，
+        // 已有结果只补元信息，保持上次看到的那批书不变。
+        LaunchedEffect(
+            deviceId, rootKey, randomMode, online, root?.fastScan,
+            randomState?.paths, poolPaths, count,
+        ) {
+            if (!randomMode) return@LaunchedEffect
+            if (root?.fastScan == true) {
+                if (!online) return@LaunchedEffect
+                val st = randomState
+                if (st == null || st.paths.isEmpty()) {
+                    remoteRandomLoading = true
+                    val loaded = container.remoteLibrary.ensureRemoteEbookRandom(deviceId, rootKey, count)
+                    remoteRandomLoading = false
+                    // 老桌面端没有 /library/ebook/random：退回快照里的本地池。
+                    if (loaded == null && poolPaths.isNotEmpty()) {
+                        container.remoteLibrary.ensureEbookRandom(deviceId, rootKey, poolPaths)
+                    }
+                } else {
+                    container.remoteLibrary.requestEbookDetails(deviceId, st.paths)
+                }
+            } else if (poolPaths.isNotEmpty()) {
                 container.remoteLibrary.ensureEbookRandom(deviceId, rootKey, poolPaths)
             }
+        }
+
+        // 大书库搜索走服务端；普通书库仍用本地列表，避免小库也要等网络。
+        LaunchedEffect(deviceId, rootKey, query, randomMode, online, root?.fastScan) {
+            if (!randomMode || !online || root?.fastScan != true) return@LaunchedEffect
+            val q = query.trim()
+            if (q.isEmpty()) {
+                remoteSearchResults = emptyList()
+                return@LaunchedEffect
+            }
+            kotlinx.coroutines.delay(250)
+            val books = container.remoteLibrary.searchEbooks(deviceId, rootKey, q)
+            remoteSearchResults = if (books != null) {
+                books
+                    .map { b -> toEntry(lib, b, recents, container.remoteLibrary, container.remoteDownloads) }
+                    .sortedBy { it.displayTitle.lowercase() }
+            } else {
+                // 老桌面端没有搜索接口：退回快照里的本地列表。
+                poolBooks.filter {
+                    it.displayTitle.contains(q, ignoreCase = true) ||
+                        it.author.contains(q, ignoreCase = true)
+                }
+            }
+        }
+
+        // 随机历史的书不一定在当前批次里：进入页面时补齐它们的元信息。
+        LaunchedEffect(deviceId, rootKey, randomRecents, online, root?.fastScan) {
+            if (!online || root?.fastScan != true) return@LaunchedEffect
+            container.remoteLibrary.requestEbookDetails(
+                deviceId,
+                randomRecents["$deviceId|$rootKey"].orEmpty().map { it.path },
+            )
         }
 
         val randomBooks = remember(randomState?.paths, poolByPath) {
             randomState?.paths.orEmpty().mapNotNull { poolByPath[it] }
         }
-        val searchResults = remember(query, poolBooks) {
+        val searchResults = remember(query, poolBooks, remoteSearchResults, root.fastScan) {
             val q = query.trim()
-            if (q.isBlank()) emptyList()
-            else poolBooks.filter {
-                it.displayTitle.contains(q, ignoreCase = true) ||
-                    it.author.contains(q, ignoreCase = true)
+            when {
+                q.isBlank() -> emptyList()
+                root.fastScan -> remoteSearchResults
+                else -> poolBooks.filter {
+                    it.displayTitle.contains(q, ignoreCase = true) ||
+                        it.author.contains(q, ignoreCase = true)
+                }
             }
         }
         val searchTruncated = randomMode && query.isNotBlank() &&
@@ -241,12 +301,9 @@ fun RemoteEbookLibraryScreen(
             val historyBooks = remember(historyBatch, poolByPath, online) {
                 if (online) historyBatch.paths.mapNotNull { poolByPath[it] } else emptyList()
             }
-            LaunchedEffect(deviceId, historyBatch.createdAt, online, historyBooks.map { it.remotePath }) {
+            LaunchedEffect(deviceId, historyBatch.createdAt, online, historyBatch.paths) {
                 if (online && root.fastScan) {
-                    container.remoteLibrary.requestEbookDetails(
-                        deviceId,
-                        historyBooks.map { it.remotePath },
-                    )
+                    container.remoteLibrary.requestEbookDetails(deviceId, historyBatch.paths)
                 }
             }
             val historyListState = com.aurora.music.ui.rememberPersistentLazyListState(
@@ -304,11 +361,37 @@ fun RemoteEbookLibraryScreen(
                 searchTruncated = searchTruncated,
                 searchExpanded = searchExpanded,
                 onCountChange = {
-                    container.remoteLibrary.setEbookRandomCount(deviceId, rootKey, it, poolPaths)
+                    if (root.fastScan) {
+                        scope.launch {
+                            val previous = container.remoteLibrary.ebookRandomState(deviceId, rootKey)
+                            val next = container.remoteLibrary.rerollRemoteEbookRandom(
+                                deviceId, rootKey, it, pushHistory = false,
+                            )
+                            if ((next == null || next.updatedAt == previous?.updatedAt) &&
+                                poolPaths.isNotEmpty()
+                            ) {
+                                container.remoteLibrary.rerollEbookRandom(deviceId, rootKey, poolPaths, it)
+                            }
+                        }
+                    } else {
+                        container.remoteLibrary.setEbookRandomCount(deviceId, rootKey, it, poolPaths)
+                    }
                 },
                 onReroll = {
                     clearRandomSession(deviceId, rootKey)
-                    container.remoteLibrary.rerollEbookRandom(deviceId, rootKey, poolPaths)
+                    if (root.fastScan) {
+                        scope.launch {
+                            val previous = container.remoteLibrary.ebookRandomState(deviceId, rootKey)
+                            val next = container.remoteLibrary.rerollRemoteEbookRandom(deviceId, rootKey, count)
+                            if ((next == null || next.updatedAt == previous?.updatedAt) &&
+                                poolPaths.isNotEmpty()
+                            ) {
+                                container.remoteLibrary.rerollEbookRandom(deviceId, rootKey, poolPaths, count)
+                            }
+                        }
+                    } else {
+                        container.remoteLibrary.rerollEbookRandom(deviceId, rootKey, poolPaths)
+                    }
                 },
                 onStartReading = { onStartRandomReading(deviceId, rootKey) },
                 onSearchReroll = { searchSeed += 1 },
@@ -348,7 +431,7 @@ fun RemoteEbookLibraryScreen(
 
         if (!randomMode && dirs.isEmpty() && books.isEmpty()) {
             Ios5Empty("这个文件夹是空的")
-        } else if (randomMode && online && poolBooks.isEmpty()) {
+        } else if (randomMode && online && poolBooks.isEmpty() && !remoteRandomLoading) {
             Ios5Empty("这个书库是空的")
         } else {
             LazyColumn(
@@ -403,7 +486,11 @@ fun RemoteEbookLibraryScreen(
                         query.isNotBlank() -> "搜索结果（${searchResults.size}）" +
                             if (searchTruncated) " · 随机显示 ${displayBooks.size} 本" else ""
                         else -> {
-                            val total = poolBooks.size
+                            val total = if (root.fastScan) {
+                                root.bookCount.coerceAtLeast(displayBooks.size)
+                            } else {
+                                poolBooks.size
+                            }
                             if (randomBooks.size < total) {
                                 "随机电子书（${displayBooks.size} / $total）"
                             } else {

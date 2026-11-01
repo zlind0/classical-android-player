@@ -167,9 +167,7 @@ class RandomFeedManager(
         expectedChapters.clear()
         localMismatch.clear()
         val resumeWire = resume
-            ?.takeIf {
-                it.deviceId == deviceId && it.rootKey == rootKey && pool.contains(it.path)
-            }
+            ?.takeIf { it.deviceId == deviceId && it.rootKey == rootKey }
             ?.let {
                 FeedResumeWire(path = it.path, chapter = it.chapter, block = it.block, char = it.char)
             }

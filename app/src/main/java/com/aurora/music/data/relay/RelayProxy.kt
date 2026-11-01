@@ -95,6 +95,9 @@ class RelayProxy(
             "/library/version" -> serveVersion(output)
             "/library/all" -> serveLibrary(output)
             "/library/ebook/scan" -> serveLiveJson(output, request)
+            "/library/ebook/random",
+            "/library/ebook/search",
+            -> serveLiveJson(output, request)
             "/library/ebook/feed/start",
             "/library/ebook/feed/turn",
             "/library/ebook/feed/chapter",

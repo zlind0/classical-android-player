@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -62,6 +63,17 @@ fun EbooksTab(
     val roots = container.ebookStore.roots.collectAsStateWithLifecycle()
     val counts = container.ebookStore.counts.collectAsStateWithLifecycle()
     val enabledRoots = roots.value.filter { it.enabled }.sortedBy { it.displayName.lowercase() }
+
+    // 快速扫描书库的书不在 /library/all 里：最近阅读的条目要单独补元信息，
+    // 否则离线缓存/下载按钮拿不到 wire。
+    LaunchedEffect(remoteRecents.map { it.key }, remoteLibraries.map { it.deviceId to it.online }) {
+        remoteRecents.groupBy { it.deviceId }.forEach { (deviceId, books) ->
+            val online = remoteLibraries.firstOrNull { it.deviceId == deviceId }?.online == true
+            if (online) {
+                container.remoteLibrary.requestEbookDetails(deviceId, books.map { it.remotePath })
+            }
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "电子书", onSearch = onOpenSearch)
@@ -141,7 +153,7 @@ fun EbooksTab(
                     }
                 }
             }
-            remoteLibraries.filter { it.ebooks.isNotEmpty() }.forEach { lib ->
+            remoteLibraries.filter { it.ebookRoots.isNotEmpty() }.forEach { lib ->
                 item(key = "remote-ebooks-${lib.deviceId}") {
                     Ios5SectionTitle("${lib.deviceName}${if (lib.online) "" else "（离线）"} - 远程（${lib.ebooks.size}）")
                 }
@@ -187,7 +199,7 @@ fun EbooksTab(
                     }
                 }
             }
-            if (recent.isEmpty() && remoteRecent.isEmpty() && enabledRoots.isEmpty() && remoteLibraries.all { it.ebooks.isEmpty() }) {
+            if (recent.isEmpty() && remoteRecent.isEmpty() && enabledRoots.isEmpty() && remoteLibraries.all { it.ebookRoots.isEmpty() }) {
                 item { Ios5Empty("还没有电子书\n请到 设置 → 电子书来源 添加目录并扫描\n也可以用其他应用打开 epub/mobi/azw3 存入默认书架") }
             }
         }

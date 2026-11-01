@@ -43,12 +43,19 @@ data class RemoteEbookDetail(
     val path: String = "",
     val title: String = "",
     val author: String = "",
+    val size: Long = 0L,
+    val rootKey: String = "",
     val hasCover: Boolean = false,
 )
 
 /** `POST /library/ebook/scan` 的批量按需解析响应。 */
 data class RemoteEbookScanResponse(
     val books: List<RemoteEbookDetail> = emptyList(),
+)
+
+/** `GET /library/ebook/random` 与 `/library/ebook/search` 的响应。 */
+data class RemoteEbookListResponse(
+    val books: List<RemoteEbookWire> = emptyList(),
 )
 
 // ---- 随机阅读 feed 协议（desktop-app /library/ebook/feed/*） ----

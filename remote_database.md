@@ -312,6 +312,9 @@ musicPathOrder == false（MEDIA 栈）:
 
 `ebooks[].rootKey` 必须与该数组中的 `key` 对应。
 
+快速扫描根（`fastScan = true`）可能包含 10 万本以上的书，**默认不放进 `/library/all`**，
+避免每次同步都传几十 MB 的 EPUB 列表。客户端通过下面的 random/search/scan 接口按需取书。
+
 老版本如果没有 `ebookRoots`，客户端会把整个电子书列表当成一个平铺根。
 
 #### 4.2.3 `ebooks[]`
@@ -345,6 +348,8 @@ GET /library/ebook/scan?path=<urlencoded-path>
   "path": "/books/example.epub",
   "title": "Example",
   "author": "Someone",
+  "size": 123456,
+  "rootKey": "12",
   "hasCover": true
 }
 ```
@@ -367,8 +372,8 @@ Content-Type: application/json
 ```json
 {
   "books": [
-    {"path": "/books/a.epub", "title": "A", "author": "Someone", "hasCover": true},
-    {"path": "/books/b.epub", "title": "B", "author": "", "hasCover": false}
+    {"path": "/books/a.epub", "title": "A", "author": "Someone", "size": 1, "rootKey": "12", "hasCover": true},
+    {"path": "/books/b.epub", "title": "B", "author": "", "size": 2, "rootKey": "12", "hasCover": false}
   ]
 }
 ```
@@ -380,6 +385,28 @@ Content-Type: application/json
 - 老服务端没有批量接口时返回 404/405，客户端应继续使用 `ebooks[]` 中的文件名占位信息。
 - 懒解析不会改变资料库版本；客户端直接使用本响应更新本地缓存。
 - 服务端可能在每次解析后改变 `libraryUpdatedAt`，客户端应允许渐进刷新。
+
+#### 4.2.3.3 `GET /library/ebook/random`
+
+从指定的快速扫描根随机取一批书，替代客户端保存整份书库。
+
+```http
+GET /library/ebook/random?rootKey=12&count=20
+```
+
+响应与批量 scan 相同：`{"books": [ebooks[] 条目 ...]}`。`count` 范围 1–100。
+
+#### 4.2.3.4 `GET /library/ebook/search`
+
+在服务端按书名/作者搜索，避免大书库整表同步。
+
+```http
+GET /library/ebook/search?rootKey=12&q=三体&limit=100
+```
+
+- `limit` 范围 1–200。
+- 响应：`{"books": [ebooks[] 条目 ...]}`。
+- 只搜索 `format = epub` 的书；空查询返回空数组。
 
 #### 4.2.4 `audiobooks[]`
 

@@ -38,6 +38,8 @@ pub fn build_router(state: HttpState) -> Router {
             "/library/ebook/scan",
             get(library_ebook_scan).post(library_ebook_scan_batch),
         )
+        .route("/library/ebook/random", get(library_ebook_random))
+        .route("/library/ebook/search", get(library_ebook_search))
         .route("/library/ebook/feed/start", post(library_ebook_feed_start))
         .route("/library/ebook/feed/turn", post(library_ebook_feed_turn))
         .route("/library/ebook/feed/chapter", get(library_ebook_feed_chapter))
@@ -177,6 +179,8 @@ async fn library_ebook_scan(
             "path": path,
             "title": info.title,
             "author": info.author,
+            "size": info.size,
+            "rootKey": info.root_key,
             "hasCover": info.has_cover,
         }));
     }
@@ -212,6 +216,8 @@ async fn library_ebook_scan(
             "path": path,
             "title": title,
             "author": author,
+            "size": info.size,
+            "rootKey": info.root_key,
             "hasCover": has_cover,
         })),
         Err(err) => text_response(
@@ -246,12 +252,16 @@ async fn library_ebook_scan_batch(
                 "path": path,
                 "title": info.title,
                 "author": info.author,
+                "size": info.size,
+                "rootKey": info.root_key,
                 "hasCover": info.has_cover,
             }));
             continue;
         }
         let source_path = info.path;
         let ext = info.format;
+        let size = info.size;
+        let root_key = info.root_key;
         let parsed = tokio::task::spawn_blocking(move || {
             if ext == "epub" {
                 meta::read_epub(&source_path)
@@ -274,11 +284,67 @@ async fn library_ebook_scan_batch(
                 "path": path,
                 "title": title,
                 "author": author,
+                "size": size,
+                "rootKey": root_key,
                 "hasCover": has_cover,
             }));
         }
     }
     json_response(json!({ "books": books }))
+}
+
+/// Random books from one fast-scan root. Replaces the old behaviour where the
+/// phone mirrored the entire 100k-book catalogue just to draw 20 titles.
+async fn library_ebook_random(
+    State(state): State<HttpState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let root_key = query.get("rootKey").cloned().unwrap_or_default();
+    let count = query
+        .get("count")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(20)
+        .clamp(1, 100);
+    let result = run_db(&state, move |conn| {
+        db::root_ebooks_random(conn, &root_key, count)
+    })
+    .await;
+    match result {
+        Ok(books) => json_response(json!({ "books": books })),
+        Err(err) => text_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            err.to_string(),
+            "text/plain; charset=utf-8",
+        ),
+    }
+}
+
+/// Server-side title/author search for a root. Fast-scan roots are not part of
+/// `/library/all`, so the phone presses this endpoint instead of scanning a
+/// local copy of the whole catalogue.
+async fn library_ebook_search(
+    State(state): State<HttpState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let root_key = query.get("rootKey").cloned().unwrap_or_default();
+    let q = query.get("q").cloned().unwrap_or_default();
+    let limit = query
+        .get("limit")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(100)
+        .clamp(1, 200);
+    let result = run_db(&state, move |conn| {
+        db::root_ebooks_search(conn, &root_key, &q, limit)
+    })
+    .await;
+    match result {
+        Ok(books) => json_response(json!({ "books": books })),
+        Err(err) => text_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            err.to_string(),
+            "text/plain; charset=utf-8",
+        ),
+    }
 }
 
 // ------------------------------------------------------------ random reading feed

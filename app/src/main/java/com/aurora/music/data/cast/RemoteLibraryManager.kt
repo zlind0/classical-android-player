@@ -181,6 +181,12 @@ class RemoteLibraryManager(
     /** 老服务端没有找书接口，整台设备只探测一次。 */
     private val ebookDetailUnsupported = ConcurrentHashMap.newKeySet<String>()
 
+    /**
+     * 快速扫描书库不再随 /library/all 下发；随机/搜索/按需解析拿到的小批书
+     * 都先放这里，再合并进 [RemoteDeviceLibrary.ebooks]，现有 UI 无需感知分页。
+     */
+    private val ebookExtras = ConcurrentHashMap<String, ConcurrentHashMap<String, RemoteEbookWire>>()
+
     private val storeDir: File
         get() = File(appContext.filesDir, "remote_library").apply { if (!isDirectory) runCatching { mkdirs() } }
 
@@ -481,6 +487,7 @@ class RemoteLibraryManager(
         if (expired.isEmpty()) return
         expired.forEach {
             payloads.remove(it.deviceId)
+            ebookExtras.remove(it.deviceId)
             offlineStrikes.remove(it.deviceId)
             lanEndpoints.remove(it.deviceId)
             RemoteLibraryDb.delete(storeDir, it.deviceId)
@@ -508,15 +515,24 @@ class RemoteLibraryManager(
         val fullMerged = HashMap<String, RemoteDeviceLibrary>()
         payloads.values.forEach { cached ->
             val base = cached.toLibrary(appContext)
+            val extras = ebookExtras[cached.deviceId]?.values.orEmpty()
+            val baseWithExtras = if (extras.isEmpty()) {
+                base
+            } else {
+                val byPath = LinkedHashMap<String, RemoteEbookWire>()
+                base.ebooks.forEach { byPath[it.path] = it }
+                extras.forEach { byPath[it.path] = it }
+                base.copy(ebooks = byPath.values.toList())
+            }
             val recs = recsByDevice[cached.deviceId].orEmpty()
             // 完整视图：始终保留上次同步的整份目录，离线只影响 online/可点击状态。
-            val full = mergeDownloaded(base, recs, includeBase = true)
+            val full = mergeDownloaded(baseWithExtras, recs, includeBase = true)
             fullMerged[cached.deviceId] = full
             // 常规展示：离线设备只留用户显式下载过的内容（冷启动远端页面除外）。
             displayMerged[cached.deviceId] = if (base.online) {
                 full
             } else {
-                mergeDownloaded(base, recs, includeBase = false)
+                mergeDownloaded(baseWithExtras, recs, includeBase = false)
             }
         }
         // 下载记录按设备补进资料库：远端没同步到/已删除/设备离线时，本地仍然展示这些条目。
@@ -767,10 +783,7 @@ class RemoteLibraryManager(
         if (paths.isEmpty() || deviceId in ebookDetailUnsupported) return
         val snapshot = payloads[deviceId] ?: return
         if (!snapshot.online) return
-        val pending = paths.distinct().filter { path ->
-            "$deviceId|$path" !in ebookDetailRequested &&
-                snapshot.payload.ebooks.any { it.path == path && !it.metaScanned }
-        }
+        val pending = paths.distinct().filter { path -> "$deviceId|$path" !in ebookDetailRequested }
         if (pending.isEmpty()) return
         val baseUrl = "http://${snapshot.host}:${snapshot.port}"
         // 用户快速连点“重新随机”时，上一批可能还在解析；直接取消，避免请求堆积。
@@ -840,9 +853,135 @@ class RemoteLibraryManager(
                 )
             }
         }
-        if (!changed) return false
-        payloads[deviceId] = cached.copy(payload = cached.payload.copy(ebooks = ebooks))
-        return true
+        if (changed) {
+            payloads[deviceId] = cached.copy(payload = cached.payload.copy(ebooks = ebooks))
+        }
+        // ⚡ 快速扫描书库的书不在快照里：按需解析结果必须补进 extras，
+        // 否则搜索结果/随机历史虽然拿到了 path，UI 仍然找不到对应条目。
+        val existing = ebookExtras[deviceId]?.get(detail.path)
+            ?: cached.payload.ebooks.firstOrNull { it.path == detail.path }
+        val wire = RemoteEbookWire(
+            path = detail.path,
+            title = detail.title.ifBlank { existing?.title.orEmpty() },
+            author = detail.author.ifBlank { existing?.author.orEmpty() },
+            size = detail.size.takeIf { it > 0L } ?: existing?.size ?: 0L,
+            hasCover = detail.hasCover || existing?.hasCover == true,
+            metaScanned = true,
+            rootKey = detail.rootKey.ifBlank { existing?.rootKey.orEmpty() },
+        )
+        if (existing != wire) {
+            ebookExtras.getOrPut(deviceId) { ConcurrentHashMap() }[detail.path] = wire
+            changed = true
+        }
+        return changed
+    }
+
+    // ---- 快速扫描书库的按需列表 ----
+
+    /** 把服务端返回的书合并进当前设备的“按需电子书”集合。 */
+    private fun upsertEbookWires(deviceId: String, books: List<RemoteEbookWire>): Boolean {
+        if (books.isEmpty()) return false
+        val map = ebookExtras.getOrPut(deviceId) { ConcurrentHashMap() }
+        var changed = false
+        books.forEach { book ->
+            if (book.path.isBlank()) return@forEach
+            if (map[book.path] != book) {
+                map[book.path] = book
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    /** 从服务端随机取一批书（不进 /library/all 的大书库用）。 */
+    suspend fun fetchRandomEbooks(
+        deviceId: String,
+        rootKey: String,
+        count: Int,
+    ): List<RemoteEbookWire>? = withContext(Dispatchers.IO) {
+        val base = onlineBaseUrl(deviceId) ?: return@withContext null
+        val url = "$base/library/ebook/random?rootKey=${enc(rootKey)}&count=$count"
+        val text = runCatching {
+            val req = Request.Builder().url(url).header("X-Aurora-Device", "1").get().build()
+            client.newCall(req).execute().use { r ->
+                if (r.isSuccessful) r.body?.string() else null
+            }
+        }.getOrNull() ?: return@withContext null
+        val books = runCatching {
+            gson.fromJson(text, RemoteEbookListResponse::class.java)
+        }.getOrNull()?.books.orEmpty()
+        if (upsertEbookWires(deviceId, books)) rebuildLibraries()
+        books
+    }
+
+    /** 服务端搜索：10 万本的快速扫描书库不再下载整表到手机。 */
+    suspend fun searchEbooks(
+        deviceId: String,
+        rootKey: String,
+        query: String,
+        limit: Int = 100,
+    ): List<RemoteEbookWire>? = withContext(Dispatchers.IO) {
+        val q = query.trim()
+        if (q.isEmpty()) return@withContext emptyList()
+        val base = onlineBaseUrl(deviceId) ?: return@withContext null
+        val url = "$base/library/ebook/search?rootKey=${enc(rootKey)}" +
+            "&q=${enc(q)}&limit=$limit"
+        val text = runCatching {
+            val req = Request.Builder().url(url).header("X-Aurora-Device", "1").get().build()
+            client.newCall(req).execute().use { r ->
+                if (r.isSuccessful) r.body?.string() else null
+            }
+        }.getOrNull() ?: return@withContext null
+        val books = runCatching {
+            gson.fromJson(text, RemoteEbookListResponse::class.java)
+        }.getOrNull()?.books.orEmpty()
+        if (upsertEbookWires(deviceId, books)) rebuildLibraries()
+        books
+    }
+
+    /**
+     * 快速扫描书库的随机结果：第一次进入时向服务端要一批并落盘；
+     * 已有结果只补元信息，保持用户上次看到的那批书不变。
+     */
+    suspend fun ensureRemoteEbookRandom(
+        deviceId: String,
+        rootKey: String,
+        count: Int,
+    ): RemoteEbookRandomState? {
+        val key = "$deviceId|$rootKey"
+        val existing = _ebookRandoms.value[key]
+        if (existing != null && existing.paths.isNotEmpty()) {
+            requestEbookDetails(deviceId, existing.paths)
+            return existing
+        }
+        return rerollRemoteEbookRandom(deviceId, rootKey, count, pushHistory = false)
+    }
+
+    suspend fun rerollRemoteEbookRandom(
+        deviceId: String,
+        rootKey: String,
+        count: Int,
+        pushHistory: Boolean = true,
+    ): RemoteEbookRandomState? {
+        val key = "$deviceId|$rootKey"
+        val existing = _ebookRandoms.value[key]
+        val target = count.coerceIn(MIN_RANDOM_COUNT, MAX_RANDOM_COUNT)
+        if (pushHistory && existing != null && existing.paths.isNotEmpty()) {
+            pushRandomHistory(existing)
+        }
+        val books = fetchRandomEbooks(deviceId, rootKey, target) ?: return existing
+        if (books.isEmpty()) return existing
+        val state = RemoteEbookRandomState(
+            deviceId = deviceId,
+            rootKey = rootKey,
+            paths = books.map { it.path },
+            count = target,
+            updatedAt = System.currentTimeMillis(),
+        )
+        _ebookRandoms.value = _ebookRandoms.value + (key to state)
+        persistRandoms()
+        rebuildLibraries()
+        return state
     }
 
     // ---- 随机选书 ----

@@ -768,10 +768,27 @@ pub fn audiobooks(conn: &Connection) -> Result<Vec<AudiobookDto>> {
 }
 
 pub fn books(conn: &Connection) -> Result<Vec<BookDto>> {
-    let mut stmt = conn.prepare(
+    books_with(conn, "")
+}
+
+/// Snapshot variant: fast-scan roots can hold 100k+ books and are served lazily
+/// through the ebook random/search endpoints instead of `/library/all`.
+pub fn books_not_fast_scan(conn: &Connection) -> Result<Vec<BookDto>> {
+    books_with(
+        conn,
+        "WHERE NOT EXISTS (
+            SELECT 1 FROM roots r
+            WHERE r.id = books.root_id AND r.kind = 'book' AND r.fast_scan = 1
+         )",
+    )
+}
+
+fn books_with(conn: &Connection, filter: &str) -> Result<Vec<BookDto>> {
+    let sql = format!(
         "SELECT path, root_id, rel_path, title, author, size, format, has_cover, meta_scanned
-         FROM books ORDER BY title COLLATE NOCASE, rel_path COLLATE NOCASE",
-    )?;
+         FROM books {filter} ORDER BY title COLLATE NOCASE, rel_path COLLATE NOCASE"
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], |row| {
         let path: String = row.get(0)?;
         let has_cover: i64 = row.get(7)?;
@@ -860,7 +877,7 @@ pub fn wire_snapshot(
         }
     }
 
-    let ebooks = books(conn)?
+    let ebooks = books_not_fast_scan(conn)?
         .into_iter()
         .map(|b| WireEbook {
             path: b.path,
@@ -981,6 +998,82 @@ pub fn root_book_paths_all(conn: &Connection, root_key: &str) -> Result<Vec<Stri
     Ok(out)
 }
 
+/// Random EPUBs for a fast-scan root. The client no longer keeps the whole
+/// 100k-book list; it asks for one window at a time.
+pub fn root_ebooks_random(
+    conn: &Connection,
+    root_key: &str,
+    count: usize,
+) -> Result<Vec<WireEbook>> {
+    let Ok(root_id) = root_key.parse::<i64>() else {
+        return Ok(Vec::new());
+    };
+    let mut stmt = conn.prepare(
+        "SELECT path, title, author, size, has_cover, meta_scanned, root_id
+         FROM books WHERE root_id = ?1 AND format = 'epub'
+         ORDER BY RANDOM() LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![root_id, count.min(200) as i64], wire_ebook_row)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Title/author search executed on the host so a large fast-scan root never
+/// has to be mirrored into the phone's memory first.
+pub fn root_ebooks_search(
+    conn: &Connection,
+    root_key: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<WireEbook>> {
+    let Ok(root_id) = root_key.parse::<i64>() else {
+        return Ok(Vec::new());
+    };
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let escaped = q
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let pattern = format!("%{escaped}%");
+    let mut stmt = conn.prepare(
+        "SELECT path, title, author, size, has_cover, meta_scanned, root_id
+         FROM books
+         WHERE root_id = ?1 AND format = 'epub'
+           AND (title LIKE ?2 ESCAPE '\\' COLLATE NOCASE
+                OR author LIKE ?2 ESCAPE '\\' COLLATE NOCASE)
+         ORDER BY title COLLATE NOCASE
+         LIMIT ?3",
+    )?;
+    let rows = stmt.query_map(
+        params![root_id, pattern, limit.min(200) as i64],
+        wire_ebook_row,
+    )?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+fn wire_ebook_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WireEbook> {
+    let root_id: i64 = row.get(6)?;
+    Ok(WireEbook {
+        path: row.get(0)?,
+        title: row.get(1)?,
+        author: row.get(2)?,
+        size: row.get(3)?,
+        has_cover: row.get::<_, i64>(4)? != 0,
+        meta_scanned: row.get::<_, i64>(5)? != 0,
+        root_key: root_id.to_string(),
+    })
+}
+
 /// Filters a client-supplied path list down to books that really belong to the
 /// given book root. Only used as a compatibility fallback for older clients or
 /// roots the host cannot resolve; the random feed never trusts paths blindly.
@@ -1007,6 +1100,8 @@ pub struct BookScanInfo {
     pub format: String,
     pub title: String,
     pub author: String,
+    pub size: i64,
+    pub root_key: String,
     pub has_cover: bool,
     pub meta_scanned: bool,
 }
@@ -1014,7 +1109,7 @@ pub struct BookScanInfo {
 pub fn book_scan_info(conn: &Connection, path: &str) -> Result<Option<BookScanInfo>> {
     let row = conn
         .query_row(
-            "SELECT path, format, title, author, has_cover, meta_scanned
+            "SELECT path, format, title, author, size, root_id, has_cover, meta_scanned
              FROM books WHERE path = ?1",
             params![path],
             |row| {
@@ -1023,8 +1118,10 @@ pub fn book_scan_info(conn: &Connection, path: &str) -> Result<Option<BookScanIn
                     format: row.get(1)?,
                     title: row.get(2)?,
                     author: row.get(3)?,
-                    has_cover: row.get::<_, i64>(4)? != 0,
-                    meta_scanned: row.get::<_, i64>(5)? != 0,
+                    size: row.get(4)?,
+                    root_key: row.get::<_, i64>(5)?.to_string(),
+                    has_cover: row.get::<_, i64>(6)? != 0,
+                    meta_scanned: row.get::<_, i64>(7)? != 0,
                 })
             },
         )
@@ -1157,5 +1254,38 @@ mod tests {
             vec!["/books/a.epub".to_string()]
         );
         assert!(root_book_paths_all(&conn, "unknown").unwrap().is_empty());
+    }
+
+    #[test]
+    fn fast_scan_roots_are_lazy_but_searchable() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute(
+            "INSERT INTO roots(id, path, kind, display_name, created_at, fast_scan)
+             VALUES (1, '/fast', 'book', 'Fast', 0, 1),
+                    (2, '/normal', 'book', 'Normal', 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO books(path, root_id, rel_path, file_name, title, author, format)
+             VALUES ('/fast/a.epub', 1, 'a.epub', 'a.epub', 'Alpha', 'Ann', 'epub'),
+                    ('/normal/b.epub', 2, 'b.epub', 'b.epub', 'Beta', 'Bob', 'epub')",
+            [],
+        )
+        .unwrap();
+
+        let snapshot_books = books_not_fast_scan(&conn).unwrap();
+        assert_eq!(snapshot_books.len(), 1);
+        assert_eq!(snapshot_books[0].path, "/normal/b.epub");
+
+        let searched = root_ebooks_search(&conn, "1", "alp", 10).unwrap();
+        assert_eq!(searched.len(), 1);
+        assert_eq!(searched[0].path, "/fast/a.epub");
+        assert_eq!(searched[0].root_key, "1");
+
+        let random = root_ebooks_random(&conn, "1", 10).unwrap();
+        assert_eq!(random.len(), 1);
+        assert!(root_ebooks_search(&conn, "1", "nomatch", 10).unwrap().is_empty());
     }
 }
