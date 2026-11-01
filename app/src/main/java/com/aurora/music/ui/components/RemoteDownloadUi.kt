@@ -289,7 +289,9 @@ fun RemoteDownloadSwipeRow(
     val downloads = container.remoteDownloads
     val all by downloads.ui.collectAsStateWithLifecycle()
     val state = all[downloads.stateKey(kind, deviceId, remoteKey)] ?: RemoteDownloadUi()
-    val relay = container.remoteLibrary.isRelayDevice(deviceId)
+    // 订阅集合而不是读 isRelayDevice()：后者是普通函数，切换传输后 Compose 不会重组。
+    val relayDevices by container.remoteLibrary.relayDevices.collectAsStateWithLifecycle()
+    val relay = deviceId in relayDevices
     // 设备离线时未下载的条目变灰禁点；已下载条目仍可离线使用/删除。
     val enabled = remoteOnline || state.status == RemoteDownloadStatus.DOWNLOADED
     CompositionLocalProvider(LocalRemoteAvailable provides enabled, LocalRemoteRelay provides relay) {

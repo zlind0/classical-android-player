@@ -212,7 +212,7 @@ class RemoteDownloadManager(context: Context) {
     // ---- 下载入口 ----
 
     fun downloadSong(deviceId: String, deviceName: String, song: Song) {
-        if (!song.streamUrl.startsWith("http")) return
+        if (!RemoteUrls.isRemoteStream(song.streamUrl)) return
         val groupKey = song.albumId.ifBlank { "${song.artist}|${song.album}" }
         val groupId = "remote-album:$deviceId:$groupKey"
         val snapshot = snapshotOf(song, groupId, song.album, true)
@@ -229,7 +229,7 @@ class RemoteDownloadManager(context: Context) {
         )
         val dir = recordDir(record)
         val units = buildList {
-            if (song.artworkUrl.startsWith("http")) {
+            if (isDownloadableArtwork(song.artworkUrl)) {
                 add(DownloadUnit(song.artworkUrl, File(dir, "cover.img"), 0L) { rec, path ->
                     rec.copy(cover = fileUri(path), tracks = rec.tracks.map { it.copy(artworkUrl = fileUri(path)) })
                 })
@@ -252,7 +252,7 @@ class RemoteDownloadManager(context: Context) {
         album: RemoteAlbumGroup,
         songs: List<Song>,
     ) {
-        val targets = songs.filter { it.streamUrl.startsWith("http") }
+        val targets = songs.filter { RemoteUrls.isRemoteStream(it.streamUrl) }
         if (targets.isEmpty()) return
         val record = RemoteDownloadRecord(
             kind = RemoteDownloadKind.TRACK_GROUP,
@@ -267,7 +267,7 @@ class RemoteDownloadManager(context: Context) {
         )
         val dir = recordDir(record)
         val units = buildList {
-            if (album.artworkUrl.startsWith("http")) {
+            if (isDownloadableArtwork(album.artworkUrl)) {
                 add(DownloadUnit(album.artworkUrl, File(dir, "cover.img"), 0L) { rec, path ->
                     rec.copy(
                         cover = fileUri(path),
@@ -292,7 +292,8 @@ class RemoteDownloadManager(context: Context) {
         enqueue(record, units, targets.map { stateKey(RemoteDownloadKind.TRACK, deviceId, it.id) })
     }
 
-    fun downloadAlbum(deviceId: String, deviceName: String, album: RemoteAlbumGroup) {        val songs = album.songs.filter { it.streamUrl.startsWith("http") }
+    fun downloadAlbum(deviceId: String, deviceName: String, album: RemoteAlbumGroup) {
+        val songs = album.songs.filter { RemoteUrls.isRemoteStream(it.streamUrl) }
         if (songs.isEmpty()) return
         val record = RemoteDownloadRecord(
             kind = RemoteDownloadKind.ALBUM,
@@ -307,7 +308,7 @@ class RemoteDownloadManager(context: Context) {
         )
         val dir = recordDir(record)
         val units = buildList {
-            if (album.artworkUrl.startsWith("http")) {
+            if (isDownloadableArtwork(album.artworkUrl)) {
                 add(DownloadUnit(album.artworkUrl, File(dir, "cover.img"), 0L) { rec, path ->
                     rec.copy(
                         cover = fileUri(path),
@@ -333,7 +334,7 @@ class RemoteDownloadManager(context: Context) {
     }
 
     fun downloadArtist(deviceId: String, deviceName: String, artist: RemoteArtistGroup) {
-        val songs = artist.songs.filter { it.streamUrl.startsWith("http") }
+        val songs = artist.songs.filter { RemoteUrls.isRemoteStream(it.streamUrl) }
         if (songs.isEmpty()) return
         val record = RemoteDownloadRecord(
             kind = RemoteDownloadKind.ARTIST,
@@ -348,7 +349,7 @@ class RemoteDownloadManager(context: Context) {
         )
         val dir = recordDir(record)
         val units = buildList {
-            if (artist.imageUrl.startsWith("http")) {
+            if (isDownloadableArtwork(artist.imageUrl)) {
                 add(DownloadUnit(artist.imageUrl, File(dir, "cover.img"), 0L) { rec, path ->
                     rec.copy(
                         cover = fileUri(path),
@@ -396,7 +397,7 @@ class RemoteDownloadManager(context: Context) {
         )
         val dir = recordDir(record)
         val units = buildList {
-            if (coverUrl.startsWith("http")) {
+            if (isDownloadableArtwork(coverUrl)) {
                 add(DownloadUnit(coverUrl, File(dir, "cover.img"), 0L) { rec, path ->
                     rec.copy(cover = fileUri(path), ebookCovers = rec.ebookCovers + (ebook.path to fileUri(path)))
                 })
@@ -533,7 +534,7 @@ class RemoteDownloadManager(context: Context) {
             book.chapters.forEachIndexed { i, ch ->
                 add(
                     DownloadUnit(
-                        "$baseUrl/media/audiobook?path=${enc(ch.path)}",
+                        RemoteUrls.audiobook(deviceId, ch.path),
                         File(dir, "chapter_$i.${audioExt(ch.path)}"),
                         ch.size,
                     ) { rec, path -> rec.copy(chapterFiles = rec.chapterFiles + (ch.path to path)) },
@@ -723,6 +724,11 @@ class RemoteDownloadManager(context: Context) {
         activeJobs[k] = job
     }
 
+    /**
+     * 把一个下载单元取到 [dest]。
+     * [url] 可能是稳定虚拟 URL（pod-remote://）、中继/局域网 http URL 或本地 file://
+     * （封面比对时本地封面缓存已经在盘上）。
+     */
     private fun fetch(
         url: String,
         dest: File,
@@ -731,6 +737,39 @@ class RemoteDownloadManager(context: Context) {
     ): Boolean = runCatching {
         dest.parentFile?.let { if (!it.isDirectory) it.mkdirs() }
         val tmp = File(dest.parentFile, dest.name + ".part")
+        val realUrl = RemoteMediaCache.resolveUrl(url)
+        val ok = if (realUrl.startsWith("file:")) {
+            // 封面可能已经在本地封面缓存里（file://）：复制一份进下载目录，
+            // 免得 30 天过期清掉封面缓存后下载条目跟着掉图。
+            copyLocal(File(Uri.parse(realUrl).path.orEmpty()), tmp, onProgress)
+        } else {
+            fetchHttp(realUrl, tmp, expectedBytes, onProgress)
+        }
+        if (ok && tmp.isFile && tmp.length() > 0L) {
+            if (!tmp.renameTo(dest)) {
+                runCatching { tmp.copyTo(dest, overwrite = true) }
+                runCatching { tmp.delete() }
+            }
+            true
+        } else {
+            runCatching { tmp.delete() }
+            false
+        }
+    }.getOrDefault(false)
+
+    private fun copyLocal(src: File, tmp: File, onProgress: (Long, Long) -> Unit): Boolean {
+        if (!src.isFile || src.length() <= 0L) return false
+        src.copyTo(tmp, overwrite = true)
+        onProgress(src.length(), src.length())
+        return true
+    }
+
+    private fun fetchHttp(
+        url: String,
+        tmp: File,
+        expectedBytes: Long,
+        onProgress: (Long, Long) -> Unit,
+    ): Boolean = runCatching {
         val req = Request.Builder()
             .url(url)
             .header("X-Aurora-Device", "1")
@@ -760,17 +799,11 @@ class RemoteDownloadManager(context: Context) {
                 out.flush()
             }
             true
-        }.also { ok ->
-            if (ok && tmp.isFile && tmp.length() > 0L) {
-                if (!tmp.renameTo(dest)) {
-                    runCatching { tmp.copyTo(dest, overwrite = true) }
-                    runCatching { tmp.delete() }
-                }
-            } else {
-                runCatching { tmp.delete() }
-            }
         }
     }.getOrDefault(false)
+
+    private fun isDownloadableArtwork(url: String): Boolean =
+        url.startsWith("http://") || url.startsWith("https://") || url.startsWith("file:")
 
     private fun publishProgress(parentKey: String, childKeys: List<String>, progress: Float) {
         activeProgress[parentKey] = progress

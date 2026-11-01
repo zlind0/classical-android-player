@@ -23,14 +23,19 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -56,6 +61,8 @@ class RemoteLibraryManager(
     private val downloads: RemoteDownloadManager,
     /** 公网中继；未启用时为 null。它对外表现为同一台设备的另一个端点。 */
     private val relay: com.aurora.music.data.relay.RelayService? = null,
+    /** 网络代次；换网时打断 15 秒等待，立刻重新探测端点。 */
+    private val networkChanges: kotlinx.coroutines.flow.StateFlow<Long>? = null,
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -65,6 +72,16 @@ class RemoteLibraryManager(
         .connectTimeout(2, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(5, TimeUnit.SECONDS)
+        .build()
+
+    /** 端点探测：整次调用封顶，避免半开连接把一整轮同步拖住。 */
+    private val probeClient = client.newBuilder()
+        .callTimeout(3, TimeUnit.SECONDS)
+        .build()
+
+    /** 中继端点还要经过本机代理再走一次链路往返，多给一秒。 */
+    private val relayProbeClient = client.newBuilder()
+        .callTimeout(4, TimeUnit.SECONDS)
         .build()
 
     private val _libraries = MutableStateFlow<List<RemoteDeviceLibrary>>(emptyList())
@@ -118,8 +135,36 @@ class RemoteLibraryManager(
     /** 每一台设备的最近一次快照（含 offline），UI 直接读。 */
     private val payloads = ConcurrentHashMap<String, RemoteLibrarySnapshot>()
 
-    /** 当前同步端点是否为本机中继代理；用于切换 Wi-Fi / 云图标。 */
-    fun isRelayDevice(deviceId: String): Boolean = payloads[deviceId]?.relay == true
+    /**
+     * 端点连续失败次数。
+     * 切换传输方式时旧端点会先失败一次，如果立刻判离线，资料库会整段消失再出现；
+     * 连续 [OFFLINE_STRIKES] 轮都连不上才真的标记离线。
+     */
+    private val offlineStrikes = ConcurrentHashMap<String, Int>()
+
+    /**
+     * 每台设备最近一次局域网端点。
+     * 走中继时 payload.host 会被写成 127.0.0.1，单独记一份，
+     * 切回 Wi‑Fi 时不用等 mDNS/UDP 重新发现就能直接连。
+     */
+    private val lanEndpoints = ConcurrentHashMap<String, Pair<String, Int>>()
+
+    /**
+     * 每台设备同时只跑一个封面预取任务。
+     * 端点变化（局域网⇄中继）时旧任务里的 URL 已失效，直接换新的。
+     */
+    private val artPrefetchJobs = ConcurrentHashMap<String, Job>()
+
+    /** 本进程内是否已经为某台设备预取过封面（避免每 15 秒重扫一遍）。 */
+    private val artPrefetched = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * 走公网中继的设备 id 集合（可观察）。
+     * UI 必须订阅它才能在中继/局域网切换后重新画图标；
+     * 直接读 payload map 只是普通函数调用，Compose 不会因为它变化而重组。
+     */
+    private val _relayDevices = MutableStateFlow<Set<String>>(emptySet())
+    val relayDevices: StateFlow<Set<String>> = _relayDevices.asStateFlow()
 
     /** 所有远程歌曲（音乐 + 有声书章节）按播放用 id 索引，缓存维护用。 */
     private val songsById = ConcurrentHashMap<String, Song>()
@@ -183,75 +228,100 @@ class RemoteLibraryManager(
     private suspend fun syncLoop() {
         var first = true
         while (scope.isActive) {
+            // 先记下代次：本轮进行中如果换了网，等待阶段会立刻返回，不再白白睡 15 秒。
+            val generation = networkChanges?.value ?: 0L
             try {
                 pruneExpired()
                 val discovered = runCatching { discovery.devices.value }.getOrDefault(emptyList())
                     .filter { it.kind == CastDeviceKind.APP && it.port > 0 }
-                val discoveredIds = discovered.map { it.id }.toSet()
-                // 关键：设备从后台被杀后，mDNS 可能不会重新通知正在浏览的一端。
-                // 对“已缓存但当前没被 mDNS/UDP 发现”的设备，用上次 host/port 主动探活，
-                // 只要对端应用重新起来，就能恢复在线并跳过全量 meta。
-                val known = payloads.values
-                    .filter {
-                        it.deviceId !in discoveredIds &&
-                            it.host.isNotBlank() && it.port > 0
+                // 同一台设备可能有多个端点：局域网（本次发现）→ 局域网（上次地址）→
+                // 本机中继代理。全部并发探测，谁先成功用谁，避免串行等超时。
+                val grouped = LinkedHashMap<String, MutableList<CastDevice>>()
+                fun addCandidate(device: CastDevice) {
+                    val list = grouped.getOrPut(device.id) { mutableListOf() }
+                    if (list.none { it.host == device.host && it.port == device.port }) list.add(device)
+                }
+                discovered.forEach { addCandidate(it) }
+                payloads.values.forEach { cached ->
+                    // 走中继时 payload 里的 host 会被写成 127.0.0.1；局域网地址单独存着，
+                    // 这样切回 Wi‑Fi 不用等 mDNS 重新发现。
+                    lanEndpointOf(cached.deviceId)?.let { (host, port) ->
+                        addCandidate(
+                            CastDevice(
+                                id = cached.deviceId,
+                                name = cached.deviceName,
+                                host = host,
+                                port = port,
+                                source = "cache",
+                                lastSeen = cached.lastSeenAt,
+                            ),
+                        )
                     }
-                    .map {
+                    if (cached.host.isNotBlank() && cached.port > 0 && !isLoopbackHost(cached.host)) {
+                        addCandidate(
+                            CastDevice(
+                                id = cached.deviceId,
+                                name = cached.deviceName,
+                                host = cached.host,
+                                port = cached.port,
+                                source = "cache",
+                                lastSeen = cached.lastSeenAt,
+                            ),
+                        )
+                    }
+                }
+                relay?.endpoint()?.let {
+                    addCandidate(
                         CastDevice(
                             id = it.deviceId,
                             name = it.deviceName,
                             host = it.host,
                             port = it.port,
-                            source = "cache",
-                            lastSeen = it.lastSeenAt,
-                        )
-                    }
-                // 同一台设备可能有多个端点：局域网优先，其次上次地址，最后本机中继代理。
-                val relayDevice = relay?.endpoint()?.let {
-                    CastDevice(
-                        id = it.deviceId,
-                        name = it.deviceName,
-                        host = it.host,
-                        port = it.port,
-                        source = "relay",
+                            source = "relay",
+                        ),
                     )
-                }
-                val grouped = LinkedHashMap<String, MutableList<CastDevice>>()
-                (discovered + known).forEach { device ->
-                    grouped.getOrPut(device.id) { mutableListOf() }.add(device)
-                }
-                if (relayDevice != null) {
-                    grouped.getOrPut(relayDevice.id) { mutableListOf() }.add(relayDevice)
                 }
                 grouped.values.forEach { endpoints -> syncDevice(endpoints) }
             } catch (t: Throwable) {
                 // 单轮同步异常不能把常驻循环打死，否则会永久看不到对端。
                 android.util.Log.w("AuroraRemoteLibrary", "sync loop error", t)
             }
-            delay(if (first) 1_500L else 15_000L)
+            awaitNextRound(first, generation)
             first = false
         }
     }
 
-    private suspend fun syncDevice(endpoints: List<CastDevice>) {
-        // 先问轻量版本：时间戳没变就直接复用磁盘上的完整快照，不拉全量 meta。
-        // 依次尝试每个端点，第一个成功的成为本轮通信地址。
-        val deviceId = endpoints.first().id
-        var device: CastDevice? = null
-        var versionResult: Pair<Boolean, Long>? = null
-        for (candidate in endpoints) {
-            val result = fetchVersion(candidate)
-            if (result != null) {
-                device = candidate
-                versionResult = result
-                break
-            }
+    /** 等到下一轮；网络代次变化会立即唤醒。 */
+    private suspend fun awaitNextRound(first: Boolean, generation: Long) {
+        val timeout = if (first) 1_500L else SYNC_INTERVAL_MS
+        val flow = networkChanges
+        if (flow == null) {
+            delay(timeout)
+            return
         }
-        val endpoint = device
-        if (endpoint == null || versionResult == null) {
+        val changed = withTimeoutOrNull(timeout) { flow.first { it != generation } } != null
+        // 换网刚发生时新链路可能还没就绪（TLS 握手/地址分配），给传输层一点时间再做探测。
+        if (changed) delay(SETTLE_DELAY_MS)
+    }
+
+    private suspend fun syncDevice(endpoints: List<CastDevice>) {
+        if (endpoints.isEmpty()) return
+        val deviceId = endpoints.first().id
+        // 先问轻量版本：时间戳没变就直接复用磁盘上的完整快照，不拉全量 meta。
+        // 并发探测所有端点（含中继），第一个成功的成为本轮通信地址。
+        val probed = coroutineScope {
+            endpoints.map { candidate ->
+                async { candidate to fetchVersion(candidate) }
+            }.awaitAll()
+        }
+        val hit = probed.firstOrNull { it.second != null }
+        if (hit == null) {
             markOffline(deviceId)
             return
         }
+        val endpoint = hit.first
+        val versionResult = hit.second ?: return
+        if (endpoint.source != "relay") rememberLanEndpoint(endpoint.id, endpoint.host, endpoint.port)
         val cached = payloads[endpoint.id]
         if (versionResult.first && cached != null &&
             cached.payload.libraryUpdatedAt > 0L &&
@@ -270,11 +340,14 @@ class RemoteLibraryManager(
                 lastSeenAt = now,
             )
             payloads[endpoint.id] = updated
+            offlineStrikes.remove(endpoint.id)
             // lastSeen 每 15 秒写一次盘没必要；一小时落一次足够判断 30 天过期。
             if (!sameEndpoint || now - cached.lastSeenAt > LAST_SEEN_SAVE_INTERVAL_MS) {
                 RemoteLibraryDb.updateMeta(storeDir, updated)
             }
-            if (!wasOnline) rebuildLibraries()
+            if (!wasOnline || cached.relay != (endpoint.source == "relay")) rebuildLibraries()
+            // 端点变了 = 封面 URL 变了；本进程还没补过封面也补一次。
+            if (!sameEndpoint || artPrefetched.add(endpoint.id)) schedulePrefetchArtwork(updated)
             return
         }
 
@@ -310,9 +383,11 @@ class RemoteLibraryManager(
             payload = wire.copy(deviceId = endpoint.id, deviceName = endpoint.name),
         )
         payloads[endpoint.id] = fresh
+        offlineStrikes.remove(endpoint.id)
         persistPayload(fresh)
         rebuildLibraries()
-        scope.launch { prefetchArtwork(fresh); rebuildLibraries() }
+        artPrefetched.add(endpoint.id)
+        schedulePrefetchArtwork(fresh)
     }
 
     /**
@@ -326,7 +401,9 @@ class RemoteLibraryManager(
                 .header("X-Aurora-Device", "1")
                 .get()
                 .build()
-            client.newCall(req).execute().use { r ->
+            // 探测必须短：中继代理内还会等一次链路往返，卡太久整轮同步都会被拖住。
+            val probe = if (device.source == "relay") relayProbeClient else probeClient
+            probe.newCall(req).execute().use { r ->
                 if (r.code == 404) return@use false to 0L
                 if (!r.isSuccessful) return@use null
                 val body = r.body?.string() ?: return@use false to 0L
@@ -337,24 +414,60 @@ class RemoteLibraryManager(
         }.getOrNull()
     }
 
-    /** 艺术家/专辑/图书/有声书封面一次性补到本地，之后 UI 直接用 file://。 */
-    private suspend fun prefetchArtwork(cached: RemoteLibrarySnapshot) {
-        val lib = runCatching { cached.toLibrary(appContext) }.getOrNull() ?: return
-        val urls = LinkedHashSet<String>()
-        lib.albums.forEach { if (it.artworkUrl.isNotBlank()) urls += it.artworkUrl }
-        lib.artists.forEach { if (it.imageUrl.isNotBlank()) urls += it.imageUrl }
-        lib.ebooks.filter { it.hasCover }.forEach {
-            urls += "${lib.baseUrl}/media/cover?kind=ebook&key=${enc(it.path)}"
+    /**
+     * 每台设备同时只跑一个封面预取任务。
+     * 端点变化（局域网⇄中继）后旧的下载 URL 已经失效，取消旧任务并用新端点重来。
+     */
+    private fun schedulePrefetchArtwork(snapshot: RemoteLibrarySnapshot) {
+        val endpointKey = "${snapshot.deviceId}|${snapshot.host}:${snapshot.port}"
+        if (artPrefetchJobs[endpointKey]?.isActive == true) return
+        artPrefetchJobs.keys
+            .filter { it != endpointKey && it.startsWith("${snapshot.deviceId}|") }
+            .forEach { key -> artPrefetchJobs.remove(key)?.cancel() }
+        val job = scope.launch {
+            val failed = prefetchArtwork(snapshot)
+            // 封面落盘后重建一次，artworkUrl 从远端 URL 换成 file://。
+            rebuildLibraries()
+            // 有图没拉下来就允许下一轮再试（已成功的会按文件是否存在跳过）。
+            if (failed > 0) artPrefetched.remove(snapshot.deviceId)
         }
-        lib.audiobooks.filter { it.hasCover }.forEach {
-            urls += "${lib.baseUrl}/media/cover?kind=audiobook&key=${enc(it.id)}"
+        artPrefetchJobs[endpointKey] = job
+    }
+
+    /**
+     * 艺术家/专辑/图书/有声书封面一次性补到本地，之后 UI 直接用 file://。
+     *
+     * 缓存键是逻辑 key（deviceId + kind + key），与传输方式无关；URL 只用于本次下载。
+     * UI 只在文件存在时把 artworkUrl 换成 file://，所以这张图必须尽早落盘，
+     * 否则每次切换局域网/中继都会按新 URL 重新下载一遍。
+     */
+    private suspend fun prefetchArtwork(cached: RemoteLibrarySnapshot): Int {
+        val base = "http://${cached.host}:${cached.port}"
+        val entries = LinkedHashSet<Pair<String, String>>()
+        // 专辑封面 = 该专辑第一首的内嵌图；按 UI 的分组方式取一次即可。
+        cached.payload.music
+            .filter { it.hasArt && it.id.isNotBlank() }
+            .groupBy { artGroupKey(it) }
+            .values
+            .forEach { tracks ->
+                tracks.firstOrNull()?.let { t ->
+                    entries += "songart|${t.id}" to "$base/media/songart?id=${enc(t.id)}"
+                }
+            }
+        cached.payload.ebooks.filter { it.hasCover }.forEach {
+            entries += "ebook|${it.path}" to "$base/media/cover?kind=ebook&key=${enc(it.path)}"
         }
-        RemoteArtCache.prefetch(appContext, cached.deviceId, urls)
+        cached.payload.audiobooks.filter { it.hasCover }.forEach {
+            entries += "audiobook|${it.id}" to "$base/media/cover?kind=audiobook&key=${enc(it.id)}"
+        }
+        return RemoteArtCache.prefetch(appContext, cached.deviceId, entries)
     }
 
     private fun markOffline(deviceId: String) {
         val c = payloads[deviceId] ?: return
-        if (!c.online) return
+        val strikes = (offlineStrikes[deviceId] ?: 0) + 1
+        offlineStrikes[deviceId] = strikes
+        if (!c.online || strikes < OFFLINE_STRIKES) return
         payloads[deviceId] = c.copy(online = false)
         rebuildLibraries()
     }
@@ -368,13 +481,28 @@ class RemoteLibraryManager(
         if (expired.isEmpty()) return
         expired.forEach {
             payloads.remove(it.deviceId)
+            offlineStrikes.remove(it.deviceId)
+            lanEndpoints.remove(it.deviceId)
             RemoteLibraryDb.delete(storeDir, it.deviceId)
             RemoteArtCache.clearDevice(appContext, it.deviceId)
+            RemoteMediaCache.removeEndpoint(it.deviceId)
         }
+        persistLanEndpoints()
         rebuildLibraries()
     }
 
     private fun rebuildLibraries() {
+        // 播放/预取用的虚拟 URL 需要知道每台设备当前该走哪个端点。
+        payloads.values.forEach { cached ->
+            if (cached.host.isNotBlank() && cached.port > 0) {
+                RemoteMediaCache.setEndpoint(cached.deviceId, "http://${cached.host}:${cached.port}")
+            }
+        }
+        // 中继/局域网图标：集合内容变化时才更新，StateFlow 会按相等性去重。
+        _relayDevices.value = payloads.values
+            .filter { it.relay }
+            .map { it.deviceId }
+            .toSet()
         val recsByDevice = downloads.records.value.groupBy { it.deviceId }
         val displayMerged = HashMap<String, RemoteDeviceLibrary>()
         val fullMerged = HashMap<String, RemoteDeviceLibrary>()
@@ -572,14 +700,16 @@ class RemoteLibraryManager(
     fun ebookCoverUrl(lib: RemoteDeviceLibrary, path: String, hasCover: Boolean): String {
         downloads.ebookCover(lib.deviceId, path)?.let { return it }
         return if (!hasCover) "" else RemoteArtCache.cachedOrRemote(
-            appContext, lib.deviceId, "${lib.baseUrl}/media/cover?kind=ebook&key=${enc(path)}",
+            appContext, lib.deviceId, "ebook|$path",
+            "${lib.baseUrl}/media/cover?kind=ebook&key=${enc(path)}",
         )
     }
 
     fun audiobookCoverUrl(lib: RemoteDeviceLibrary, bookId: String, hasCover: Boolean): String {
         downloads.audiobookCover(lib.deviceId, bookId)?.let { return it }
         return if (!hasCover) "" else RemoteArtCache.cachedOrRemote(
-            appContext, lib.deviceId, "${lib.baseUrl}/media/cover?kind=audiobook&key=${enc(bookId)}",
+            appContext, lib.deviceId, "audiobook|$bookId",
+            "${lib.baseUrl}/media/cover?kind=audiobook&key=${enc(bookId)}",
         )
     }
 
@@ -1024,7 +1154,7 @@ class RemoteLibraryManager(
                 artworkUrl = entry.coverUrl,
                 durationSec = c.durationSec,
                 streamUrl = localChapter?.let { Uri.fromFile(File(it)).toString() }
-                    ?: "${lib.baseUrl}/media/audiobook?path=${enc(c.path)}",
+                    ?: RemoteUrls.audiobook(entry.deviceId, c.path),
                 suffix = c.path.substringAfterLast('.', ""),
                 path = localChapter.orEmpty(),
                 accent = accentFor(c.path),
@@ -1055,8 +1185,7 @@ class RemoteLibraryManager(
 
     fun chapterCached(deviceId: String, path: String): Boolean {
         if (downloads.localChapterPath(deviceId, path) != null) return true
-        val lib = _libraries.value.firstOrNull { it.deviceId == deviceId } ?: return false
-        return RemoteMediaCache.isCached("${lib.baseUrl}/media/audiobook?path=${enc(path)}")
+        return RemoteMediaCache.isCached(RemoteUrls.audiobook(deviceId, path))
     }
 
     fun isAudiobookSong(id: String): Boolean = id.startsWith("audiobook:remote:")
@@ -1104,7 +1233,7 @@ class RemoteLibraryManager(
         val window = listOf(index - 1, index, index + 1)
             .filter { it in queueIds.indices }
             .mapNotNull { songsById[queueIds[it]] }
-            .filter { it.streamUrl.startsWith("http") }
+            .filter { RemoteUrls.isRemoteStream(it.streamUrl) }
         val urls = window.map { it.streamUrl }
         scope.launch {
             window.forEachIndexed { i, song ->
@@ -1127,7 +1256,7 @@ class RemoteLibraryManager(
 
         val triple = listOf(index - 1, index, index + 1).filter { it in queueIds.indices }
             .mapNotNull { songsById[queueIds[it]] }
-            .filter { it.streamUrl.startsWith("http") }
+            .filter { RemoteUrls.isRemoteStream(it.streamUrl) }
         val retained = mutableSetOf<String>()
         triple.forEach { retained += it.streamUrl }
         // “在听”里每本书也保前/中/后三章
@@ -1152,7 +1281,45 @@ class RemoteLibraryManager(
 
     // ---- 持久化 ----
 
+    private fun lanEndpointOf(deviceId: String): Pair<String, Int>? = lanEndpoints[deviceId]
+
+    /** 本机回环地址只可能是中继代理，不能当作局域网端点。 */
+    private fun isLoopbackHost(host: String): Boolean =
+        host == "127.0.0.1" || host == "localhost" || host == "::1" || host.startsWith("::ffff:127.")
+
+    private fun rememberLanEndpoint(deviceId: String, host: String, port: Int) {
+        if (deviceId.isBlank() || host.isBlank() || port <= 0) return
+        if (isLoopbackHost(host) || host.startsWith("::")) return
+        val previous = lanEndpoints.put(deviceId, host to port)
+        if (previous != host to port) persistLanEndpoints()
+    }
+
+    private fun loadLanEndpoints() {
+        runCatching {
+            val type = object : TypeToken<Map<String, List<String>>>() {}.type
+            val raw = gson.fromJson<Map<String, List<String>>>(
+                prefs.getString("lan_endpoints", "{}"),
+                type,
+            ).orEmpty()
+            raw.forEach { (deviceId, value) ->
+                val host = value.getOrNull(0).orEmpty()
+                val port = value.getOrNull(1)?.toIntOrNull() ?: 0
+                if (deviceId.isNotBlank() && host.isNotBlank() && port > 0) {
+                    lanEndpoints[deviceId] = host to port
+                }
+            }
+        }
+    }
+
+    private fun persistLanEndpoints() {
+        runCatching {
+            val raw = lanEndpoints.mapValues { (_, value) -> listOf(value.first, value.second.toString()) }
+            prefs.edit().putString("lan_endpoints", gson.toJson(raw)).apply()
+        }
+    }
+
     private fun loadCachedPayloads() {
+        loadLanEndpoints()
         // 旧版本把整份资料库塞进一个大 JSON；启动时一次性迁到每设备一个 SQLite 文件，然后删掉 JSON。
         migrateLegacyJson()
         RemoteLibraryDb.readAll(storeDir).forEach { c ->
@@ -1317,6 +1484,15 @@ class RemoteLibraryManager(
         ) + "#$index"
 
     private companion object {
+        /** 资料库在线时的轮询间隔；换网会通过 networkChanges 立刻打断。 */
+        const val SYNC_INTERVAL_MS = 15_000L
+
+        /** 连续失败多少轮才把设备标记成离线（避免切换传输时闪一下离线）。 */
+        const val OFFLINE_STRIKES = 2
+
+        /** 换网后等链路就绪再探测，避免第一次探测必然失败。 */
+        const val SETTLE_DELAY_MS = 700L
+
         /** 30 天没成功连上（版本探测也算）就清掉 meta 与封面缓存。 */
         const val CACHE_TTL_MS = 30L * 24 * 60 * 60 * 1000
 
@@ -1345,6 +1521,12 @@ class RemoteLibraryManager(
             val sid = deviceId
             val base = "http://$host:$port"
             val mergeById = HashMap<String, Boolean>()
+            // 专辑封面用「该专辑第一首有封面的曲目」同一个文件：同一张专辑的所有曲目
+            // 共享一个封面缓存键，切网后整张专辑都不用重新下载，预取也只需取一次。
+            val artIdByGroup = HashMap<String, String>()
+            payload.music.filter { it.hasArt && it.id.isNotBlank() }.forEach { t ->
+                artIdByGroup.getOrPut(artGroupKey(t)) { t.id }
+            }
             // path 只参与本地同款排序，构造完播放用 Song 后会清空，避免被当成真实文件路径。
             val rawSongs = payload.music.filter { it.id.isNotBlank() }.map { t ->
                 val id = "remote:$sid:" + Base64.encodeToString(
@@ -1352,15 +1534,25 @@ class RemoteLibraryManager(
                     Base64.URL_SAFE or Base64.NO_WRAP,
                 )
                 mergeById[id] = t.mergeTitles
-                val remoteArt = if (t.hasArt) "$base/media/songart?id=${URLEncoder.encode(t.id, "UTF-8")}" else ""
+                val artId = artIdByGroup[artGroupKey(t)]
+                val remoteArt = if (artId != null) {
+                    "$base/media/songart?id=${URLEncoder.encode(artId, "UTF-8")}"
+                } else {
+                    ""
+                }
                 Song(
                     id = id,
                     title = t.title.ifBlank { t.id },
                     artist = t.artist,
                     album = t.album,
-                    artworkUrl = if (remoteArt.isBlank()) "" else RemoteArtCache.cachedOrRemote(context, sid, remoteArt),
+                    artworkUrl = if (artId == null) {
+                        ""
+                    } else {
+                        RemoteArtCache.cachedOrRemote(context, sid, "songart|$artId", remoteArt)
+                    },
                     durationSec = t.durationSec,
-                    streamUrl = "$base/media/music?id=${URLEncoder.encode(t.id, "UTF-8")}",
+                    // 虚拟 URL：局域网/中继切换时地址不变，播放缓存不会失效。
+                    streamUrl = RemoteUrls.music(sid, t.id),
                     albumId = t.albumId,
                     artistId = t.artistId,
                     trackNumber = t.trackNumber,
@@ -1404,3 +1596,7 @@ class RemoteLibraryManager(
         }
     }
 }
+
+/** 远程专辑的分组键：与 UI 的专辑聚合规则保持一致。 */
+private fun artGroupKey(t: RemoteTrackWire): String =
+    t.albumId.ifBlank { "${t.artist}|${t.album}" }

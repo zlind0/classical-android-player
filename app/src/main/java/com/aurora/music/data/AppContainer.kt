@@ -110,6 +110,13 @@ class AppContainer(context: Context) {
     /** 设备投屏：本机身份 + 局域网发现 + 接收端控制器（同一进程既是发射器也是接收器）。 */
     val castIdentity = com.aurora.music.data.cast.CastIdentity(appContext)
     val castReceiver = com.aurora.music.data.cast.CastReceiverController(appContext, castIdentity.id)
+
+    /**
+     * 网络代次：Wi‑Fi⇄蜂窝等默认网络变化时 +1。
+     * 资料库同步与公网中继都监听它，换网后立刻重连/重新探测，而不是等 15 秒轮询。
+     */
+    val networkGeneration = MutableStateFlow(0L)
+
     val castDiscovery = com.aurora.music.data.cast.CastDiscovery(
         appContext,
         castIdentity,
@@ -125,7 +132,10 @@ class AppContainer(context: Context) {
     val remoteDownloads = com.aurora.music.data.cast.RemoteDownloadManager(appContext)
     // 公网中继（PodRelay）：本机回环 HTTP 代理 + 加密分片解密；
     // 对外表现为同一台 NAS 的另一个端点，同步/播放/下载逻辑不区分传输方式。
-    val relayService = com.aurora.music.data.relay.RelayService(appContext).also { it.start() }
+    val relayService = com.aurora.music.data.relay.RelayService(
+        appContext,
+        networkChanges = networkGeneration,
+    ).also { it.start() }
 
     val remoteLibrary = com.aurora.music.data.cast.RemoteLibraryManager(
         appContext,
@@ -133,6 +143,7 @@ class AppContainer(context: Context) {
         ebookRecentLimit = { ebookPrefs.recentLimit.value },
         downloads = remoteDownloads,
         relay = relayService,
+        networkChanges = networkGeneration,
     )
 
     val ebookCast = com.aurora.music.data.ebook.EbookCastController(
@@ -517,12 +528,30 @@ class AppContainer(context: Context) {
         recomputeOffline()
         runCatching {
             cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
-                override fun onLost(network: Network) { networkUp = false; recomputeOffline() }
+                override fun onAvailable(network: Network) {
+                    bumpNetworkGeneration()
+                }
+
+                override fun onLost(network: Network) {
+                    networkUp = false
+                    recomputeOffline()
+                    bumpNetworkGeneration()
+                }
+
                 override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                    val wasUp = networkUp
                     networkUp = hasInternet(caps)
                     recomputeOffline()
+                    // 只有「可用/不可用」翻转才值得打断同步；能力细节每几秒变一次。
+                    if (wasUp != networkUp) bumpNetworkGeneration()
                 }
             })
         }
+    }
+
+    /** 默认网络变化：资料库立即重新探测端点，中继立即重连，发现立即重新广播。 */
+    private fun bumpNetworkGeneration() {
+        networkGeneration.value = networkGeneration.value + 1
+        runCatching { castDiscovery.onNetworkAvailable() }
     }
 }

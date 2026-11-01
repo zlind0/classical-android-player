@@ -21,7 +21,11 @@ import javax.net.ssl.X509TrustManager
  */
 object RelayTls {
 
-    fun open(settings: RelaySettings, connectTimeoutMs: Int = 8000, readTimeoutMs: Int = 30_000): SSLSocket {
+    /**
+     * [readTimeoutMs] 必须大于 [RelayClient] 的 PING 间隔（15 秒）：
+     * 超过这个时间收不到任何帧（包括 PONG）就认为链路已死，交给重连逻辑。
+     */
+    fun open(settings: RelaySettings, connectTimeoutMs: Int = 8000, readTimeoutMs: Int = 20_000): SSLSocket {
         val context = buildContext(settings)
         val address = settings.addr.substringBeforeLast(':')
         val port = settings.addr.substringAfterLast(':').toIntOrNull()

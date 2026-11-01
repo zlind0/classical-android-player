@@ -85,7 +85,7 @@ class CastDiscovery(
     private var discoveryListener: NsdManager.DiscoveryListener? = null
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var browseJob: Job? = null
-    private var udpSocket: DatagramSocket? = null
+    @Volatile private var udpSocket: DatagramSocket? = null
     private var browseRefs = 0
     /** 资料库同步需要常驻发现：置位后投屏选择页关闭也不会停掉浏览。 */
     @Volatile private var persistentBrowse = false
@@ -125,6 +125,23 @@ class CastDiscovery(
             registered = false
             advertisedPort = port
             registerNsd()
+            announce()
+        }
+    }
+
+    /**
+     * 换网（Wi‑Fi⇄蜂窝）后立刻恢复发现：
+     * - 旧 UDP socket 可能已经绑定在消失的网络上，丢掉重开；
+     * - mDNS 注册在换网后经常失效，重新注册一次；
+     * - 主动 probe/announce，不用等 10 秒的常驻探测周期。
+     */
+    fun onNetworkAvailable() {
+        resetUdpSocket()
+        registered = false
+        if (advertisedPort > 0) registerNsd()
+        if (browseRefs > 0) {
+            if (discoveryListener == null) startDiscovery()
+            probe()
             announce()
         }
     }
@@ -332,20 +349,22 @@ class CastDiscovery(
 
     // ---- UDP ----
 
-    private fun udpLoop() {
-        val socket = runCatching {
-            DatagramSocket(null).apply {
-                reuseAddress = true
-                broadcast = true
-                bind(InetSocketAddress(UDP_PORT))
-            }
-        }.getOrNull() ?: return
-        udpSocket = socket
+    private suspend fun udpLoop() {
         val buf = ByteArray(2048)
-        while (scope.isActive && !socket.isClosed) {
+        while (scope.isActive) {
+            val socket = udpSocket ?: openUdpSocket()
+            if (socket == null) {
+                delay(2_000)
+                continue
+            }
             val pkt = DatagramPacket(buf, buf.size)
             val ok = runCatching { socket.receive(pkt) }.isSuccess
-            if (!ok) continue
+            if (!ok) {
+                // 换网后旧 socket 会失效/被 close：丢掉，下一轮按新网络重开。
+                if (socket.isClosed) udpSocket = null
+                delay(200)
+                continue
+            }
             val text = runCatching { String(pkt.data, pkt.offset, pkt.length, Charsets.UTF_8) }.getOrNull() ?: continue
             val msg = runCatching { gson.fromJson(text, UdpMessage::class.java) }.getOrNull() ?: continue
             if (msg.v != 1 || msg.id.isBlank() || msg.id == identity.id) continue
@@ -366,6 +385,24 @@ class CastDiscovery(
                 }
             }
         }
+    }
+
+    private fun openUdpSocket(): DatagramSocket? {
+        val socket = runCatching {
+            DatagramSocket(null).apply {
+                reuseAddress = true
+                broadcast = true
+                bind(InetSocketAddress(UDP_PORT))
+            }
+        }.getOrNull() ?: return null
+        udpSocket = socket
+        return socket
+    }
+
+    /** 换网时关闭 UDP socket：它可能仍绑在已经消失的网络接口上。 */
+    private fun resetUdpSocket() {
+        runCatching { udpSocket?.close() }
+        udpSocket = null
     }
 
     private fun probe() {

@@ -61,11 +61,11 @@ class RelayStore(context: Context, private val config: RelayConfig) {
      * 返回指定版本的快照；本地已有同一版本时直接复用。
      * 密钥不一致会抛异常，调用方应提示用户重新填写 media key。
      */
-    suspend fun ensureSnapshot(client: RelayClient): Snapshot = withContext(Dispatchers.IO) {
+    suspend fun ensureSnapshot(client: RelayClient, versionTimeoutMs: Long = 10_000): Snapshot = withContext(Dispatchers.IO) {
         snapshotLock.withLock {
             val master = config.current.masterKey
                 ?: throw IllegalStateException("media key is not configured")
-            val version = client.libVersion()
+            val version = client.libVersion(versionTimeoutMs)
             if (version.keyId != 0L && version.keyId != config.current.keyId) {
                 throw IllegalStateException("media key mismatch with relay snapshot")
             }

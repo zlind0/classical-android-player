@@ -830,7 +830,9 @@ class EbookCastController(
         val remoteUrl = if (same) {
             trackRemoteUrl
         } else {
-            song.streamUrl.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+            song.streamUrl
+                .takeIf { com.aurora.music.data.cast.RemoteUrls.isRemoteStream(it) }
+                ?.let { com.aurora.music.data.cast.RemoteMediaCache.resolveUrl(it) }
         }
         lastPathSongId = song.id
         trackPath = path

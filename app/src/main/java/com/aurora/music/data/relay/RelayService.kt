@@ -9,6 +9,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -16,7 +17,11 @@ import kotlinx.coroutines.launch
  * 公网中继的进程内服务：配置、连接、本机代理、快照身份。
  * 通过 [endpoint] 把自己伪装成一台「局域网设备」，同步逻辑无需区分传输方式。
  */
-class RelayService(context: Context) {
+class RelayService(
+    context: Context,
+    /** 网络代次：Wi‑Fi⇄蜂窝切换时立刻重连，不等退避/心跳。 */
+    networkChanges: StateFlow<Long>? = null,
+) {
 
     data class Endpoint(
         val deviceId: String,
@@ -74,6 +79,16 @@ class RelayService(context: Context) {
                 configured = config.current.isUsable(),
                 keyId = config.current.keyId,
             )
+        }
+        // 换网后旧 TCP 连接可能已经半开：主动丢弃并立刻重连，同时刷新一次身份。
+        networkChanges?.let { flow ->
+            scope.launch {
+                flow.drop(1).collect {
+                    if (!config.current.isUsable()) return@collect
+                    client.reconnectNow()
+                    runCatching { refreshIdentity() }
+                }
+            }
         }
     }
 

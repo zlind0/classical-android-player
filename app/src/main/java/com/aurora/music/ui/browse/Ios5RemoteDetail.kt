@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.AlbumRow
 import com.aurora.music.data.cast.RemoteAlbumGroup
@@ -89,6 +90,8 @@ fun Ios5RemoteDetail(
     val shownTitle = album?.title ?: title
     val shownSubtitle = album?.artist?.ifBlank { subtitle } ?: subtitle
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
+    // 中继/局域网图标要订阅集合；直接调用 isRelayDevice() 不会触发重组。
+    val relayDevices by container.remoteLibrary.relayDevices.collectAsStateWithLifecycle()
     // 与本地专辑详情一致：发送端库开启曲名合成时，按 lib-titlemerge 结果分组显示。
     val mergedRows = remember(album) {
         if (album != null && album.mergeTitles) container.remoteLibrary.albumRowsFor(album)
@@ -193,7 +196,7 @@ fun Ios5RemoteDetail(
                             )
                         } else {
                             CompositionLocalProvider(
-                                LocalRemoteRelay provides container.remoteLibrary.isRelayDevice(deviceId),
+                                LocalRemoteRelay provides (deviceId in relayDevices),
                             ) {
                                 headerRow()
                             }

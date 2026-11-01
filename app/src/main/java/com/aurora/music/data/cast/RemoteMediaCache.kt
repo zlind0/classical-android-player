@@ -32,6 +32,27 @@ object RemoteMediaCache {
     private val knownMusic = ConcurrentHashMap.newKeySet<String>()
     private val knownAudiobooks = ConcurrentHashMap.newKeySet<String>()
 
+    /**
+     * 每台设备当前端点（"http://host:port"）。
+     * 虚拟 URL（pod-remote://）只保存 deviceId + 资源 key，播放/预取时才换成真实地址，
+     * 所以局域网⇄中继切换不会让 SimpleCache 的键发生变化。
+     */
+    private val endpoints = ConcurrentHashMap<String, String>()
+
+    fun setEndpoint(deviceId: String, baseUrl: String) {
+        if (deviceId.isBlank() || baseUrl.isBlank()) return
+        endpoints[deviceId] = baseUrl
+    }
+
+    fun removeEndpoint(deviceId: String) {
+        endpoints.remove(deviceId)
+    }
+
+    fun endpointOf(deviceId: String): String? = endpoints[deviceId]
+
+    /** 把虚拟 URL 换成当前端点的真实 http URL；非虚拟 URL 原样返回。 */
+    fun resolveUrl(url: String): String = RemoteUrls.resolve(url) { endpoints[it] }
+
     @Synchronized
     fun init(context: Context) {
         if (cache != null) return
@@ -39,9 +60,13 @@ object RemoteMediaCache {
         if (!dir.isDirectory) runCatching { dir.mkdirs() }
         val c = runCatching { SimpleCache(dir, androidx.media3.datasource.cache.NoOpCacheEvictor()) }.getOrNull() ?: return
         val up = DefaultDataSource.Factory(context.applicationContext)
+        // 缓存键保持虚拟 URL（与传输方式无关），真正 upstream 打开时才解析成当前端点。
+        val resolved = ResolvingDataSource.Factory(up) { spec ->
+            spec.withUri(android.net.Uri.parse(resolveUrl(spec.uri.toString())))
+        }
         val cf = CacheDataSource.Factory()
             .setCache(c)
-            .setUpstreamDataSourceFactory(up)
+            .setUpstreamDataSourceFactory(resolved)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
         cache = c
         upstream = up
@@ -66,7 +91,11 @@ object RemoteMediaCache {
 
                 override fun open(dataSpec: androidx.media3.datasource.DataSpec): Long {
                     val scheme = dataSpec.uri.scheme?.lowercase()
-                    delegate = if (scheme == "http" || scheme == "https") remote else local
+                    delegate = if (scheme == "http" || scheme == "https" || scheme == RemoteUrls.SCHEME) {
+                        remote
+                    } else {
+                        local
+                    }
                     return delegate.open(dataSpec)
                 }
 

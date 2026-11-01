@@ -17,14 +17,23 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * 到中继服务器的长连接：req 多路复用、断线重连、请求超时。
+ * 到中继服务器的长连接：req 多路复用、断线重连、PING 保活、请求超时。
  * 所有写操作都走同一条 Channel，避免并发写把帧切碎。
  */
 class RelayClient(private val config: RelayConfig) {
+
+    private companion object {
+        /** 客户端每 15 秒一个 PING：既满足服务端 90 秒空闲限制，也能及时判定半开连接。 */
+        const val HEARTBEAT_MS = 15_000L
+        const val MIN_BACKOFF_MS = 500L
+        const val MAX_BACKOFF_MS = 8_000L
+    }
 
     data class Status(
         val connected: Boolean = false,
@@ -44,9 +53,13 @@ class RelayClient(private val config: RelayConfig) {
     private val pending = ConcurrentHashMap<Int, CompletableDeferred<RelayMsg>>()
 
     @Volatile private var outbox: Channel<ByteArray>? = null
+    @Volatile private var socket: SSLSocket? = null
     @Volatile private var connected = false
     @Volatile private var running = false
     private var job: Job? = null
+
+    /** 用来打断退避等待：网络恢复时立刻重连，而不是等指数退避走完。 */
+    private val wake = Channel<Unit>(Channel.CONFLATED)
 
     fun start(scope: CoroutineScope) {
         if (job?.isActive == true) return
@@ -58,6 +71,8 @@ class RelayClient(private val config: RelayConfig) {
         running = false
         job?.cancel()
         job = null
+        runCatching { socket?.close() }
+        socket = null
         outbox?.close()
         outbox = null
         connected = false
@@ -68,11 +83,25 @@ class RelayClient(private val config: RelayConfig) {
 
     fun isConnected(): Boolean = connected
 
-    /** 配置改动后立即断开重连。 */
     fun reconnect() {
         outbox?.close()
         outbox = null
         connected = false
+    }
+
+    /**
+     * 立即丢弃当前连接并重连（网络切换、隧道半开时调用）。
+     * 关闭 socket 会让阻塞中的 [pump] 立刻返回，退避等待也会被 [wake] 打断。
+     */
+    fun reconnectNow() {
+        connected = false
+        runCatching { socket?.close() }
+        socket = null
+        outbox?.close()
+        outbox = null
+        pending.values.forEach { it.cancel() }
+        pending.clear()
+        wake.trySend(Unit)
     }
 
     private suspend fun runLoop() {
@@ -92,8 +121,10 @@ class RelayClient(private val config: RelayConfig) {
             pending.values.forEach { it.cancel() }
             pending.clear()
             if (!running) break
-            delay(backoff)
-            backoff = (backoff * 2).coerceAtMost(30_000)
+            // 等待退避；期间如果调用过 reconnectNow()，立刻重连。
+            val woke = wake.tryReceive().isSuccess ||
+                withTimeoutOrNull(backoff) { wake.receive() } != null
+            backoff = if (woke) MIN_BACKOFF_MS else (backoff * 2).coerceAtMost(MAX_BACKOFF_MS)
         }
     }
 
@@ -102,6 +133,7 @@ class RelayClient(private val config: RelayConfig) {
         check(settings.isUsable()) { "relay settings incomplete" }
 
         val socket: SSLSocket = RelayTls.open(settings)
+        this@RelayClient.socket = socket
         val input = socket.inputStream
         val output = socket.outputStream
         val decoder = RelayProto.Decoder()
@@ -144,19 +176,40 @@ class RelayClient(private val config: RelayConfig) {
         connected = true
 
         val writer = launch(Dispatchers.IO) {
-            for (bytes in channel) {
-                output.write(bytes)
-                output.flush()
+            try {
+                for (bytes in channel) {
+                    output.write(bytes)
+                    output.flush()
+                }
+            } catch (error: Throwable) {
+                // 写失败说明链路已死：关掉 socket，让 pump 立即退出并触发重连。
+                runCatching { socket.close() }
+                throw error
+            }
+        }
+
+        // 中继服务器 90 秒收不到任何帧就断开客户端；没有心跳时 socket 读超时也会
+        // 每 30 秒把连接掐掉。每 20 秒一个 PING 同时解决保活和「半开连接」探测。
+        val heartbeat = launch(Dispatchers.IO) {
+            while (isActive && connected) {
+                delay(HEARTBEAT_MS)
+                if (!connected) break
+                sendNoWait(
+                    RelayProto.PING,
+                    RelayProto.Writer().u64(System.nanoTime()).build(),
+                )
             }
         }
 
         try {
             pump(input, decoder)
         } finally {
+            heartbeat.cancel()
             connected = false
             channel.close()
             outbox = null
             runCatching { socket.close() }
+            if (this@RelayClient.socket === socket) this@RelayClient.socket = null
             writer.cancel()
             _status.value = _status.value.copy(connected = false)
         }

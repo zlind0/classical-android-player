@@ -193,7 +193,8 @@ class RelayProxy(
     // ---------------------------------------------------------------- routes
 
     private suspend fun serveVersion(output: OutputStream) {
-        val version = runCatching { client.libVersion() }.getOrNull()
+        // 链路刚断开时不要卡满 10 秒：代理是同步循环的主路径，快速失败才能立刻换端点。
+        val version = runCatching { client.libVersion(3_000) }.getOrNull()
         if (version == null) {
             sendText(output, 503, "Service Unavailable", "relay offline")
             return
@@ -202,7 +203,7 @@ class RelayProxy(
     }
 
     private suspend fun serveLibrary(output: OutputStream) {
-        val snapshot = runCatching { store.ensureSnapshot(client) }.getOrNull()
+        val snapshot = runCatching { store.ensureSnapshot(client, versionTimeoutMs = 3_000) }.getOrNull()
         if (snapshot == null) {
             sendText(output, 503, "Service Unavailable", "relay offline")
             return
