@@ -284,15 +284,24 @@ class EbookTtsController(context: Context) {
         if (idx < 0) idx = paraIndexOf(chapter, block)
         if (idx < 0 || idx >= paras.size) return
         val base = paras[idx]
-        // 起点就是屏幕首字（页顶偏移）：句中也从该字起读，不吸附回句首，
-        // 否则 turn 会翻回上一页；读完本句后按整句继续
-        pendingStartChar = charOffset.coerceIn(0, base.text.length)
+        // 起点是屏幕首字，但绝不允许从句子中间开口：吸附到包含该字的句子开头。
+        // 页顶落在段落中间时也一样，先回到本句句首再读。
+        pendingStartChar = sentenceStartAt(base.text, charOffset)
         startAt(idx, true)
+    }
+
+    /** 包含 [charOffset] 的句子起点；找不到时回到块首。 */
+    private fun sentenceStartAt(text: String, charOffset: Int): Int {
+        val at = charOffset.coerceIn(0, text.length)
+        return SentenceSplitter.split(text)
+            .lastOrNull { it.first <= at }
+            ?.first
+            ?: 0
     }
 
     /**
      * 系统/通知栏恢复播放：随机阅读没有屏幕排版时，从锚点所在段落开头起读。
-     * 普通阅读仍按原来的块内字偏移续播。
+     * 普通阅读保留原块内字偏移，由 [playFrom] 吸附到句首，不会从句子中间开口。
      */
     fun playFromBookmark(chapter: Int, block: Int, charOffset: Int = 0) {
         playFrom(chapter, block, if (resumeFromBlockStart) 0 else charOffset)

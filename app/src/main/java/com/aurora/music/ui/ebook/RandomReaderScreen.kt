@@ -286,10 +286,13 @@ fun RandomReaderScreen(
             } else {
                 delay(750)
             }
-            val chapter = manager.loadChapter(book.path, book.chapterIndex) ?: return@launch
-            val parsed = feedParsed(book, book.chapterIndex, chapter)
+            // 提示音期间新书已经完成排版：用屏幕上实际的第一字（而不是旧随机锚点）起读；
+            // playFrom 内部还会吸附到该字所在句子的句首。
+            val (c, b, ch) = currentPosition(book)
+            val chapter = manager.loadChapter(book.path, c) ?: return@launch
+            val parsed = feedParsed(book, c, chapter)
             tts.setBook("feed:${book.path}", parsed, book.path, force = true)
-            tts.playFrom(book.chapterIndex, book.blockIndex, book.charOffset)
+            tts.playFrom(c, b, ch)
         }
     }
 
