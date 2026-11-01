@@ -17,6 +17,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -74,6 +75,7 @@ import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -259,6 +261,9 @@ fun EbookCastPage(
     onStop: () -> Unit,
     onPrevPage: () -> Unit,
     onNextPage: () -> Unit,
+    /** 随机阅读投屏：翻页键区域上下滑动切上一本/下一本。null = 普通阅读，不响应。 */
+    onPrevBook: (() -> Unit)? = null,
+    onNextBook: (() -> Unit)? = null,
     onTogglePlay: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
@@ -310,6 +315,8 @@ fun EbookCastPage(
                 onStop = onStop,
                 onPrevPage = onPrevPage,
                 onNextPage = onNextPage,
+                onPrevBook = onPrevBook,
+                onNextBook = onNextBook,
                 onTogglePlay = onTogglePlay,
                 onPrevious = onPrevious,
                 onNext = onNext,
@@ -474,6 +481,8 @@ private fun CastRemotePage(
     onStop: () -> Unit,
     onPrevPage: () -> Unit,
     onNextPage: () -> Unit,
+    onPrevBook: (() -> Unit)?,
+    onNextBook: (() -> Unit)?,
     onTogglePlay: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
@@ -587,6 +596,8 @@ private fun CastRemotePage(
                 onToggleList = { listOpen = !listOpen },
                 onPrevPage = onPrevPage,
                 onNextPage = onNextPage,
+                onPrevBook = onPrevBook,
+                onNextBook = onNextBook,
                 onTogglePlay = onTogglePlay,
                 onPrevious = onPrevious,
                 onNext = onNext,
@@ -710,10 +721,15 @@ private fun CastControlBar(
     onToggleList: () -> Unit,
     onPrevPage: () -> Unit,
     onNextPage: () -> Unit,
+    onPrevBook: (() -> Unit)?,
+    onNextBook: (() -> Unit)?,
     onTogglePlay: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
 ) {
+    val prevBook = onPrevBook
+    val nextBook = onNextBook
+    val bookSwipeSlop = with(LocalDensity.current) { 48.dp.toPx() }
     Column(
         Modifier.fillMaxWidth()
             .background(castPageBrush)
@@ -766,7 +782,29 @@ private fun CastControlBar(
         }
         // 最底行：翻页键，行高随列表收起/展开做动画；箭头随行高变大，文字固定小号在箭头下方
         Row(
-            Modifier.fillMaxWidth().height(pageRowH),
+            Modifier.fillMaxWidth().height(pageRowH)
+                .then(
+                    if (prevBook != null && nextBook != null) {
+                        Modifier.pointerInput(prevBook, nextBook) {
+                            var total = 0f
+                            detectVerticalDragGestures(
+                                onDragStart = { total = 0f },
+                                onVerticalDrag = { change, dragAmount ->
+                                    total += dragAmount
+                                    change.consume()
+                                },
+                                onDragEnd = {
+                                    when {
+                                        total <= -bookSwipeSlop -> nextBook()
+                                        total >= bookSwipeSlop -> prevBook()
+                                    }
+                                },
+                            )
+                        }
+                    } else {
+                        Modifier
+                    },
+                ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             CastPageKey(

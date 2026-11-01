@@ -46,6 +46,7 @@ import com.aurora.music.ui.ios5.Ios5GlossButton
 import com.aurora.music.ui.ios5.Ios5Group
 import com.aurora.music.ui.ios5.Ios5Loading
 import com.aurora.music.ui.ios5.Ios5NavBar
+import com.aurora.music.ui.ios5.Ios5RandomCollectionTrailing
 import com.aurora.music.ui.ios5.Ios5SearchBar
 import com.aurora.music.ui.ios5.Ios5SectionTitle
 import com.aurora.music.ui.ios5.ios5Rows
@@ -59,6 +60,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun EbookLibraryScreen(
     isShelf: Boolean,
+    rootId: Long = 0L,
     rootPath: String,
     dirPath: String,
     title: String,
@@ -66,6 +68,7 @@ fun EbookLibraryScreen(
     onOpenDir: (dir: String, title: String) -> Unit,
     onOpenBook: (path: String) -> Unit,
     onOpenExport: (path: String) -> Unit,
+    onStartRandomDir: (dir: String, title: String) -> Unit = { _, _ -> },
     confirm: (String) -> Unit,
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
@@ -81,11 +84,14 @@ fun EbookLibraryScreen(
     )
 
     var listing by remember(dirPath) { mutableStateOf<Pair<List<File>, List<EbookBook>>?>(null) }
-    LaunchedEffect(dirPath, isShelf) {
+    // 子文件夹要显示“这个文件夹下共有多少本”：从该根的扫描结果按路径前缀统计。
+    var rootBookPaths by remember(rootId) { mutableStateOf<List<String>>(emptyList()) }
+    LaunchedEffect(dirPath, isShelf, rootId) {
         if (!isShelf) {
             listing = null
             val l = container.ebookStore.listDir(rootPath, dirPath)
             listing = l.dirs to l.books
+            rootBookPaths = container.ebookStore.booksOfRoot(rootId).map { it.path }
         }
     }
 
@@ -182,6 +188,12 @@ fun EbookLibraryScreen(
                 val showBooks = books.filter {
                     q.isBlank() || it.displayTitle.contains(q, ignoreCase = true) || it.author.contains(q, ignoreCase = true)
                 }
+                val dirCounts = remember(showDirs, rootBookPaths) {
+                    showDirs.associate { d ->
+                        val prefix = d.absolutePath.trimEnd('/') + "/"
+                        d.absolutePath to rootBookPaths.count { it.startsWith(prefix) }
+                    }
+                }
                 if (showDirs.isEmpty() && showBooks.isEmpty()) {
                     Ios5Empty("这个文件夹是空的")
                 } else {
@@ -193,7 +205,12 @@ fun EbookLibraryScreen(
                         if (showDirs.isNotEmpty()) {
                             item { Ios5SectionTitle("文件夹") }
                             ios5Rows(showDirs, key = { it.absolutePath }) { _, d ->
-                                FolderRow(name = d.name, onClick = { onOpenDir(d.absolutePath, d.name) })
+                                FolderRow(
+                                    name = d.name,
+                                    count = dirCounts[d.absolutePath] ?: 0,
+                                    onClick = { onOpenDir(d.absolutePath, d.name) },
+                                    onRandom = { onStartRandomDir(d.absolutePath, d.name) },
+                                )
                             }
                         }
                         if (showBooks.isNotEmpty()) {
@@ -217,7 +234,7 @@ fun EbookLibraryScreen(
 }
 
 @Composable
-private fun FolderRow(name: String, onClick: () -> Unit) {
+private fun FolderRow(name: String, count: Int, onClick: () -> Unit, onRandom: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -228,7 +245,7 @@ private fun FolderRow(name: String, onClick: () -> Unit) {
             name, color = Ios5Colors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold,
             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
         )
-        Text("›", color = Ios5Colors.TextSecondary.copy(alpha = 0.6f), fontSize = 24.sp, fontWeight = FontWeight.Light)
+        Ios5RandomCollectionTrailing(count = count, onClick = onRandom)
     }
 }
 

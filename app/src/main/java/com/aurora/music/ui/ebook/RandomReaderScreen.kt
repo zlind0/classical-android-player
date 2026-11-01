@@ -44,15 +44,19 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.cast.RandomFeedBook
 import com.aurora.music.data.cast.RandomFeedManager
+import com.aurora.music.data.ebook.EbookCastAnchor
+import com.aurora.music.data.ebook.EbookCastMode
 import com.aurora.music.data.ebook.EbookChapter
 import com.aurora.music.data.ebook.EbookFeedResume
 import com.aurora.music.data.ebook.EbookReadPrefs
 import com.aurora.music.data.ebook.ParsedEbook
 import com.aurora.music.ui.components.LottieLoader
 import com.aurora.music.ui.ios5.Ios5GlossButton
+import com.aurora.music.viewmodel.PlayerViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -65,6 +69,10 @@ fun RandomReaderScreen(
     deviceId: String,
     rootKey: String,
     poolPaths: List<String>,
+    /** 非空 = 本地/设备间集合，整本解析后随机；空 = 远程 NAS 的 feed。 */
+    localSpec: com.aurora.music.data.cast.LocalRandomFeedSpec? = null,
+    /** 远程文件夹随机：poolPaths 是远端路径，需先整本下载；这里放设备 id。 */
+    poolDownloadDeviceId: String = "",
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -80,7 +88,19 @@ fun RandomReaderScreen(
     val ttsPosition by tts.position.collectAsStateWithLifecycle()
 
     var optionsOpen by remember { mutableStateOf(false) }
+    var tocOpen by remember { mutableStateOf(false) }
+    var musicOpen by remember { mutableStateOf(false) }
+    var castOpen by remember { mutableStateOf(false) }
     var toast by remember { mutableStateOf<String?>(null) }
+
+    // 与普通阅读共用 Activity 级播放器 VM；投屏也复用同一个控制器。
+    val playerVM: PlayerViewModel = viewModel()
+    val playerState by playerVM.state.collectAsStateWithLifecycle()
+    val cast = container.ebookCast
+    val castState by cast.state.collectAsStateWithLifecycle()
+    val castPrefs by container.ebookPrefs.castPrefs.collectAsStateWithLifecycle()
+    val recentFonts by container.ebookPrefs.recentFonts.collectAsStateWithLifecycle()
+    val castActive = castState.mode != EbookCastMode.OFF
     // 切书后“停顿一下再朗读”的任务：再次切书/退出时取消，避免旧目标在新书里突然开口。
     val autoReadJob = remember { arrayOfNulls<kotlinx.coroutines.Job>(1) }
     var starting by remember { mutableStateOf(true) }
@@ -137,10 +157,31 @@ fun RandomReaderScreen(
         toast = message
     }
 
-    LaunchedEffect(deviceId, rootKey) {
-        if (manager.state.value.current == null) {
-            starting = true
-            val resume = container.ebookPrefs.initialFeedResume()
+    /** 首屏/重试统一入口：本地、远程文件夹整本模式、远程 NAS feed 三种来源。 */
+    suspend fun startFeed() {
+        val resume = container.ebookPrefs.initialFeedResume()
+        if (localSpec != null) {
+            // 本地/设备间：整本解析后再随机。文件夹按路径前缀取整个子树里的书。
+            val store = container.ebookStore
+            val paths = when {
+                localSpec.shelf -> store.shelf.value.map { it.path }
+                localSpec.dirPath.isNotBlank() -> {
+                    val prefix = localSpec.dirPath.trimEnd('/') + "/"
+                    store.booksOfRoot(localSpec.rootId).map { it.path }
+                        .filter { it == localSpec.dirPath || it.startsWith(prefix) }
+                }
+                else -> store.booksOfRoot(localSpec.rootId).map { it.path }
+            }
+            manager.startLocal(localSpec.key, paths, resume)
+        } else if (poolDownloadDeviceId.isNotBlank() && poolPaths.isNotEmpty()) {
+            // 远程文件夹/默认书架：先整本下载再解析，保证随机范围就是当前集合。
+            manager.startLocal(
+                key = "remote:$deviceId:$rootKey",
+                poolPaths = poolPaths,
+                resume = null,
+                downloadDeviceId = poolDownloadDeviceId,
+            )
+        } else {
             manager.start(
                 deviceId = deviceId,
                 rootKey = rootKey,
@@ -148,6 +189,13 @@ fun RandomReaderScreen(
                 resume = resume,
                 includeImages = container.ebookPrefs.feedImages.value,
             )
+        }
+    }
+
+    LaunchedEffect(deviceId, rootKey, localSpec, poolDownloadDeviceId, poolPaths) {
+        if (manager.state.value.current == null) {
+            starting = true
+            startFeed()
             starting = false
         } else {
             starting = false
@@ -238,41 +286,60 @@ fun RandomReaderScreen(
     }
 
     /**
-     * 底栏“上一章/下一章”：在本书里随机跳到一个**不同的**章节，从章首开始。
-     * 正在朗读时先把旧章静音，页面跳过去后再接着读新章。
+     * 底栏“随机章节”：在整本书里随机跳到一个位置（章节随机，章内段落也随机）。
+     * 正在朗读时先把旧位置静音，页面跳过去后再接着读新位置。
      */
     fun switchChapter() {
         val book = manager.state.value.current ?: return
         val count = book.chapterCount.coerceAtLeast(book.chapterTitles.size).coerceAtLeast(1)
-        if (count <= 1) {
-            showToast("这本书只有一章")
-            return
-        }
-        val current = currentPosition(book).first.coerceIn(0, count - 1)
-        var target = current
-        while (target == current) target = kotlin.random.Random.nextInt(count)
+        val target = kotlin.random.Random.nextInt(count)
         val wasPlaying = tts.playing.value
         autoReadJob[0]?.cancel()
         autoReadJob[0] = null
         if (wasPlaying) tts.stop(savePos = false)
-        manager.rememberPosition(book.path, target, 0, 0)
+        autoReadJob[0] = scope.launch {
+            // 先取正文，才能在这一章里随机落到某个段落，而不是永远从章首开始。
+            val chapter = manager.loadChapter(book.path, target)
+            val blockCount = chapter?.blocks?.size ?: 0
+            val block = if (blockCount > 0) kotlin.random.Random.nextInt(blockCount) else 0
+            manager.rememberPosition(book.path, target, block, 0)
+            persistResume()
+            jumpGen += 1
+            pendingJump = BlockJump(target, block, 0, jumpGen)
+            if (!wasPlaying) return@launch
+            // 等页面跳到新位置再开口，避免音频还念着旧章标题的时候画面已经翻走。
+            delay(450)
+            val ch = chapter ?: manager.loadChapter(book.path, target) ?: return@launch
+            val parsed = feedParsed(book, target, ch)
+            tts.setBook("feed:${book.path}", parsed, book.path, force = true)
+            tts.playFrom(target, block, 0)
+        }
+    }
+
+    /** 目录跳转：只换章节/段落，不写本地书架进度。 */
+    fun jumpToChapter(chapter: Int, block: Int) {
+        val book = manager.state.value.current ?: return
+        val wasPlaying = tts.playing.value
+        autoReadJob[0]?.cancel()
+        autoReadJob[0] = null
+        if (wasPlaying) tts.stop(savePos = false)
+        manager.rememberPosition(book.path, chapter, block, 0)
         persistResume()
         jumpGen += 1
-        pendingJump = BlockJump(target, 0, 0, jumpGen)
+        pendingJump = BlockJump(chapter, block, 0, jumpGen)
+        tocOpen = false
         if (!wasPlaying) return
         autoReadJob[0] = scope.launch {
-            // 等页面跳到新章再开口，避免音频还念着旧章标题的时候画面已经翻走。
             delay(450)
-            val chapter = manager.loadChapter(book.path, target) ?: return@launch
-            val parsed = feedParsed(book, target, chapter)
+            val ch = manager.loadChapter(book.path, chapter) ?: return@launch
+            val parsed = feedParsed(book, chapter, ch)
             tts.setBook("feed:${book.path}", parsed, book.path, force = true)
-            tts.playFrom(target, 0, 0)
+            tts.playFrom(chapter, block, 0)
         }
     }
 
     // 耳机/通知栏上一首/下一首：随机阅读里切成上一本/下一本，并接着朗读。
-    DisposableEffect(Unit) {
-        val hook: (Int) -> Boolean = { direction ->
+    DisposableEffect(Unit) {        val hook: (Int) -> Boolean = { direction ->
             if (manager.state.value.current == null) {
                 false
             } else {
@@ -307,6 +374,7 @@ fun RandomReaderScreen(
         autoReadJob[0] = null
         persistResume()
         tts.stop(savePos = false)
+        cast.stop()
         manager.close()
         onClose()
     }
@@ -315,13 +383,23 @@ fun RandomReaderScreen(
         onDispose {
             // 退出随机阅读时清掉远程书目：通知栏不该停留在没有会话的随机书上。
             tts.resetBook()
+            cast.setBook(null)
+            cast.stop()
             FeedPageCache.clear()
             manager.close()
         }
     }
 
     BackHandler {
-        if (optionsOpen) optionsOpen = false else closeReader()
+        when {
+            tocOpen -> tocOpen = false
+            musicOpen -> musicOpen = false
+            // 投屏中是“非临时页面”：只有结束投屏能退出，返回键吞掉
+            castOpen && castActive -> Unit
+            castOpen -> castOpen = false
+            optionsOpen -> optionsOpen = false
+            else -> closeReader()
+        }
     }
 
     LaunchedEffect(pager.settledPage, pager.isScrollInProgress) {
@@ -358,13 +436,7 @@ fun RandomReaderScreen(
                         onClick = {
                             scope.launch {
                                 starting = true
-                                manager.start(
-                                    deviceId = deviceId,
-                                    rootKey = rootKey,
-                                    poolPaths = poolPaths,
-                                    resume = container.ebookPrefs.initialFeedResume(),
-                                    includeImages = container.ebookPrefs.feedImages.value,
-                                )
+                                startFeed()
                                 starting = false
                             }
                         },
@@ -391,11 +463,16 @@ fun RandomReaderScreen(
                 showToast(if (ok) "已存入默认书架（含当前进度）" else "入库失败，请检查连接")
             }
         },
+        onToc = { tocOpen = true },
+        showSaveToShelf = localSpec == null && poolDownloadDeviceId.isBlank() && !manager.isLocalMode(),
         onChapterEdge = {
             scope.launch { manager.cacheWholeBook(deviceId, currentBook.path) }
         },
         onPositionChanged = { chapter, block, char ->
             manager.rememberPosition(currentBook.path, chapter, block, char)
+            if (cast.state.value.mode != EbookCastMode.OFF) {
+                cast.setReaderAnchor(EbookCastAnchor(chapter, block, char))
+            }
         },
         onPlayFrom = { chapter, block, char ->
             scope.launch {
@@ -407,10 +484,30 @@ fun RandomReaderScreen(
                 }
             }
         },
-        onPrevChapter = ::switchChapter,
-        onNextChapter = ::switchChapter,
+        onRandomChapter = ::switchChapter,
         marqueeTitle = true,
     )
+
+    // 投屏方向开关：遥控页开着 = 遥控端驱动大屏，关着 = 手机阅读进度驱动大屏。
+    LaunchedEffect(castOpen, castActive) {
+        cast.setRemote(castOpen && castActive)
+    }
+
+    // 投屏要整本正文：打开投屏时静默缓存整本，章节陆续到位后同步给大屏。
+    // 进入随机阅读就把当前书注入投屏控制器，已有投屏不会因为打开/关闭控制页而断掉。
+    LaunchedEffect(displayBook) {
+        cast.setBook(displayBook)
+    }
+    LaunchedEffect(castOpen, castActive) {
+        if (!castOpen && !castActive) return@LaunchedEffect
+        manager.cacheWholeBook(deviceId, currentBook.path)
+    }
+    // 刚开始投屏时把大屏定位到当前阅读位置。
+    LaunchedEffect(castActive) {
+        if (!castActive) return@LaunchedEffect
+        val (c, b, ch) = currentPosition(currentBook)
+        cast.setReaderAnchor(EbookCastAnchor(c, b, ch))
+    }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // 每一页都比屏幕高出一个“上一本书名”的高度：翻页时这一条先露出，
@@ -460,9 +557,9 @@ fun RandomReaderScreen(
                             onToast = ::showToast,
                             onOpenToc = { _, _ -> },
                             onOpenOptions = { optionsOpen = true },
-                            onOpenMusic = {},
-                            onOpenCast = {},
-                            castActive = false,
+                            onOpenMusic = { musicOpen = true },
+                            onOpenCast = { castOpen = true },
+                            castActive = castActive,
                             bookKey = bookKey,
                             chapterLoader = { chapter -> manager.loadChapter(currentBook.path, chapter)?.blocks },
                             persistPages = false,
@@ -498,6 +595,89 @@ fun RandomReaderScreen(
             )
         }
 
+        if (tocOpen) {
+            val (c, b, _) = currentPosition(currentBook)
+            EbookTocPage(
+                book = displayBook,
+                currentSpine = c,
+                currentBlock = b,
+                onBack = { tocOpen = false },
+                onJump = { spine, block -> jumpToChapter(spine, block) },
+            )
+        }
+
+        if (castOpen) {
+            EbookCastPage(
+                state = castState,
+                prefs = castPrefs,
+                playerState = playerState,
+                readerFontPath = prefs.fontPath,
+                recentFonts = recentFonts,
+                bookPath = currentBook.path,
+                chapterTitles = remember(displayBook) { displayBook.chapters.map { it.title } },
+                onRestoreCastAnchor = { c, b -> cast.restoreAnchor(EbookCastAnchor(c, b, 0)) },
+                onBack = { castOpen = false },
+                onStartWeb = { cast.start(EbookCastMode.WEB) },
+                onStartDevice = { cast.startDevice(it) },
+                onStartPresentation = {
+                    val displays = currentPresentationDisplays(context)
+                    if (displays.isEmpty()) {
+                        showToast("未检测到 HDMI 显示器")
+                    } else {
+                        cast.start(EbookCastMode.PRESENTATION, displays.firstOrNull()?.name.orEmpty())
+                    }
+                },
+                onStop = {
+                    cast.stop()
+                    musicOpen = false
+                    castOpen = false
+                },
+                onPrevPage = { cast.turn(-1) },
+                onNextPage = { cast.turn(1) },
+                // 翻页键仍翻页；在这一行上下滑则切上一本/下一本，和阅读页手势一致。
+                onPrevBook = { switchBook(-1, autoRead = tts.playing.value) },
+                onNextBook = { switchBook(1, autoRead = tts.playing.value) },
+                onTogglePlay = { playerVM.togglePlay() },
+                onPrevious = { playerVM.previous() },
+                onNext = { playerVM.next() },
+                onJumpTrack = { playerVM.jumpTo(it) },
+                onSeek = { playerVM.seekTo(it) },
+                onToggleShuffle = { playerVM.toggleShuffle() },
+                onCycleRepeat = { playerVM.cycleRepeat() },
+                onSetShowMusic = {
+                    container.ebookPrefs.setCastShowMusic(castState.mode != EbookCastMode.PRESENTATION, it)
+                },
+                onSetTurnUnit = {
+                    container.ebookPrefs.setCastTurnUnit(castState.mode != EbookCastMode.PRESENTATION, it)
+                },
+                onSetMusicOnCast = {
+                    container.ebookPrefs.setCastMusicOnCast(castState.mode != EbookCastMode.PRESENTATION, it)
+                },
+                onSetTheme = { container.ebookPrefs.setCastTheme(it) },
+                onSetFontSize = {
+                    container.ebookPrefs.setCastFontSize(castState.mode != EbookCastMode.PRESENTATION, it)
+                },
+                onSetColumnWidth = {
+                    container.ebookPrefs.setCastColumnWidth(castState.mode != EbookCastMode.PRESENTATION, it)
+                },
+                onSetFontPath = { container.ebookPrefs.setFontPath(it) },
+            )
+        }
+
+        if (musicOpen) {
+            ReaderMusicBubble(
+                state = playerState,
+                onDismiss = { musicOpen = false },
+                onJump = { playerVM.jumpTo(it) },
+                onTogglePlay = { playerVM.togglePlay() },
+                onPrevious = { playerVM.previous() },
+                onNext = { playerVM.next() },
+                onSeek = { playerVM.seekTo(it) },
+                onToggleShuffle = { playerVM.toggleShuffle() },
+                onCycleRepeat = { playerVM.cycleRepeat() },
+            )
+        }
+
         if (toast != null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
                 Text(
@@ -512,6 +692,18 @@ fun RandomReaderScreen(
             }
         }
     }
+
+    // HDMI 副屏：复用同一个网页渲染，拔线即停止投屏
+    EbookCastPresentationHost(
+        active = castState.mode == EbookCastMode.PRESENTATION,
+        url = castState.url,
+        onUnavailable = {
+            if (cast.state.value.mode == EbookCastMode.PRESENTATION) {
+                cast.stop()
+                showToast("外接显示器已断开，投屏已停止")
+            }
+        },
+    )
 }
 
 /** 每页比屏幕多出来的那一条：上一本书的书名/章节，翻页时先露出来，落定后藏到屏幕上沿之外。 */
@@ -605,8 +797,7 @@ private fun NeighborFeedBody(
             onChapterEdge = {},
             onPositionChanged = { _, _, _ -> },
             onPlayFrom = { _, _, _ -> },
-            onPrevChapter = {},
-            onNextChapter = {},
+            onRandomChapter = {},
             // 只有落到当前页才开始 marquee：相邻页先静态排好。
             marqueeTitle = false,
         ),
@@ -630,7 +821,11 @@ private fun feedParsedBook(
             val cached = manager.cachedChapter(book.path, i)
             EbookChapter(cached?.title?.ifBlank { title } ?: title, cached?.blocks.orEmpty())
         }
-        ParsedEbook(title = book.title, author = book.author, chapters = chapters)
+        val toc = manager.tocFor(book.path)
+            ?: chapters.mapIndexed { i, ch ->
+                com.aurora.music.data.ebook.EbookTocEntry(i, 0, ch.title, 1)
+            }
+        ParsedEbook(title = book.title, author = book.author, chapters = chapters, toc = toc)
     }
 }
 

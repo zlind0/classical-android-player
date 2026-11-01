@@ -125,6 +125,15 @@ fun Ios5App() {
     var feedReaderOpen by rememberSaveable { mutableStateOf(false) }
     var feedDeviceId by rememberSaveable { mutableStateOf("") }
     var feedRootKey by rememberSaveable { mutableStateOf("") }
+    // 本地/设备间随机阅读：记住集合来源，冷启动也能按同一集合恢复。
+    var feedLocalKey by rememberSaveable { mutableStateOf("") }
+    var feedLocalShelf by rememberSaveable { mutableStateOf(false) }
+    var feedLocalRootId by rememberSaveable { mutableStateOf(0L) }
+    var feedLocalRootPath by rememberSaveable { mutableStateOf("") }
+    var feedLocalDirPath by rememberSaveable { mutableStateOf("") }
+    // 远程文件夹随机：池子是远端路径，需要先从该设备整本下载。
+    var feedPoolPaths by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    var feedPoolDownloadDeviceId by rememberSaveable { mutableStateOf("") }
     fun openReader(path: String) {
         if (path.isBlank()) return
         feedReaderOpen = false
@@ -133,9 +142,49 @@ fun Ios5App() {
     }
     fun openRandomReader(deviceId: String, rootKey: String) {
         if (deviceId.isBlank() || rootKey.isBlank()) return
+        container.randomFeed.close()
         readerPath = null
         feedDeviceId = deviceId
         feedRootKey = rootKey
+        feedLocalKey = ""
+        feedPoolPaths = arrayListOf()
+        feedPoolDownloadDeviceId = ""
+        feedReaderOpen = true
+    }
+    fun openRemoteDirRandomReader(
+        deviceId: String,
+        rootKey: String,
+        key: String,
+        poolPaths: List<String>,
+    ) {
+        if (deviceId.isBlank() || poolPaths.isEmpty()) return
+        container.randomFeed.close()
+        readerPath = null
+        feedDeviceId = deviceId
+        feedRootKey = key
+        feedLocalKey = ""
+        feedPoolPaths = ArrayList(poolPaths)
+        feedPoolDownloadDeviceId = deviceId
+        feedReaderOpen = true
+    }
+    fun openLocalRandomReader(
+        key: String,
+        shelf: Boolean,
+        rootId: Long,
+        rootPath: String,
+        dirPath: String,
+    ) {
+        container.randomFeed.close()
+        readerPath = null
+        feedDeviceId = "local"
+        feedRootKey = key
+        feedLocalKey = key
+        feedLocalShelf = shelf
+        feedLocalRootId = rootId
+        feedLocalRootPath = rootPath
+        feedLocalDirPath = dirPath
+        feedPoolPaths = arrayListOf()
+        feedPoolDownloadDeviceId = ""
         feedReaderOpen = true
     }
     fun closeReader() {
@@ -676,9 +725,38 @@ fun Ios5App() {
                                 onOpenBook = { p -> openReader(p) },
                                 onOpenSearch = { navController.navigate(Ios5Routes.EBOOK_SEARCH) },
                                 onOpenExport = { p -> navController.navigate(Ios5Routes.ebookExport(p)) },
+                                onStartRandomShelf = {
+                                    openLocalRandomReader(
+                                        key = "shelf",
+                                        shelf = true,
+                                        rootId = com.aurora.music.data.ebook.EBOOK_SHELF_ROOT_ID,
+                                        rootPath = "",
+                                        dirPath = "",
+                                    )
+                                },
+                                onStartRandomRoot = { id, dir, _ ->
+                                    openLocalRandomReader(
+                                        key = "root:$id",
+                                        shelf = false,
+                                        rootId = id,
+                                        rootPath = dir,
+                                        dirPath = "",
+                                    )
+                                },
                                 remoteLibraries = browsingRemoteLibraries,
                                 remoteRecents = browsingRemoteEbookRecents,
                                 onOpenRemoteBook = { openRemoteBook(it) },
+                                onStartRandomRemoteRoot = { deviceId, rootKey ->
+                                    openRandomReader(deviceId, rootKey)
+                                },
+                                onStartRandomRemotePool = { deviceId, rootKey, paths ->
+                                    openRemoteDirRandomReader(
+                                        deviceId,
+                                        rootKey,
+                                        key = "remote:$deviceId:$rootKey",
+                                        poolPaths = paths,
+                                    )
+                                },
                                 onOpenRemoteRoot = { deviceId, rootKey, rootTitle ->
                                     remoteBrowsing = true
                                     navController.navigate(
@@ -713,6 +791,7 @@ fun Ios5App() {
                             val libTitle = Uri.decode(entry.arguments?.getString("title").orEmpty())
                             com.aurora.music.ui.ebook.EbookLibraryScreen(
                                 isShelf = shelf,
+                                rootId = rootId,
                                 rootPath = rootPath.ifBlank { dirArg },
                                 dirPath = if (shelf) "" else dirArg,
                                 title = libTitle.ifBlank { if (shelf) "默认书架" else "" },
@@ -724,6 +803,15 @@ fun Ios5App() {
                                 },
                                 onOpenBook = { p -> openReader(p) },
                                 onOpenExport = { p -> navController.navigate(Ios5Routes.ebookExport(p)) },
+                                onStartRandomDir = { dir, _ ->
+                                    openLocalRandomReader(
+                                        key = "root:$rootId:$dir",
+                                        shelf = false,
+                                        rootId = rootId,
+                                        rootPath = rootPath.ifBlank { dirArg },
+                                        dirPath = dir,
+                                    )
+                                },
                                 confirm = { confirm(it) },
                             )
                         }
@@ -762,6 +850,9 @@ fun Ios5App() {
                                 onOpenBook = { openRemoteBook(it) },
                                 onOpenRandomBook = { entry, rk -> openRandomBook(entry, rk) },
                                 onStartRandomReading = { d, r -> openRandomReader(d, r) },
+                                onStartRandomDir = { d, rk, key, paths ->
+                                    openRemoteDirRandomReader(d, rk, key, paths)
+                                },
                                 onMessage = { confirm(it) },
                             )
                         }
@@ -1564,7 +1655,19 @@ fun Ios5App() {
                             com.aurora.music.ui.ebook.RandomReaderScreen(
                                 deviceId = feedDeviceId,
                                 rootKey = feedRootKey,
-                                poolPaths = emptyList(),
+                                poolPaths = feedPoolPaths,
+                                poolDownloadDeviceId = feedPoolDownloadDeviceId,
+                                localSpec = if (feedLocalKey.isNotBlank()) {
+                                    com.aurora.music.data.cast.LocalRandomFeedSpec(
+                                        key = feedLocalKey,
+                                        shelf = feedLocalShelf,
+                                        rootId = feedLocalRootId,
+                                        rootPath = feedLocalRootPath,
+                                        dirPath = feedLocalDirPath,
+                                    )
+                                } else {
+                                    null
+                                },
                                 onClose = { closeReader() },
                             )
                         }

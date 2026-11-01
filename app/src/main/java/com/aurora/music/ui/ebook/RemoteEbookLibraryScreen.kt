@@ -53,6 +53,7 @@ import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5Empty
 import com.aurora.music.ui.ios5.Ios5GlossButton
 import com.aurora.music.ui.ios5.Ios5NavBar
+import com.aurora.music.ui.ios5.Ios5RandomCollectionTrailing
 import com.aurora.music.ui.ios5.Ios5SearchBar
 import com.aurora.music.ui.ios5.Ios5SectionTitle
 import com.aurora.music.ui.ios5.Ios5SmallButton
@@ -104,6 +105,13 @@ fun RemoteEbookLibraryScreen(
     onOpenRandomBook: (RemoteEbookEntry, rootKey: String) -> Unit = { entry, _ -> onOpenBook(entry) },
     /** 随机阅读：服务端预取三本，客户端按章阅读。 */
     onStartRandomReading: (deviceId: String, rootKey: String) -> Unit = { _, _ -> },
+    /** 远程文件夹随机：整本下载到本地解析，池子限定在当前文件夹。 */
+    onStartRandomDir: (
+        deviceId: String,
+        rootKey: String,
+        key: String,
+        poolPaths: List<String>,
+    ) -> Unit = { _, _, _, _ -> },
     /** 随机书库保存/删除本地副本后的提示。 */
     onMessage: (String) -> Unit = {},
 ) {
@@ -462,6 +470,7 @@ fun RemoteEbookLibraryScreen(
                         ) {
                             Ios5Cell(
                                 title = d.first,
+                                showChevron = false,
                                 onClick = { onOpenDir(d.second, d.first) },
                                 leading = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -474,6 +483,19 @@ fun RemoteEbookLibraryScreen(
                                             modifier = Modifier.size(40.dp),
                                         )
                                     }
+                                },
+                                trailing = {
+                                    Ios5RandomCollectionTrailing(
+                                        count = dirBooks.size,
+                                        onClick = {
+                                            onStartRandomDir(
+                                                lib.deviceId,
+                                                root.key,
+                                                "${root.key}|${d.second}",
+                                                dirBooks.map { it.path },
+                                            )
+                                        },
+                                    )
                                 },
                             )
                         }

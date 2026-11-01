@@ -39,6 +39,7 @@ import com.aurora.music.ui.ios5.Ios5Empty
 import com.aurora.music.ui.ios5.Ios5Group
 import com.aurora.music.ui.ios5.Ios5Loading
 import com.aurora.music.ui.ios5.Ios5NavBar
+import com.aurora.music.ui.ios5.Ios5RandomCollectionTrailing
 import com.aurora.music.ui.ios5.Ios5SectionTitle
 import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.util.accentFor
@@ -52,9 +53,14 @@ fun EbooksTab(
     onOpenBook: (path: String) -> Unit,
     onOpenSearch: () -> Unit,
     onOpenExport: (path: String) -> Unit,
+    onStartRandomShelf: () -> Unit = {},
+    onStartRandomRoot: (rootId: Long, dir: String, title: String) -> Unit = { _, _, _ -> },
     remoteLibraries: List<com.aurora.music.data.cast.RemoteDeviceLibrary> = emptyList(),
     remoteRecents: List<com.aurora.music.data.cast.RemoteEbookEntry> = emptyList(),
     onOpenRemoteBook: (com.aurora.music.data.cast.RemoteEbookEntry) -> Unit = {},
+    onStartRandomRemoteRoot: (deviceId: String, rootKey: String) -> Unit = { _, _ -> },
+    onStartRandomRemotePool: (deviceId: String, rootKey: String, poolPaths: List<String>) -> Unit =
+        { _, _, _ -> },
     onOpenRemoteRoot: (deviceId: String, rootKey: String, title: String) -> Unit = { _, _, _ -> },
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
@@ -133,10 +139,16 @@ fun EbooksTab(
                     Ios5Cell(
                         title = "默认书架",
                         subtitle = "外部打开的电子书都存在这里",
-                        count = "${counts.value[EBOOK_SHELF_ROOT_ID] ?: 0}",
+                        showChevron = false,
                         onClick = onOpenShelf,
                         leading = {
                             Icon(Icons.Filled.Book, null, tint = Ios5Colors.IosBlue, modifier = Modifier.size(40.dp))
+                        },
+                        trailing = {
+                            Ios5RandomCollectionTrailing(
+                                count = counts.value[EBOOK_SHELF_ROOT_ID] ?: 0,
+                                onClick = onStartRandomShelf,
+                            )
                         },
                     )
                     enabledRoots.forEach { r ->
@@ -144,18 +156,27 @@ fun EbooksTab(
                         Ios5Cell(
                             title = r.displayName,
                             subtitle = r.rootPath,
-                            count = "${counts.value[r.id] ?: 0}",
+                            showChevron = false,
                             onClick = { onOpenRoot(r.id, r.rootPath, r.displayName) },
                             leading = {
                                 Icon(Icons.Filled.Folder, null, tint = Ios5Colors.IosBlue, modifier = Modifier.size(40.dp))
+                            },
+                            trailing = {
+                                Ios5RandomCollectionTrailing(
+                                    count = counts.value[r.id] ?: 0,
+                                    onClick = { onStartRandomRoot(r.id, r.rootPath, r.displayName) },
+                                )
                             },
                         )
                     }
                 }
             }
             remoteLibraries.filter { it.ebookRoots.isNotEmpty() }.forEach { lib ->
+                val remoteTotal = container.remoteLibrary.ebookRootsOf(lib)
+                    .sumOf { it.bookCount }
+                    .takeIf { it > 0 } ?: lib.ebooks.size
                 item(key = "remote-ebooks-${lib.deviceId}") {
-                    Ios5SectionTitle("${lib.deviceName}${if (lib.online) "" else "（离线）"} - 远程（${lib.ebooks.size}）")
+                    Ios5SectionTitle("${lib.deviceName}${if (lib.online) "" else "（离线）"} - 远程（$remoteTotal）")
                 }
                 val roots = container.remoteLibrary.ebookRootsOf(lib)
                 ios5Rows(roots, key = { "r:${lib.deviceId}:${it.key}" }) { _, r ->
@@ -181,7 +202,7 @@ fun EbooksTab(
                                 r.fastScan -> "快速扫描 · 随机取书 · ${r.rootPath}"
                                 else -> r.rootPath
                             },
-                            count = "${r.bookCount}",
+                            showChevron = false,
                             onClick = { onOpenRemoteRoot(lib.deviceId, r.key, r.displayName) },
                             leading = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -194,6 +215,23 @@ fun EbooksTab(
                                         modifier = Modifier.size(40.dp),
                                     )
                                 }
+                            },
+                            trailing = {
+                                Ios5RandomCollectionTrailing(
+                                    count = r.bookCount,
+                                    onClick = {
+                                        // 默认书架 / “全部”没有服务端 rootKey，直接把书单作为池子整本下载解析。
+                                        if (r.shelf || r.key == "all") {
+                                            onStartRandomRemotePool(
+                                                lib.deviceId,
+                                                if (r.shelf) "shelf" else "all",
+                                                remoteBooksInRoot(lib, r).map { it.path },
+                                            )
+                                        } else {
+                                            onStartRandomRemoteRoot(lib.deviceId, r.key)
+                                        }
+                                    },
+                                )
                             },
                         )
                     }

@@ -182,12 +182,15 @@ internal fun themeOf(t: EbookTheme): ReaderTheme = when (t) {
 internal data class FeedReaderUi(
     val bookTitle: String,
     val onSaveToShelf: () -> Unit,
+    /** 随机阅读的目录：只跳章节，不写本地书架进度。 */
+    val onToc: () -> Unit = {},
+    /** 本地/设备间的书不需要“入库”，只有远程 NAS 的随机书需要。 */
+    val showSaveToShelf: Boolean = true,
     val onChapterEdge: (chapter: Int) -> Unit,
     val onPositionChanged: (chapter: Int, block: Int, char: Int) -> Unit,
     val onPlayFrom: (chapter: Int, block: Int, char: Int) -> Unit,
-    /** 信息流里底栏“上一章/下一章”：随机跳到本书另一个章节。 */
-    val onPrevChapter: () -> Unit,
-    val onNextChapter: () -> Unit,
+    /** 信息流里底栏“随机章节”：跳到本书的另一个随机位置。 */
+    val onRandomChapter: () -> Unit,
     /** 当前页才滚动书名；相邻页先静态排好，翻页落定后再开始 marquee。 */
     val marqueeTitle: Boolean = true,
 )
@@ -749,13 +752,14 @@ internal fun ReaderBody(
                 // 大屏翻页后回报“章:段:字”：手机跳到该字所在页，并按同一锚点落盘。
                 // 这是两边进度同步的唯一通道；投屏期间手机页面不反向驱动大屏。
                 LaunchedEffect(Unit) {
-                    if (feed != null) return@LaunchedEffect
                     container.ebookCast.remoteAnchors.collect { a ->
                         if (container.ebookCast.state.value.mode == EbookCastMode.OFF) return@collect
                         if (a.chapter !in book.chapters.indices) return@collect
                         val at = System.currentTimeMillis()
                         win.jumpToChar(a.chapter, a.block, a.char)
                         runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
+                        // 随机阅读不写本地进度库：正文和书都是远程的。
+                        if (!persistPages) return@collect
                         val pages = breaks[a.chapter]?.filter { it.isNotEmpty() }.orEmpty()
                         val page = if (pages.isEmpty()) 0 else pageForChar(pages, a.block, a.char)
                         val chars = chapterChars.take(a.chapter).sum() +
@@ -991,10 +995,9 @@ internal fun ReaderBody(
                 barInk = th.barInk,
                 isTtsPlaying = active && ttsPlaying,
                 sentenceMode = feed == null && ttsUnit == EbookTtsUnit.SENTENCE,
-                // 随机阅读里“上一句/下一句”改成随机切章节。
-                prevLabel = if (feed != null) "上一章" else null,
-                nextLabel = if (feed != null) "下一章" else null,
-                onTtsPrev = { if (feed != null) feed.onPrevChapter() else tts.prevUnit() },
+                // 随机阅读不要上一句/下一句，换成一个“随机章节”按钮。
+                onRandomChapter = feed?.onRandomChapter,
+                onTtsPrev = { tts.prevUnit() },
                 onTtsToggle = {
                     if (!active) {
                         // 相邻页只展示最终布局，按钮不抢当前书的播放状态。
@@ -1012,20 +1015,24 @@ internal fun ReaderBody(
                         }
                     }
                 },
-                onTtsNext = { if (feed != null) feed.onNextChapter() else tts.nextUnit() },
+                onTtsNext = { tts.nextUnit() },
                 onToc = {
                     if (feed != null) {
-                        feed.onSaveToShelf()
+                        feed.onToc()
                     } else {
                         val (c, p) = win.center
                         val blk = breaks[c]?.filter { it.isNotEmpty() }?.getOrNull(p)?.firstOrNull()?.block ?: 0
                         onOpenToc(c, blk)
                     }
                 },
-                tocLabel = if (feed != null) "入库" else "目录",
-                tocIcon = if (feed != null) Icons.Filled.Download else Icons.AutoMirrored.Filled.List,
-                showMusic = feed == null,
-                showCast = feed == null,
+                tocLabel = "目录",
+                tocIcon = Icons.AutoMirrored.Filled.List,
+                // 远程 NAS 随机书仍保留“入库”；本地/设备间书已在库里，不显示。
+                extraLabel = if (feed?.showSaveToShelf == true) "入库" else null,
+                extraIcon = Icons.Filled.Download,
+                onExtra = { feed?.onSaveToShelf?.invoke() },
+                showMusic = true,
+                showCast = true,
                 onOptions = onOpenOptions,
                 onMusic = onOpenMusic,
                 onCast = onOpenCast,
@@ -1320,15 +1327,18 @@ private fun ReaderBottomBar(
     barInk: Color,
     isTtsPlaying: Boolean,
     sentenceMode: Boolean = false,
-    /** 覆盖默认的“上一句/上一首”文案（随机阅读用“上一章”）。 */
-    prevLabel: String? = null,
-    nextLabel: String? = null,
+    /** 随机阅读：底栏只放一个“随机章节”，不显示上一句/下一句。 */
+    onRandomChapter: (() -> Unit)? = null,
     onTtsPrev: () -> Unit,
     onTtsToggle: () -> Unit,
     onTtsNext: () -> Unit,
     onToc: () -> Unit,
     tocLabel: String = "目录",
     tocIcon: ImageVector = Icons.AutoMirrored.Filled.List,
+    /** 随机阅读远程书的“入库”等附加键；null = 不显示。 */
+    extraLabel: String? = null,
+    extraIcon: ImageVector = Icons.Filled.Download,
+    onExtra: (() -> Unit)? = null,
     showMusic: Boolean = true,
     showCast: Boolean = true,
     onOptions: () -> Unit,
@@ -1346,22 +1356,30 @@ private fun ReaderBottomBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ReaderButton(tocLabel, tocIcon, barInk, 1f, onToc)
-            // 随机阅读没有站内音乐面板（阅读页的音乐气泡是私有页面），别摆一个点了没反应的键。
+            if (extraLabel != null && onExtra != null) {
+                ReaderButton(extraLabel, extraIcon, barInk, 1f, onExtra)
+            }
             if (showMusic) ReaderButton("音乐", Icons.Filled.MusicNote, barInk, 1f, onMusic)
             if (showCast) ReaderButton(if (castActive) "投屏中" else "投屏", Icons.Filled.Airplay, barInk, 1f, onCast)
-            ReaderButton(
-                prevLabel ?: if (sentenceMode) "上一句" else "上一首",
-                Icons.Filled.SkipPrevious, barInk, 1f, onTtsPrev,
-            )
+            if (onRandomChapter != null) {
+                ReaderButton("随机章节", Icons.Filled.Shuffle, barInk, 1f, onRandomChapter)
+            } else {
+                ReaderButton(
+                    if (sentenceMode) "上一句" else "上一首",
+                    Icons.Filled.SkipPrevious, barInk, 1f, onTtsPrev,
+                )
+            }
             ReaderButton(
                 if (isTtsPlaying) "停止" else "播放",
                 if (isTtsPlaying) Icons.Filled.Stop else Icons.Filled.PlayArrow,
                 barInk, 1f, onTtsToggle,
             )
-            ReaderButton(
-                nextLabel ?: if (sentenceMode) "下一句" else "下一首",
-                Icons.Filled.SkipNext, barInk, 1f, onTtsNext,
-            )
+            if (onRandomChapter == null) {
+                ReaderButton(
+                    if (sentenceMode) "下一句" else "下一首",
+                    Icons.Filled.SkipNext, barInk, 1f, onTtsNext,
+                )
+            }
             ReaderButton("选项", Icons.Filled.Settings, barInk, 1f, onOptions)
         }
     }
@@ -1429,7 +1447,7 @@ private fun loadFontFamily(path: String): FontFamily {
 // ---- 目录页：h1/h2 默认展开，更深默认叠起，当前章自动展开 ----
 
 @Composable
-private fun EbookTocPage(
+internal fun EbookTocPage(
     book: ParsedEbook,
     currentSpine: Int,
     currentBlock: Int,

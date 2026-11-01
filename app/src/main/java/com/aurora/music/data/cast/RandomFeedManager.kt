@@ -12,10 +12,14 @@ import java.net.URLEncoder
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -48,6 +52,15 @@ data class RandomFeedState(
 )
 
 data class FeedPosition(val chapter: Int, val block: Int, val char: Int)
+
+/** 本地/设备间随机阅读的集合来源：默认书架、扫描根，或根目录下的某个文件夹。 */
+data class LocalRandomFeedSpec(
+    val key: String = "",
+    val shelf: Boolean = false,
+    val rootId: Long = 0L,
+    val rootPath: String = "",
+    val dirPath: String = "",
+)
 
 private data class FeedStartBody(
     val rootKey: String,
@@ -104,17 +117,41 @@ class RandomFeedManager(
     private val history = ArrayDeque<RandomFeedBook>()
     private val forward = ArrayDeque<RandomFeedBook>()
 
+    // ---- 本地/设备间模式：整本下载并解析，随机排队，提前解析若干本 ----
+    private val localLock = Any()
+    private val localScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var localMode = false
+    private var localDownloadDeviceId = ""
+    private var localPool: List<String> = emptyList()
+    private val localSeen = HashSet<String>()
+    private val localQueue = ArrayDeque<RandomFeedBook>()
+    private var localPrefetchJob: Job? = null
+    /** 每次开始/关闭本地会话都 +1：阻塞中的解析返回后据此丢弃过期结果。 */
+    private var localSession = 0
+
+    companion object {
+        /** 本地随机阅读提前解析的整本书数量：切书时直接用内存里的解析结果。 */
+        private const val LOCAL_PREFETCH = 4
+    }
+
     private var rawCurrent: RandomFeedBook? = null
     private var serverPrevious: RandomFeedBook? = null
     private var serverNext: RandomFeedBook? = null
 
     fun currentBook(): RandomFeedBook? = rawCurrent?.let(::resolve)
 
+    /** 当前是否走“整本下载 + 本地解析”模式。 */
+    fun isLocalMode(): Boolean = localMode
+
     fun positionFor(path: String): FeedPosition? = positions[path]
 
     fun cachedChapter(path: String, chapter: Int): EbookChapter? =
         chapters[path]?.get(chapter)
             ?: parsedBooks[path]?.chapters?.getOrNull(chapter)?.also { putChapter(path, chapter, it) }
+
+    /** 已解析整本书的原始目录（本地模式有层级；远程 feed 只有平铺章节名）。 */
+    fun tocFor(path: String): List<com.aurora.music.data.ebook.EbookTocEntry>? =
+        parsedBooks[path]?.toc?.takeIf { it.isNotEmpty() }
 
     /** 阅读页每次落定后调用；不触发状态发布，避免翻页时反复重组整个阅读器。 */
     fun rememberPosition(path: String, chapter: Int, block: Int, char: Int) {
@@ -143,6 +180,15 @@ class RandomFeedManager(
         resume: EbookFeedResume?,
         includeImages: Boolean,
     ): Boolean = withContext(Dispatchers.IO) {
+        localPrefetchJob?.cancel()
+        localPrefetchJob = null
+        localSession++
+        localMode = false
+        localPool = emptyList()
+        synchronized(localLock) {
+            localSeen.clear()
+            localQueue.clear()
+        }
         var base = remoteLibrary.onlineBaseUrl(deviceId)
         var pool = poolPaths.ifEmpty { remoteLibrary.ebookPoolPaths(deviceId, rootKey) }
         // 冷启动恢复阅读器时设备发现可能还没就绪：给它几秒，别让用户先看到失败。
@@ -194,6 +240,19 @@ class RandomFeedManager(
             }
         }
         if (reply.status !in 200..299) {
+            // 另一台 Android 设备的资料库只有 /library/all，没有 feed 接口（404/405）：
+            // 退回到“整本下载 + 本地解析”的随机阅读，行为与本地书一致。
+            if (reply.status == 404 || reply.status == 405) {
+                val wholePool = pool.ifEmpty { remoteLibrary.ebookPoolPaths(deviceId, rootKey) }
+                if (wholePool.isNotEmpty()) {
+                    return@withContext startLocal(
+                        key = "remote:$deviceId:$rootKey",
+                        poolPaths = wholePool,
+                        resume = null,
+                        downloadDeviceId = deviceId,
+                    )
+                }
+            }
             fail(deviceId, rootKey, "启动失败：${replyError(reply)}")
             return@withContext false
         }
@@ -208,7 +267,189 @@ class RandomFeedManager(
         true
     }
 
+    /**
+     * 本地 / 设备间随机阅读：整本取到本地解析，随机停在章/段/字。
+     *
+     * [downloadDeviceId] 非空表示路径属于远程设备，需要先整本下载；为空表示路径已是本地文件。
+     * [prefetch] 会在后台继续解析若干本，切书时直接用内存里的结果，避免卡顿。
+     */
+    suspend fun startLocal(
+        key: String,
+        poolPaths: List<String>,
+        resume: EbookFeedResume?,
+        downloadDeviceId: String = "",
+    ): Boolean = withContext(Dispatchers.IO) {
+        val pool = poolPaths.filter { it.isNotBlank() }.distinct()
+        if (pool.isEmpty()) {
+            fail("local", key, "这个集合里没有可阅读的电子书")
+            return@withContext false
+        }
+        localPrefetchJob?.cancel()
+        localPrefetchJob = null
+        localSession++
+        localMode = true
+        localDownloadDeviceId = downloadDeviceId
+        localPool = pool
+        synchronized(localLock) {
+            localSeen.clear()
+            localQueue.clear()
+        }
+        history.clear()
+        forward.clear()
+        positions.clear()
+        chapters.clear()
+        parsedBooks.clear()
+        expectedChapters.clear()
+        localMismatch.clear()
+        localFiles.clear()
+        wholeBookJobs.clear()
+        rawCurrent = null
+        serverPrevious = null
+        serverNext = null
+        _state.value = RandomFeedState(deviceId = "local", rootKey = key, loading = true)
+
+        val preferred = resume?.takeIf {
+            it.deviceId == "local" && it.rootKey == key && it.path in pool
+        }
+        val firstPath = preferred?.path ?: pool.random()
+        val first = loadLocalBook(firstPath, preferred)
+        if (first == null) {
+            // 首选书解析失败时从池子里再试几本，别因为一本坏书就整组不可用。
+            var fallback: RandomFeedBook? = null
+            for (i in 0 until minOf(pool.size, 8)) {
+                val p = pool.random()
+                fallback = loadLocalBook(p, null)
+                if (fallback != null) break
+            }
+            if (fallback == null) {
+                fail("local", key, "这些电子书都打不开")
+                return@withContext false
+            }
+            rawCurrent = fallback
+        } else {
+            rawCurrent = first
+        }
+        synchronized(localLock) { localSeen.add(rawCurrent?.path.orEmpty()) }
+        publishLocal()
+        // 首本先给界面，其余几本在后台解析；切书时优先用已解析结果。
+        val session = localSession
+        localPrefetchJob = localScope.launch { prefetchLocal(LOCAL_PREFETCH, session) }
+        true
+    }
+
+    private suspend fun loadLocalBook(
+        path: String,
+        resume: com.aurora.music.data.ebook.EbookFeedResume?,
+    ): RandomFeedBook? {
+        val parsed = parsedBooks[path] ?: run {
+            val file = if (File(path).isFile) File(path) else downloadToCache(localDownloadDeviceId, path)
+                ?: return null
+            val p = ebookStore.openBook(file.absolutePath, registerIfMissing = false) ?: return null
+            parsedBooks[path] = p
+            _chapterVersion.value = _chapterVersion.value + 1
+            p
+        }
+        val chapters = parsed.chapters
+        if (chapters.isEmpty()) return null
+        val chapter = resume?.chapter?.coerceIn(0, chapters.size - 1)
+            ?: kotlin.random.Random.nextInt(chapters.size)
+        val blocks = chapters[chapter].blocks
+        val block = resume?.block?.coerceIn(0, (blocks.size - 1).coerceAtLeast(0))
+            ?: if (blocks.isEmpty()) 0 else kotlin.random.Random.nextInt(blocks.size)
+        val char = resume?.char?.coerceAtLeast(0) ?: 0
+        return RandomFeedBook(
+            path = path,
+            title = parsed.title,
+            author = parsed.author,
+            chapterCount = chapters.size,
+            chapterTitles = chapters.map { it.title },
+            chapterIndex = chapter,
+            chapterTitle = chapters[chapter].title,
+            blockIndex = block,
+            charOffset = char,
+        )
+    }
+
+    private suspend fun prefetchLocal(target: Int, session: Int) {
+        var attempts = 0
+        while (true) {
+            if (session != localSession) return
+            if (synchronized(localLock) { localQueue.size } >= target) return
+            if (attempts >= localPool.size + 2) return
+            val path = synchronized(localLock) { nextLocalPathLocked() } ?: return
+            val book = loadLocalBook(path, null)
+            if (session != localSession) return
+            if (book == null) {
+                attempts++
+                continue
+            }
+            synchronized(localLock) {
+                if (localQueue.none { it.path == book.path }) localQueue.addLast(book)
+            }
+            publishLocal()
+        }
+    }
+
+    /** 池子未抽完前不重复；抽完后重置一轮，只在当前书之外继续随机。 */
+    private fun nextLocalPathLocked(): String? {
+        if (localSeen.size >= localPool.size) {
+            localSeen.clear()
+            _state.value.current?.path?.let { localSeen.add(it) }
+        }
+        val candidates = localPool.filter { it !in localSeen }
+        if (candidates.isEmpty()) return null
+        val path = candidates.random()
+        localSeen.add(path)
+        return path
+    }
+
+    private fun publishLocal() {
+        val current = rawCurrent
+        _state.value = _state.value.copy(
+            current = current?.let(::resolve),
+            previous = synchronized(localLock) { history.lastOrNull() }?.let(::resolve),
+            next = synchronized(localLock) { localQueue.firstOrNull() }?.let(::resolve),
+            loading = false,
+            error = null,
+        )
+    }
+
+    private suspend fun localTurn(direction: Int): Boolean = withContext(Dispatchers.IO) {
+        val current = rawCurrent ?: return@withContext false
+        if (direction < 0) {
+            val previous = synchronized(localLock) {
+                history.removeLastOrNull()?.also { forward.addLast(current.copy()) }
+            } ?: return@withContext false
+            rawCurrent = previous
+            publishLocal()
+            return@withContext true
+        }
+        var next = synchronized(localLock) {
+            forward.removeLastOrNull() ?: localQueue.removeFirstOrNull()
+        }
+        if (next == null) {
+            for (attempt in 0 until minOf(localPool.size, 8)) {
+                val path = synchronized(localLock) { nextLocalPathLocked() } ?: break
+                next = loadLocalBook(path, null)
+                if (next != null) break
+            }
+            if (next == null) return@withContext false
+        }
+        synchronized(localLock) {
+            history.addLast(current.copy())
+            while (history.size > 10) history.removeFirst()
+        }
+        rawCurrent = next
+        publishLocal()
+        localPrefetchJob?.cancel()
+        val session = localSession
+        localPrefetchJob = localScope.launch { prefetchLocal(LOCAL_PREFETCH, session) }
+        true
+    }
+
     suspend fun turn(direction: Int): Boolean = withContext(Dispatchers.IO) {
+        if (direction == 0) return@withContext true
+        if (localMode) return@withContext localTurn(direction)
         if (direction == 0) return@withContext true
         val st = _state.value
         if (st.current == null) return@withContext false
@@ -293,6 +534,8 @@ class RandomFeedManager(
 
     /** 章节边界：静默下载整本并解析，之后本章后续章节不再走网络。 */
     suspend fun cacheWholeBook(deviceId: String, path: String) = withContext(Dispatchers.IO) {
+        // 本地/设备间模式一开始就整本下载并解析，不需要再逐章补。
+        if (localMode) return@withContext
         if (path.isBlank() || parsedBooks.containsKey(path)) return@withContext
         if (localMismatch.contains(path)) return@withContext
         if (!wholeBookJobs.add(path)) return@withContext
@@ -325,6 +568,8 @@ class RandomFeedManager(
         block: Int,
         char: Int,
     ): Boolean = withContext(Dispatchers.IO) {
+        // 本地/设备间的书本来就在本机或来源设备里，不需要“入库”。
+        if (localMode) return@withContext true
         val file = localFiles[book.path]?.takeIf { it.isFile } ?: downloadToCache(deviceId, book.path)
         if (file == null) return@withContext false
         val name = book.path.substringAfterLast('/').ifBlank { "book.epub" }
@@ -342,6 +587,16 @@ class RandomFeedManager(
     }
 
     fun close() {
+        localPrefetchJob?.cancel()
+        localPrefetchJob = null
+        localSession++
+        localMode = false
+        localDownloadDeviceId = ""
+        localPool = emptyList()
+        synchronized(localLock) {
+            localSeen.clear()
+            localQueue.clear()
+        }
         val st = _state.value
         val base = remoteLibrary.onlineBaseUrl(st.deviceId)
         val sid = st.sessionId

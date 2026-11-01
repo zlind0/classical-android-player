@@ -64,6 +64,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
@@ -83,6 +84,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.random.Random
 import com.aurora.music.ui.components.LocalRemoteAvailable
 import com.aurora.music.model.Song
 import com.aurora.music.navigation.ios5Tabs
@@ -497,6 +499,79 @@ fun Ios5Cell(
         }
         trailing?.invoke()
         if (showChevron) Ios5Chevron()
+    }
+}
+
+/**
+ * 集合行右侧的骰子：点击直接在这个集合里开始随机阅读。
+ * 点数是随机的（每次进入组合/行被回收重建时重新掷）。
+ */
+@Composable
+fun Ios5DiceButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val face = remember { Random.nextInt(1, 7) }
+    Box(
+        modifier
+            .size(30.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        val tint = Ios5Colors.IosBlue
+        Canvas(Modifier.size(21.dp)) {
+            val side = size.minDimension
+            val stroke = side * 0.09f
+            val corner = side * 0.2f
+            drawRoundRect(
+                color = tint,
+                topLeft = Offset(stroke / 2, stroke / 2),
+                size = Size(side - stroke, side - stroke),
+                cornerRadius = CornerRadius(corner, corner),
+                style = Stroke(width = stroke),
+            )
+            val pipR = side * 0.075f
+            fun pip(x: Float, y: Float) {
+                drawCircle(tint, radius = pipR, center = Offset(side * x, side * y))
+            }
+            val q1 = 0.28f
+            val q2 = 0.5f
+            val q3 = 0.72f
+            when (face) {
+                1 -> pip(q2, q2)
+                2 -> { pip(q1, q1); pip(q3, q3) }
+                3 -> { pip(q1, q1); pip(q2, q2); pip(q3, q3) }
+                4 -> { pip(q1, q1); pip(q3, q1); pip(q1, q3); pip(q3, q3) }
+                5 -> { pip(q1, q1); pip(q3, q1); pip(q2, q2); pip(q1, q3); pip(q3, q3) }
+                else -> {
+                    pip(q1, q1); pip(q3, q1)
+                    pip(q1, q2); pip(q3, q2)
+                    pip(q1, q3); pip(q3, q3)
+                }
+            }
+        }
+    }
+}
+
+/** 集合行右侧：书数在上、骰子在下。 */
+@Composable
+fun Ios5RandomCollectionTrailing(
+    count: Int,
+    onClick: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            "$count",
+            color = Ios5Colors.TextSecondary,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
+        Ios5DiceButton(onClick = onClick)
     }
 }
 
