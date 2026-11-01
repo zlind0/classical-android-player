@@ -307,13 +307,17 @@ async fn library_ebook_feed_start(
     Json(request): Json<FeedStartRequest>,
 ) -> Response {
     let _ = request.include_images;
-    if request.paths.is_empty() {
-        return feed_error(StatusCode::BAD_REQUEST, "random pool is empty");
-    }
     let root_key = request.root_key.clone();
     let wanted = request.paths.clone();
+    // The host already owns the library index: resolve the whole root locally
+    // instead of asking the phone to upload every path. `paths` stays as a
+    // fallback for older clients and for roots without a numeric key.
     let valid = match run_db(&state, move |conn| {
-        db::root_book_paths(conn, &root_key, &wanted)
+        let mut paths = db::root_book_paths_all(conn, &root_key)?;
+        if paths.is_empty() {
+            paths = db::root_book_paths(conn, &root_key, &wanted)?;
+        }
+        Ok(paths)
     })
     .await
     {

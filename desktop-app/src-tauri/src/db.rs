@@ -963,21 +963,34 @@ pub fn book_source(conn: &Connection, path: &str) -> Result<Option<(PathBuf, Str
     }))
 }
 
-/// Filters a client-supplied path list down to books that really belong to the
-/// given book root. The random feed never trusts paths blindly.
-pub fn root_book_paths(
-    conn: &Connection,
-    root_key: &str,
-    paths: &[String],
-) -> Result<Vec<String>> {
+/// All EPUB paths owned by one book root. The random feed asks the host for the
+/// pool instead of receiving a copy of every path from the phone: a 100k-book
+/// library would otherwise be a multi-megabyte POST body (and hit the HTTP body
+/// limit long before the request reached this function).
+pub fn root_book_paths_all(conn: &Connection, root_key: &str) -> Result<Vec<String>> {
     let Ok(root_id) = root_key.parse::<i64>() else {
         return Ok(Vec::new());
     };
-    let mut stmt = conn.prepare(
-        "SELECT 1 FROM books WHERE path = ?1 AND root_id = ?2 LIMIT 1",
-    )?;
+    let mut stmt = conn
+        .prepare("SELECT path FROM books WHERE root_id = ?1 AND format = 'epub' ORDER BY path")?;
+    let rows = stmt.query_map(params![root_id], |row| row.get::<_, String>(0))?;
     let mut out = Vec::new();
-    for path in paths.iter().take(2000) {
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Filters a client-supplied path list down to books that really belong to the
+/// given book root. Only used as a compatibility fallback for older clients or
+/// roots the host cannot resolve; the random feed never trusts paths blindly.
+pub fn root_book_paths(conn: &Connection, root_key: &str, paths: &[String]) -> Result<Vec<String>> {
+    let Ok(root_id) = root_key.parse::<i64>() else {
+        return Ok(Vec::new());
+    };
+    let mut stmt = conn.prepare("SELECT 1 FROM books WHERE path = ?1 AND root_id = ?2 LIMIT 1")?;
+    let mut out = Vec::new();
+    for path in paths {
         let exists: Option<i64> = stmt
             .query_row(params![path, root_id], |row| row.get(0))
             .optional()?;
@@ -1113,4 +1126,36 @@ pub fn album_art_key(root_id: i64, dir: &Path) -> String {
         "album:{root_id}:{}",
         sha1_hex(dir.to_string_lossy().as_bytes())
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_book_paths_all_lists_only_root_epubs() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute(
+            "INSERT INTO roots(id, path, kind, display_name, created_at)
+             VALUES (1, '/books', 'book', 'Books', 0),
+                    (2, '/other', 'book', 'Other', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO books(path, root_id, rel_path, file_name, title, format)
+             VALUES ('/books/a.epub', 1, 'a.epub', 'a.epub', 'A', 'epub'),
+                    ('/books/b.mobi', 1, 'b.mobi', 'b.mobi', 'B', 'mobi'),
+                    ('/other/c.epub', 2, 'c.epub', 'c.epub', 'C', 'epub')",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(
+            root_book_paths_all(&conn, "1").unwrap(),
+            vec!["/books/a.epub".to_string()]
+        );
+        assert!(root_book_paths_all(&conn, "unknown").unwrap().is_empty());
+    }
 }

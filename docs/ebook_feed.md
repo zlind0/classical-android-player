@@ -24,13 +24,17 @@
 ```json
 {
   "rootKey": "root-id",
-  "paths": ["Books/a.epub", "Books/b.epub"],
+  "paths": [],
   "includeImages": false,
   "resume": { "path": "Books/a.epub", "chapter": 3, "block": 12, "char": 40 }
 }
 ```
 
-- `paths` 必须属于 `rootKey` 这个书库，桌面端会用 `db::root_book_paths` 再校验一次。
+- `paths` 只是给老桌面端的兼容字段，手机正常发空数组。
+  桌面端按 `rootKey` 自己从书库数据库取整个根的 EPUB 路径，
+  10 万本书也不会把几 MB 的路径表塞进请求体（否则会触发 HTTP 413）。
+- 桌面端在 `rootKey` 查不到任何书时才退回校验 `paths`；手机遇到老服务端
+  返回 `random pool is empty` 或 413 时，会自动用最多 512 条随机路径重试一次。
 - `resume` 可省略；带 `path` 时优先恢复这本书，其余槽位随机补满。
 - 返回 `{ sessionId, index, books[] }`，`books` 就是当前 3 本窗口。
 - 每本书带 `chapterCount`、`chapterTitles` 和当前章的 `chapter` 正文，
@@ -85,8 +89,9 @@
 ### 翻页与切书
 
 - 左右翻页完全复用普通阅读器的 41 页窗口；随机阅读 `prefetchChapters = 0`，只排当前章。
-- 上下滑：外层 `VerticalPager` 的上一页/下一页是“上一本/下一本”界限卡，
-  中间页才是正文；落定后把 pager 复位到中间，再按方向调 `turn`。
+- 上下滑：每页比屏幕高出一条「上一本书名」的高度（约 30dp）。正常阅读时这一条藏在屏幕上沿外；
+  往上拉时它先露出，紧接下一本书的完整阅读页（顶栏、正文、底部控制条都是最终布局）。
+  翻页落定后才把 pager 收回中间，当前书名这时才开始 marquee。
 - 本地保留最近 10 本历史与前进栈：来回切书先走本地栈，不消耗服务端随机窗口。
 - 耳机/通知栏“上一首/下一首”在随机阅读里切成上一本/下一本；
   底栏“上一章/下一章”在本书里随机跳到**另一个**章节（正在朗读时停顿一下后接着读新章）。

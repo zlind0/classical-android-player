@@ -311,7 +311,8 @@ class RelayClient(private val config: RelayConfig) {
 
     suspend fun live(seq: Int, ciphertext: ByteArray): RelayMsg.LiveResp? {
         val payload = RelayProto.Writer().u32(seq).bytes(ciphertext).build()
-        return call(RelayProto.LIVE_REQ, payload, 25_000) as? RelayMsg.LiveResp
+        // 随机阅读 start 要在桌面端解析最多 3 本 EPUB（大书可能很慢），给足等待时间。
+        return call(RelayProto.LIVE_REQ, payload, 90_000) as? RelayMsg.LiveResp
     }
 
     fun randomSeq(): Int = SecureRandom().nextInt(Int.MAX_VALUE - 1) + 1

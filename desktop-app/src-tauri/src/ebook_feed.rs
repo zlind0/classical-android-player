@@ -405,16 +405,40 @@ impl FeedService {
             )
         };
         let mut rng = rand::thread_rng();
-        let mut candidates = pool;
-        candidates.shuffle(&mut rng);
         let mut fresh: Option<FeedItem> = None;
-        for path in candidates {
-            if queue_paths.iter().any(|p| p == &path) {
-                continue;
+        if !pool.is_empty() {
+            // Sample a handful of random slots instead of cloning and shuffling
+            // the whole pool. With a 100k-book library the old clone allocated a
+            // fresh Vec<String> on every single page turn.
+            let mut tried = Vec::new();
+            let attempts = pool.len().min(64);
+            for _ in 0..attempts {
+                let index = rng.gen_range(0..pool.len());
+                if tried.contains(&index) {
+                    continue;
+                }
+                tried.push(index);
+                let path = &pool[index];
+                if queue_paths.iter().any(|p| p == path) {
+                    continue;
+                }
+                if let Some(item) = self.make_item(path.clone()) {
+                    fresh = Some(item);
+                    break;
+                }
             }
-            if let Some(item) = self.make_item(path) {
-                fresh = Some(item);
-                break;
+            // Small pools (or an unlucky sample) get a linear fallback so the
+            // window still advances whenever any parsable book is left.
+            if fresh.is_none() && attempts < pool.len() {
+                for path in &pool {
+                    if queue_paths.iter().any(|p| p == path) {
+                        continue;
+                    }
+                    if let Some(item) = self.make_item(path.clone()) {
+                        fresh = Some(item);
+                        break;
+                    }
+                }
             }
         }
 

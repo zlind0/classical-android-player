@@ -58,6 +58,9 @@ private data class FeedStartBody(
 
 private data class FeedTurnBody(val sessionId: String, val direction: Int)
 
+/** 老桌面端只认 paths：退回到一个上限样本，避免整个书库再次进 body。 */
+private const val LEGACY_POOL_SAMPLE = 512
+
 private data class FeedCloseBody(val sessionId: String)
 
 /**
@@ -77,7 +80,7 @@ class RandomFeedManager(
     private val client = OkHttpClient.Builder()
         .connectTimeout(4, TimeUnit.SECONDS)
         // 首次 start 要等桌面端解析 3 本书（大 EPUB 可能较慢），读超时留足。
-        .readTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
         .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
@@ -142,9 +145,10 @@ class RandomFeedManager(
     ): Boolean = withContext(Dispatchers.IO) {
         var base = remoteLibrary.onlineBaseUrl(deviceId)
         var pool = poolPaths.ifEmpty { remoteLibrary.ebookPoolPaths(deviceId, rootKey) }
-        // 冷启动恢复阅读器时设备发现/缓存可能还没就绪：给它几秒，别让用户先看到失败。
+        // 冷启动恢复阅读器时设备发现可能还没就绪：给它几秒，别让用户先看到失败。
+        // 池子本身由桌面端按 rootKey 取，本地列表只用于校验 resume，不再强制等待。
         var waited = 0
-        while ((base == null || pool.isEmpty()) && waited < 20) {
+        while (base == null && waited < 20) {
             kotlinx.coroutines.delay(300)
             waited++
             base = remoteLibrary.onlineBaseUrl(deviceId)
@@ -152,10 +156,6 @@ class RandomFeedManager(
         }
         if (base == null) {
             fail(deviceId, rootKey, "设备离线，无法开始随机阅读")
-            return@withContext false
-        }
-        if (pool.isEmpty()) {
-            fail(deviceId, rootKey, "这个随机书库没有可阅读的电子书")
             return@withContext false
         }
         _state.value = RandomFeedState(deviceId, rootKey, loading = true)
@@ -173,11 +173,37 @@ class RandomFeedManager(
             ?.let {
                 FeedResumeWire(path = it.path, chapter = it.chapter, block = it.block, char = it.char)
             }
-        val body = gson.toJson(FeedStartBody(rootKey, pool, includeImages, resumeWire))
-        val text = postJson("$base/library/ebook/feed/start", body)
-        val snapshot = text?.let { runCatching { gson.fromJson(it, FeedSnapshotWire::class.java) }.getOrNull() }
+        // 服务端本来就有书库索引：只发 rootKey，让桌面端自己取池。
+        // 10 万本书全部塞进 body 会直接超过 axum 的 2 MiB 上限（HTTP 413）。
+        val startUrl = "$base/library/ebook/feed/start"
+        var reply = postJsonReply(
+            startUrl,
+            gson.toJson(FeedStartBody(rootKey, emptyList(), includeImages, resumeWire)),
+        ).getOrElse { err ->
+            fail(deviceId, rootKey, "连不上桌面端：${err.message ?: err.javaClass.simpleName}")
+            return@withContext false
+        }
+        // 兼容没更新的桌面端：老服务端仍要求 paths，返回 empty pool 或 413 时
+        // 退回到一个有上限的随机样本，避免手机先升级时随机阅读完全不可用。
+        if (needsLegacyPool(reply)) {
+            val sample = pool.shuffled().take(LEGACY_POOL_SAMPLE)
+            reply = postJsonReply(
+                startUrl,
+                gson.toJson(FeedStartBody(rootKey, sample, includeImages, resumeWire)),
+            ).getOrElse { err ->
+                fail(deviceId, rootKey, "连不上桌面端：${err.message ?: err.javaClass.simpleName}")
+                return@withContext false
+            }
+        }
+        if (reply.status !in 200..299) {
+            fail(deviceId, rootKey, "启动失败：${replyError(reply)}")
+            return@withContext false
+        }
+        val snapshot = runCatching {
+            gson.fromJson(reply.body, FeedSnapshotWire::class.java)
+        }.getOrNull()
         if (snapshot == null || snapshot.books.isEmpty()) {
-            fail(deviceId, rootKey, "随机阅读启动失败，请稍后重试")
+            fail(deviceId, rootKey, "启动失败：服务端返回的数据不完整")
             return@withContext false
         }
         applySnapshot(deviceId, rootKey, snapshot, resetHistory = true)
@@ -216,13 +242,23 @@ class RandomFeedManager(
             return@withContext false
         }
         _state.value = st.copy(loading = true, error = null)
-        val text = postJson(
+        val reply = postJsonReply(
             "$base/library/ebook/feed/turn",
             gson.toJson(FeedTurnBody(st.sessionId, direction)),
-        )
-        val snapshot = text?.let { runCatching { gson.fromJson(it, FeedSnapshotWire::class.java) }.getOrNull() }
+        ).getOrElse { err ->
+            _state.value = st.copy(
+                loading = false,
+                error = "切换失败：连不上桌面端（${err.message ?: err.javaClass.simpleName}）",
+            )
+            return@withContext false
+        }
+        if (reply.status !in 200..299) {
+            _state.value = st.copy(loading = false, error = "切换失败：${replyError(reply)}")
+            return@withContext false
+        }
+        val snapshot = runCatching { gson.fromJson(reply.body, FeedSnapshotWire::class.java) }.getOrNull()
         if (snapshot == null || snapshot.books.isEmpty()) {
-            _state.value = st.copy(loading = false, error = "切换失败，请稍后重试")
+            _state.value = st.copy(loading = false, error = "切换失败：服务端返回的数据不完整")
             return@withContext false
         }
         if (direction < 0) {
@@ -346,10 +382,12 @@ class RandomFeedManager(
         val index = snapshot.index.coerceIn(0, (snapshot.books.size - 1).coerceAtLeast(0))
         snapshot.books.forEach { expectedChapters[it.path] = it.chapterCount }
         val adjusted = snapshot.books.map { it.toBook() }
+        // 窗口里每本书的当前章快照都先收下：邻居页据此显示“下一本”的正文预览，
+        // 切过去时也已经有第一屏可渲染。
+        adjusted.zip(snapshot.books).forEach { (book, wire) -> seedChapter(book, wire) }
         rawCurrent = adjusted.getOrNull(index) ?: adjusted.first()
         serverPrevious = adjusted.getOrNull(index - 1)
         serverNext = adjusted.getOrNull(index + 1)
-        rawCurrent?.let { seedChapter(it, snapshot.books.getOrNull(index)) }
         _state.value = RandomFeedState(
             deviceId = deviceId,
             rootKey = rootKey,
@@ -459,6 +497,38 @@ class RandomFeedManager(
     }.getOrDefault(value.hashCode().toString())
 
     private fun enc(value: String): String = URLEncoder.encode(value, "UTF-8")
+
+    private data class HttpReply(val status: Int, val body: String)
+
+    /** 保留状态码与响应体：失败时把服务端 `{"error": "..."}` 原样带回给界面。 */
+    private fun postJsonReply(url: String, body: String): Result<HttpReply> = runCatching {
+        val req = Request.Builder()
+            .url(url)
+            .post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .build()
+        client.newCall(req).execute().use { r ->
+            HttpReply(r.code, r.body?.string().orEmpty())
+        }
+    }
+
+    /** 老服务端要求 paths：空池 400 或 body 超限 413 时改用有上限的样本重试。 */
+    private fun needsLegacyPool(reply: HttpReply): Boolean =
+        reply.status == 413 || (reply.status == 400 && reply.body.contains("random pool is empty"))
+
+    private fun replyError(reply: HttpReply): String {
+        val message = runCatching {
+            com.google.gson.JsonParser.parseString(reply.body)
+                .asJsonObject.get("error")?.asString
+        }.getOrNull()
+        val reason = if (!message.isNullOrBlank()) {
+            message
+        } else {
+            val body = reply.body.trim()
+            body.takeIf { it.isNotEmpty() && it.length <= 200 } ?: "HTTP ${reply.status}"
+        }
+        // 附带状态码，方便区分“服务端拒绝”和“代理/中继没通”。
+        return if (reply.status in 200..299) reason else "$reason（HTTP ${reply.status}）"
+    }
 
     private fun postJson(url: String, body: String): String? = runCatching {
         val req = Request.Builder()

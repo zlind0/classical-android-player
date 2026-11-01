@@ -164,6 +164,10 @@ class PageWindow(val chapterCount: Int, initial: GlobalPage) {
         mutableStateListOf(*arrayOfNulls<GlobalPage?>(PAGE_WINDOW_SIZE))
     private var ringOffset by mutableIntStateOf(0)
     val breaks = mutableStateMapOf<Int, List<List<PageSlice>>>()
+    /** 随机阅读按章取到的正文：分页与渲染都以它为准，避免父级 book 还没重组时出现空白页。 */
+    val chapterBlocks = mutableStateMapOf<Int, List<EbookBlock>>()
+
+    fun blocksFor(chapter: Int): List<EbookBlock>? = chapterBlocks[chapter]
 
     /** Host 注入：按需排一章（主线程，TextMeasurer 要求），返回该章是否有可用页。 */
     internal var paginateChapter: (suspend (Int) -> Boolean)? = null
@@ -345,6 +349,30 @@ class PageWindow(val chapterCount: Int, initial: GlobalPage) {
 
 // ---- PaginatorHost：分页 + 缓存 + 预排全部收敛在这里 ----
 
+/**
+ * 随机阅读的内存分页缓存：相邻页先按最终布局排好，翻页落定换成当前页时直接复用，
+ * 不写磁盘、不碰本地书库。键 = bookKey + 排版参数。
+ */
+internal object FeedPageCache {
+    private const val MAX_ENTRIES = 24
+    private val map = object : LinkedHashMap<String, Map<Int, List<List<PageSlice>>>>(16, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, Map<Int, List<List<PageSlice>>>>?,
+        ): Boolean = size > MAX_ENTRIES
+    }
+
+    @Synchronized
+    fun get(key: String): Map<Int, List<List<PageSlice>>>? = map[key]
+
+    @Synchronized
+    fun put(key: String, value: Map<Int, List<List<PageSlice>>>) {
+        map[key] = value
+    }
+
+    @Synchronized
+    fun clear() = map.clear()
+}
+
 @Composable
 fun rememberPageWindow(
     bookPath: String,
@@ -374,38 +402,49 @@ fun rememberPageWindow(
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
 
-    val win = remember(bookKey) {
-        PageWindow(
-            chapterCount = book.chapters.size,
-            initial = initial.copy(
-                chapter = initial.chapter.coerceIn(0, (book.chapters.size - 1).coerceAtLeast(0)),
-                page = initial.page.coerceAtLeast(0),
-            ),
-        )
-    }
-    var cacheBase by remember(bookKey) { mutableStateOf<Map<Int, List<List<PageSlice>>>>(emptyMap()) }
-    var cacheKey by remember(bookKey) { mutableStateOf<String?>(null) }
-    var bookMd5 by remember(bookKey) { mutableStateOf("") }
-    var anchorApplied by remember(bookKey) { mutableStateOf(anchorBlock <= 0 && anchorChar <= 0) }
-    // 落盘串行化：预排循环与跳转并发写全书 JSON 时不互相覆盖丢章
-    val saveMutex = remember(bookKey) { Mutex() }
-
     val key = remember(prefs.fontSizeSp, prefs.fontPath, widthPx, heightPx, persistPages) {
         if (heightPx <= 100) null
         else if (persistPages) store.pageCacheKey(prefs, widthPx, heightPx)
         else "mem@${prefs.fontSizeSp.toInt()}x${prefs.fontPath.hashCode()}@${widthPx}x$heightPx"
     }
 
+    val win = remember(bookKey, key) {
+        PageWindow(
+            chapterCount = book.chapters.size,
+            initial = initial.copy(
+                chapter = initial.chapter.coerceIn(0, (book.chapters.size - 1).coerceAtLeast(0)),
+                page = initial.page.coerceAtLeast(0),
+            ),
+        ).also { w ->
+            // 随机阅读：相邻页已经按同一布局排过一遍，换成当前页时直接复用，
+            // 避免翻页落定的那一帧闪一下 loader。
+            if (!persistPages && key != null) {
+                FeedPageCache.get("$bookKey|$key")?.let { cached ->
+                    w.breaks.putAll(cached)
+                    w.fullRewrite()
+                    // 相邻页已经排过：直接落到锚点页，避免新当前页先显示章首再跳回来。
+                    if (anchorBlock > 0 || anchorChar > 0) {
+                        val pages = cached[w.center.chapter]?.filter { it.isNotEmpty() }.orEmpty()
+                        if (pages.isNotEmpty()) {
+                            w.jumpTo(GlobalPage(w.center.chapter, pageForChar(pages, anchorBlock, anchorChar)))
+                        }
+                    }
+                }
+            }
+        }
+    }
+    var cacheBase by remember(bookKey) { mutableStateOf<Map<Int, List<List<PageSlice>>>>(emptyMap()) }
+    var cacheKey by remember(bookKey) { mutableStateOf<String?>(null) }
+    var bookMd5 by remember(bookKey) { mutableStateOf("") }
+    var anchorApplied by remember(bookKey, key) { mutableStateOf(anchorBlock <= 0 && anchorChar <= 0) }
+    // 落盘串行化：预排循环与跳转并发写全书 JSON 时不互相覆盖丢章
+    val saveMutex = remember(bookKey) { Mutex() }
+
     // 磁盘缓存命中则整本直接可用（秒开）；字号/字体/屏宽变化时旧断点作废重排。
     LaunchedEffect(bookKey, key) {
         if (key == null) return@LaunchedEffect
         cacheKey = key
-        if (!persistPages) {
-            cacheBase = emptyMap()
-            win.breaks.clear()
-            win.fullRewrite()
-            return@LaunchedEffect
-        }
+        if (!persistPages) return@LaunchedEffect
         val md5 = store.md5Of(bookPath)
         bookMd5 = md5
         val cached = store.loadPageBreaks(md5, key)
@@ -428,10 +467,14 @@ fun rememberPageWindow(
         if (heightPx <= 100) return false
         val blocks = chapterLoader?.invoke(ci) ?: book.chapters[ci].blocks
         if (blocks.isEmpty()) return false
+        if (chapterLoader != null) win.chapterBlocks[ci] = blocks
         val paginator = ChapterPaginator(measurer, density, widthPx, heightPx, prefs.fontSizeSp, fontFamily)
         val nb = runCatching { paginator.paginate(blocks) }.getOrDefault(emptyList())
         if (nb.isNotEmpty()) {
             win.breaks[ci] = nb
+            if (!persistPages) {
+                FeedPageCache.put("$bookKey|$k", win.breaks.toMap())
+            }
             win.fillGaps() // 边缘扩展 + 空槽填入，loader 立刻消失；落盘随后在 IO 慢慢写
             if (persistPages) {
                 // 全书 JSON 序列化 + 文件写挪到 IO：连续预排多章时主线程不卡手势

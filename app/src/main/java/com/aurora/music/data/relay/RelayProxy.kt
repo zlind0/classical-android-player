@@ -72,10 +72,19 @@ class RelayProxy(
         val query: Map<String, String>,
         val headers: Map<String, String>,
         val body: ByteArray,
-    )
+    ) {
+        /** 中继帧只带一个 path 字段：把解析过的查询串重新编码回去。 */
+        fun pathWithQuery(): String {
+            if (query.isEmpty()) return path
+            val encoded = query.entries.joinToString("&") { (key, value) ->
+                "${java.net.URLEncoder.encode(key, "UTF-8")}=${java.net.URLEncoder.encode(value, "UTF-8")}"
+            }
+            return "$path?$encoded"
+        }
+    }
 
     private suspend fun handle(socket: Socket) {
-        socket.soTimeout = 60_000
+        socket.soTimeout = 120_000
         val input = BufferedInputStream(socket.inputStream)
         val output = socket.outputStream
         val request = parse(input) ?: run {
@@ -225,7 +234,8 @@ class RelayProxy(
         }
         val payload = JsonObject().apply {
             addProperty("method", request.method)
-            addProperty("path", request.path)
+            // 查询串必须一起转发：feed/chapter、ebook/scan 都靠 ?path=…&chapter=… 定位。
+            addProperty("path", request.pathWithQuery())
             addProperty(
                 "body",
                 Base64.encodeToString(request.body, Base64.NO_WRAP),

@@ -1,16 +1,18 @@
 package com.aurora.music.ui.ebook
 
+import android.app.Activity
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Text
@@ -26,19 +28,28 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.cast.RandomFeedBook
+import com.aurora.music.data.cast.RandomFeedManager
 import com.aurora.music.data.ebook.EbookChapter
 import com.aurora.music.data.ebook.EbookFeedResume
+import com.aurora.music.data.ebook.EbookReadPrefs
 import com.aurora.music.data.ebook.ParsedEbook
 import com.aurora.music.ui.components.LottieLoader
 import com.aurora.music.ui.ios5.Ios5GlossButton
@@ -163,22 +174,56 @@ fun RandomReaderScreen(
         if (!ttsPlaying) persistResume()
     }
 
+    // 全屏阅读：隐藏系统状态栏，避免压住标题 marquee；底部导航键保留。
+    // 跟随屏幕方向重建，旋转回竖屏时把系统栏再藏一次。
+    val orientation = androidx.compose.ui.platform.LocalConfiguration.current.orientation
+    DisposableEffect(orientation) {
+        val activity = context as? Activity
+        val controller = activity?.let { WindowCompat.getInsetsController(it.window, it.window.decorView) }
+        controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller?.hide(WindowInsetsCompat.Type.statusBars())
+        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            controller?.show(WindowInsetsCompat.Type.statusBars())
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    // 阅读页底栏是深色：导航键用白图标；打开选项页（纸面）时按主题切深色。
+    DisposableEffect(optionsOpen, prefs.theme) {
+        val activity = context as? Activity
+        val controller = activity?.let { WindowCompat.getInsetsController(it.window, it.window.decorView) }
+        val previous = controller?.isAppearanceLightNavigationBars
+        controller?.isAppearanceLightNavigationBars =
+            optionsOpen && themeOf(prefs.theme).bg.luminance() > 0.5f
+        onDispose { controller?.isAppearanceLightNavigationBars = previous ?: false }
+    }
+
     /**
      * 切书统一入口：耳机/通知栏、上下滑都走它。
      * @param autoRead 切好后是否停顿一下再朗读（耳机切书总是读；手势只在原本正在朗读时才续读）。
      */
     fun switchBook(direction: Int, autoRead: Boolean) {
-        if (manager.state.value.loading) return
+        if (manager.state.value.loading) {
+            // 还在换书：先把 pager 收回中间，别停在相邻页上。
+            scope.launch { runCatching { pager.scrollToPage(1) } }
+            return
+        }
         autoReadJob[0]?.cancel()
         autoReadJob[0] = null
         val wasPlaying = tts.playing.value
         if (wasPlaying) tts.stop(savePos = false)
         persistResume()
         autoReadJob[0] = scope.launch {
-            if (!manager.turn(direction)) {
+            val ok = manager.turn(direction)
+            if (!ok) {
                 showToast(manager.state.value.error ?: "切换失败")
+                runCatching { pager.scrollToPage(1) }
                 return@launch
             }
+            // 新书数据已经就位：这时才把 pager 收回中间。相邻页一直是最终布局，
+            // 收回去的画面和刚才停住的那一页完全一致，不会有跳变。
+            runCatching { pager.scrollToPage(1) }
             // 切过去就先把新书的目标位置记下：后台听书时进程被杀也能恢复到最后切到的那本。
             persistResume()
             if (!autoRead) return@launch
@@ -270,6 +315,7 @@ fun RandomReaderScreen(
         onDispose {
             // 退出随机阅读时清掉远程书目：通知栏不该停留在没有会话的随机书上。
             tts.resetBook()
+            FeedPageCache.clear()
             manager.close()
         }
     }
@@ -283,8 +329,8 @@ fun RandomReaderScreen(
         val delta = pager.settledPage - 1
         if (delta != 0) {
             // 手势切书：原本在朗读才续读，避免静音翻书时突然开口。
+            // 不在这里回收 pager：等新书数据就位后再收，停住的相邻页本身就是最终布局。
             switchBook(if (delta > 0) 1 else -1, autoRead = tts.playing.value)
-            runCatching { pager.scrollToPage(1) }
         }
     }
 
@@ -296,14 +342,14 @@ fun RandomReaderScreen(
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 if (starting || state.loading) {
                     LottieLoader(modifier = Modifier.size(72.dp))
-                    Spacer(Modifier.height(8.dp))
-                    Text("正在打开随机书…", fontSize = 13.sp, color = Color(0xFF6B7280))
                 } else {
                     Text(
                         state.error ?: "没有可阅读的随机书",
                         fontSize = 15.sp,
                         color = Color(0xFF6B7280),
                         textAlign = TextAlign.Center,
+                        maxLines = 8,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(horizontal = 32.dp),
                     )
                     Spacer(Modifier.height(16.dp))
@@ -331,87 +377,112 @@ fun RandomReaderScreen(
         return
     }
 
-    val count = currentBook.chapterCount.coerceAtLeast(currentBook.chapterTitles.size).coerceAtLeast(1)
-    val displayBook = remember(currentBook.path, chapterVersion) {
-        val chapters = (0 until count).map { i ->
-            val title = currentBook.chapterTitles.getOrElse(i) { "第 ${i + 1} 章" }
-            val cached = manager.cachedChapter(currentBook.path, i)
-            EbookChapter(cached?.title?.ifBlank { title } ?: title, cached?.blocks.orEmpty())
-        }
-        ParsedEbook(
-            title = currentBook.title,
-            author = currentBook.author,
-            chapters = chapters,
-        )
-    }
-    val bookKey = "${currentBook.path}|${currentBook.chapterIndex}|${currentBook.blockIndex}|${currentBook.charOffset}"
+    val displayBook = feedParsedBook(manager, currentBook, chapterVersion)
+    val bookKey = feedBookKey(currentBook)
+    val prevBook = state.previous
+    val nextBook = state.next
 
-    Box(Modifier.fillMaxSize()) {
+    val currentFeed = FeedReaderUi(
+        bookTitle = currentBook.title,
+        onSaveToShelf = {
+            val (c, b, ch) = currentPosition(currentBook)
+            scope.launch {
+                val ok = manager.saveToShelf(deviceId, currentBook, c, b, ch)
+                showToast(if (ok) "已存入默认书架（含当前进度）" else "入库失败，请检查连接")
+            }
+        },
+        onChapterEdge = {
+            scope.launch { manager.cacheWholeBook(deviceId, currentBook.path) }
+        },
+        onPositionChanged = { chapter, block, char ->
+            manager.rememberPosition(currentBook.path, chapter, block, char)
+        },
+        onPlayFrom = { chapter, block, char ->
+            scope.launch {
+                val ch = manager.loadChapter(currentBook.path, chapter)
+                if (ch != null) {
+                    val parsed = feedParsed(currentBook, chapter, ch)
+                    tts.setBook("feed:${currentBook.path}", parsed, currentBook.path, force = true)
+                    tts.playFrom(chapter, block, char)
+                }
+            }
+        },
+        onPrevChapter = ::switchChapter,
+        onNextChapter = ::switchChapter,
+        marqueeTitle = true,
+    )
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        // 每一页都比屏幕高出一个“上一本书名”的高度：翻页时这一条先露出，
+        // 落定后正好藏到屏幕上沿之外，页面看到的始终是阅读器最终布局。
+        BoundaryPager(boundary = BOOK_BOUNDARY_HEIGHT, modifier = Modifier.fillMaxSize()) {
         VerticalPager(
             state = pager,
             modifier = Modifier.fillMaxSize(),
             userScrollEnabled = !optionsOpen,
             beyondViewportPageCount = 1,
         ) { page ->
-            when (page) {
-                0 -> NeighborCard("上一本", currentBook, state.previous, prefs.theme)
-                2 -> NeighborCard("下一本", currentBook, state.next, prefs.theme)
-                else -> {
-                    val feed = FeedReaderUi(
-                        bookTitle = currentBook.title,
-                        onSaveToShelf = {
-                            val (c, b, ch) = currentPosition(currentBook)
-                            scope.launch {
-                                val ok = manager.saveToShelf(deviceId, currentBook, c, b, ch)
-                                showToast(if (ok) "已存入默认书架（含当前进度）" else "入库失败，请检查连接")
-                            }
-                        },
-                        onChapterEdge = {
-                            scope.launch { manager.cacheWholeBook(deviceId, currentBook.path) }
-                        },
-                        onPositionChanged = { chapter, block, char ->
-                            manager.rememberPosition(currentBook.path, chapter, block, char)
-                        },
-                        onPlayFrom = { chapter, block, char ->
-                            scope.launch {
-                                val ch = manager.loadChapter(currentBook.path, chapter)
-                                if (ch != null) {
-                                    val parsed = feedParsed(currentBook, chapter, ch)
-                                    tts.setBook("feed:${currentBook.path}", parsed, currentBook.path, force = true)
-                                    tts.playFrom(chapter, block, char)
-                                }
-                            }
-                        },
-                        onPrevChapter = ::switchChapter,
-                        onNextChapter = ::switchChapter,
-                    )
-                    ReaderBody(
-                        bookPath = currentBook.path,
-                        book = displayBook,
-                        initial = GlobalPage(
-                            currentBook.chapterIndex.coerceIn(0, displayBook.chapters.size - 1),
-                            0,
-                        ),
-                        initBlock = currentBook.blockIndex,
-                        initChar = currentBook.charOffset,
-                        pendingJump = pendingJump,
-                        onConsumeJump = { pendingJump = null },
-                        prefs = prefs,
-                        toast = toast,
-                        onToast = ::showToast,
-                        onOpenToc = { _, _ -> },
-                        onOpenOptions = { optionsOpen = true },
-                        onOpenMusic = {},
-                        onOpenCast = {},
-                        castActive = false,
-                        bookKey = bookKey,
-                        chapterLoader = { chapter -> manager.loadChapter(currentBook.path, chapter)?.blocks },
-                        persistPages = false,
-                        prefetchChapters = 0,
-                        feed = feed,
-                    )
+            val book = when (page) {
+                0 -> prevBook
+                2 -> nextBook
+                else -> currentBook
+            }
+            val previousOfPage = when (page) {
+                0 -> null
+                1 -> prevBook
+                else -> currentBook
+            }
+            Column(Modifier.fillMaxSize()) {
+                BoundaryStrip(previousOfPage, prefs)
+                if (book == null) {
+                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text(
+                            if (page == 0) "没有上一本了" else "没有下一本了",
+                            fontSize = 15.sp,
+                            color = themeOf(prefs.theme).ink.copy(alpha = 0.45f),
+                        )
+                    }
+                } else if (page == 1) {
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        ReaderBody(
+                            bookPath = currentBook.path,
+                            book = displayBook,
+                            initial = GlobalPage(
+                                currentBook.chapterIndex.coerceIn(0, displayBook.chapters.size - 1),
+                                0,
+                            ),
+                            initBlock = currentBook.blockIndex,
+                            initChar = currentBook.charOffset,
+                            pendingJump = pendingJump,
+                            onConsumeJump = { pendingJump = null },
+                            prefs = prefs,
+                            toast = toast,
+                            onToast = ::showToast,
+                            onOpenToc = { _, _ -> },
+                            onOpenOptions = { optionsOpen = true },
+                            onOpenMusic = {},
+                            onOpenCast = {},
+                            castActive = false,
+                            bookKey = bookKey,
+                            chapterLoader = { chapter -> manager.loadChapter(currentBook.path, chapter)?.blocks },
+                            persistPages = false,
+                            prefetchChapters = 0,
+                            feed = currentFeed,
+                            active = true,
+                        )
+                    }
+                } else {
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        NeighborFeedBody(
+                            manager = manager,
+                            book = book,
+                            prefs = prefs,
+                            chapterVersion = chapterVersion,
+                        )
+                    }
                 }
             }
+        }
         }
 
         if (optionsOpen) {
@@ -440,75 +511,126 @@ fun RandomReaderScreen(
                 )
             }
         }
-
-        // 新书解析可能要走一次网络：切换过程中给个轻提示，避免停在旧书上看起来没反应。
-        if (state.loading) {
-            Text(
-                "正在换书…",
-                fontSize = 11.sp,
-                color = Color(0xFF6B7280),
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 40.dp),
-            )
-        }
     }
 }
 
+/** 每页比屏幕多出来的那一条：上一本书的书名/章节，翻页时先露出来，落定后藏到屏幕上沿之外。 */
+private val BOOK_BOUNDARY_HEIGHT = 30.dp
+
+/**
+ * 按「屏幕高 + 分界条高」排版 pager，再整体上移一个分界条高：
+ * 当前页正文正好铺满屏幕（含导航栏区域），分界条藏在屏幕上沿外，翻页时才露出来。
+ * 用自定义 layout 而不是 requiredHeight，避免父级 maxHeight 把 pager 压回屏幕高。
+ */
 @Composable
-private fun NeighborCard(
-    label: String,
-    current: RandomFeedBook?,
-    book: RandomFeedBook?,
-    theme: com.aurora.music.data.ebook.EbookTheme,
+private fun BoundaryPager(
+    boundary: Dp,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
 ) {
-    val th = themeOf(theme)
+    val density = LocalDensity.current
+    val boundaryPx = with(density) { boundary.roundToPx() }
     Box(
-        Modifier.fillMaxSize().background(th.bg),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-            modifier = Modifier.padding(horizontal = 32.dp),
-        ) {
-            // 界限卡同时交代“从哪本离开、将进入哪本”，上下滑时不至于不知道自己在哪。
-            current?.let {
-                Text("现在", fontSize = 11.sp, color = th.ink.copy(alpha = 0.4f), fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "${it.title} · ${it.chapterTitle.ifBlank { "第 ${it.chapterIndex + 1} 章" }}",
-                    fontSize = 13.sp,
-                    color = th.ink.copy(alpha = 0.55f),
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(16.dp))
-                Box(Modifier.width(88.dp).height(1.dp).background(th.ink.copy(alpha = 0.16f)))
-                Spacer(Modifier.height(16.dp))
-            }
-            Text(label, fontSize = 12.sp, color = th.ink.copy(alpha = 0.45f), fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(10.dp))
-            Text(
-                book?.title?.ifBlank { "没有更多了" } ?: "没有更多了",
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = th.ink,
-                textAlign = TextAlign.Center,
+        modifier.layout { measurable, constraints ->
+            val pageHeight = constraints.maxHeight + boundaryPx
+            val placeable = measurable.measure(
+                constraints.copy(minHeight = pageHeight, maxHeight = pageHeight),
             )
-            if (book != null) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    book.chapterTitle.ifBlank { "第 ${book.chapterIndex + 1} 章" },
-                    fontSize = 14.sp,
-                    color = th.ink.copy(alpha = 0.62f),
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(18.dp))
-                Text(
-                    "松手后继续读这本书",
-                    fontSize = 12.sp,
-                    color = th.ink.copy(alpha = 0.4f),
-                )
+            layout(constraints.maxWidth, constraints.maxHeight) {
+                placeable.place(0, -boundaryPx)
             }
+        },
+    ) { content() }
+}
+
+@Composable
+private fun BoundaryStrip(book: RandomFeedBook?, prefs: EbookReadPrefs) {
+    val th = themeOf(prefs.theme)
+    Box(
+        Modifier.fillMaxWidth().height(BOOK_BOUNDARY_HEIGHT).background(th.bg),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        if (book != null) {
+            Text(
+                "${book.title} · ${book.chapterTitle.ifBlank { "第 ${book.chapterIndex + 1} 章" }}",
+                fontSize = 11.sp,
+                color = th.ink.copy(alpha = 0.5f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
         }
+        Box(
+            Modifier.align(Alignment.BottomStart).fillMaxWidth().height(1.dp)
+                .background(th.ink.copy(alpha = 0.08f)),
+        )
+    }
+}
+
+/** 相邻书直接按阅读器最终布局排版：同样的顶栏（静态书名）、正文分页和底部控制条。 */
+@Composable
+private fun NeighborFeedBody(
+    manager: RandomFeedManager,
+    book: RandomFeedBook,
+    prefs: EbookReadPrefs,
+    chapterVersion: Int,
+) {
+    val parsed = feedParsedBook(manager, book, chapterVersion)
+    ReaderBody(
+        bookPath = book.path,
+        book = parsed,
+        initial = GlobalPage(
+            book.chapterIndex.coerceIn(0, parsed.chapters.size - 1),
+            0,
+        ),
+        initBlock = book.blockIndex,
+        initChar = book.charOffset,
+        pendingJump = null,
+        onConsumeJump = {},
+        prefs = prefs,
+        toast = null,
+        onToast = {},
+        onOpenToc = { _, _ -> },
+        onOpenOptions = {},
+        onOpenMusic = {},
+        onOpenCast = {},
+        castActive = false,
+        bookKey = feedBookKey(book),
+        chapterLoader = { chapter -> manager.loadChapter(book.path, chapter)?.blocks },
+        persistPages = false,
+        prefetchChapters = 0,
+        feed = FeedReaderUi(
+            bookTitle = book.title,
+            onSaveToShelf = {},
+            onChapterEdge = {},
+            onPositionChanged = { _, _, _ -> },
+            onPlayFrom = { _, _, _ -> },
+            onPrevChapter = {},
+            onNextChapter = {},
+            // 只有落到当前页才开始 marquee：相邻页先静态排好。
+            marqueeTitle = false,
+        ),
+        active = false,
+    )
+}
+
+private fun feedBookKey(book: RandomFeedBook): String =
+    "${book.path}|${book.chapterIndex}|${book.blockIndex}|${book.charOffset}"
+
+@Composable
+private fun feedParsedBook(
+    manager: RandomFeedManager,
+    book: RandomFeedBook,
+    chapterVersion: Int,
+): ParsedEbook {
+    val count = book.chapterCount.coerceAtLeast(book.chapterTitles.size).coerceAtLeast(1)
+    return remember(book.path, chapterVersion) {
+        val chapters = (0 until count).map { i ->
+            val title = book.chapterTitles.getOrElse(i) { "第 ${i + 1} 章" }
+            val cached = manager.cachedChapter(book.path, i)
+            EbookChapter(cached?.title?.ifBlank { title } ?: title, cached?.blocks.orEmpty())
+        }
+        ParsedEbook(title = book.title, author = book.author, chapters = chapters)
     }
 }
 

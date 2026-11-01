@@ -188,6 +188,8 @@ internal data class FeedReaderUi(
     /** 信息流里底栏“上一章/下一章”：随机跳到本书另一个章节。 */
     val onPrevChapter: () -> Unit,
     val onNextChapter: () -> Unit,
+    /** 当前页才滚动书名；相邻页先静态排好，翻页落定后再开始 marquee。 */
+    val marqueeTitle: Boolean = true,
 )
 
 @Composable
@@ -520,6 +522,8 @@ internal fun ReaderBody(
     /** 前后盲预排章数；随机阅读传 0，只排当前章。 */
     prefetchChapters: Int = PREFETCH_CHAPTERS,
     feed: FeedReaderUi? = null,
+    /** 随机阅读：只有正中间那一页是「活着」的；相邻页只负责按最终布局预渲染。 */
+    active: Boolean = true,
 ) {
     val context = LocalContext.current
     val container = (context.applicationContext as AuroraApplication).container
@@ -530,6 +534,7 @@ internal fun ReaderBody(
     val ttsInstalling by tts.installing.collectAsStateWithLifecycle()
     val ttsNotice by tts.notice.collectAsStateWithLifecycle()
     LaunchedEffect(ttsNotice) {
+        if (!active) return@LaunchedEffect
         tts.takeNotice()?.let { onToast(it) }
     }
     val scope = rememberCoroutineScope()
@@ -689,6 +694,7 @@ internal fun ReaderBody(
                 right = "${rememberTimeText()} · ${rememberBatteryPct()}%",
                 meta = meta,
                 theme = prefs.theme,
+                marquee = feed?.marqueeTitle == true,
             )
 
             // ---- 正文 ----
@@ -853,6 +859,7 @@ internal fun ReaderBody(
                         val turnReq by tts.turnRequest.collectAsStateWithLifecycle()
                         var handledTurn by remember(bookKey) { mutableStateOf<Triple<Int, Int, Int>?>(null) }
                         LaunchedEffect(turnReq, pager.isScrollInProgress) {
+                            if (!active) return@LaunchedEffect
                             if (pager.isScrollInProgress) return@LaunchedEffect
                             val t = turnReq ?: return@LaunchedEffect
                             if (t == handledTurn) return@LaunchedEffect
@@ -890,6 +897,7 @@ internal fun ReaderBody(
                         // 段内跟读：段落跨页时按朗读进度自动翻（只往前翻，不把用户拽回来）
                         val paraTiming by tts.paraTiming.collectAsStateWithLifecycle()
                         LaunchedEffect(paraTiming, ttsPlaying) {
+                            if (!active) return@LaunchedEffect
                             val t = paraTiming ?: return@LaunchedEffect
                             if (!ttsPlaying || t.chapter != win.center.chapter) return@LaunchedEffect
                             val cps = breaks[t.chapter]?.filter { it.isNotEmpty() }.orEmpty()
@@ -961,8 +969,7 @@ internal fun ReaderBody(
                             } else {
                                 val (c, p) = rendered.id
                                 PageView(
-                                    book = book,
-                                    spine = c,
+                                    blocks = win.blocksFor(c) ?: book.chapters[c].blocks,
                                     slices = rendered.slices,
                                     prefs = prefs,
                                     fontFamily = fontFamily,
@@ -982,14 +989,16 @@ internal fun ReaderBody(
             ReaderBottomBar(
                 barBrush = th.barBrush,
                 barInk = th.barInk,
-                isTtsPlaying = ttsPlaying,
+                isTtsPlaying = active && ttsPlaying,
                 sentenceMode = feed == null && ttsUnit == EbookTtsUnit.SENTENCE,
                 // 随机阅读里“上一句/下一句”改成随机切章节。
                 prevLabel = if (feed != null) "上一章" else null,
                 nextLabel = if (feed != null) "下一章" else null,
                 onTtsPrev = { if (feed != null) feed.onPrevChapter() else tts.prevUnit() },
                 onTtsToggle = {
-                    if (ttsPlaying) {
+                    if (!active) {
+                        // 相邻页只展示最终布局，按钮不抢当前书的播放状态。
+                    } else if (ttsPlaying) {
                         // 用户亲手停朗读：音乐一起暂停（服务侧快照，之后播放键可双恢复）
                         tts.stop(userInitiated = true, savePos = persistPages)
                     } else {
@@ -1154,8 +1163,7 @@ private fun charsOfPage(book: ParsedEbook, spine: Int, pages: List<List<PageSlic
 @Composable
 @OptIn(ExperimentalTextApi::class)
 private fun PageView(
-    book: ParsedEbook,
-    spine: Int,
+    blocks: List<EbookBlock>,
     slices: List<PageSlice>,
     prefs: EbookReadPrefs,
     fontFamily: FontFamily,
@@ -1166,7 +1174,6 @@ private fun PageView(
     highlightFrom: Int = 0,
     highlightTo: Int = Int.MAX_VALUE,
 ) {
-    val blocks = book.chapters[spine].blocks
     val linkListener = remember(onLinkClick) {
         object : LinkInteractionListener {
             override fun onClick(link: LinkAnnotation) {
@@ -1269,6 +1276,7 @@ private fun ReaderTitleOrStatus(
     right: String,
     meta: Color,
     theme: EbookTheme,
+    marquee: Boolean,
 ) {
     if (feed == null) {
         ReaderStatusBar(left = left, right = right, color = meta)
@@ -1288,11 +1296,17 @@ private fun ReaderTitleOrStatus(
             overflow = TextOverflow.Clip,
             modifier = Modifier
                 .weight(1f)
-                .basicMarquee(
-                    iterations = Int.MAX_VALUE,
-                    initialDelayMillis = 1400,
-                    repeatDelayMillis = 1200,
-                    velocity = 22.dp,
+                .then(
+                    if (marquee) {
+                        Modifier.basicMarquee(
+                            iterations = Int.MAX_VALUE,
+                            initialDelayMillis = 1400,
+                            repeatDelayMillis = 1200,
+                            velocity = 22.dp,
+                        )
+                    } else {
+                        Modifier
+                    },
                 ),
         )
         Spacer(Modifier.width(8.dp))
