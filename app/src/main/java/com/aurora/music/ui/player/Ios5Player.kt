@@ -499,27 +499,31 @@ fun Ios5PlayerPage(
             Spacer(Modifier.height(12.dp))
             // 音量条：最右侧是投屏 airplay 键，常驻显示（网页没连上时也要能看到/长按拿网址）。
             // 点亮（蓝）= 声音由网页出（手机本地静音）；灰 = 手机自己播或还没有网页连上。
+            // 行高锁定 52dp：接收端模式（remoteMode）没有 airplay 键，Slider 自身只有 30dp，
+            // 不锁高的话整条底栏会比 bottomBase 算的矮 22dp，底部露出一条浅色缝。
             val castState by container.ebookCast.state.collectAsStateWithLifecycle()
             val castPrefs by container.ebookPrefs.castPrefs.collectAsStateWithLifecycle()
             val sender by container.ebookCast.senderState.collectAsStateWithLifecycle()
             val castAudio = castPrefs.musicOnCast(true)
             val castConnected = castState.clientsConnected
-            // 音乐投屏启用（网页出声）时：音量条不再调手机系统音量，而是网页端的前置放大
-            // （0%..100%，默认 100%）。手机本地此时是静音的，调系统音量没有意义。
-            val casting = !remoteMode && castAudio && castConnected
+            // 网页投屏出声：音量条控制网页端的前置放大。
+            val castingWeb = !remoteMode && castAudio && castConnected
             val deviceCasting = sender.device != null && sender.connected
+            // 设备投屏同样走前置放大：发送端只改远端播放器内的增益，不碰远端系统音量；
+            // 本地音乐和远程音乐都经同一条 /state → 接收端 ExoPlayer 的路径生效。
+            val gainControl = castingWeb || (!remoteMode && deviceCasting)
             var preamp by remember(castPrefs.webPreamp) {
                 mutableFloatStateOf(castPrefs.webPreamp.coerceIn(0f, 1f))
             }
             // 投屏出声结束、音量条回到系统音量：重新读一次真实系统音量，别显示旧值
-            LaunchedEffect(casting) {
-                if (!casting) volume = audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()
+            LaunchedEffect(gainControl) {
+                if (!gainControl) volume = audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()
             }
             Row(
-                Modifier.fillMaxWidth(),
+                Modifier.fillMaxWidth().height(52.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (casting) {
+                if (gainControl) {
                     Ios5Slider(
                         value = preamp,
                         onValueChange = { preamp = it },
@@ -548,11 +552,11 @@ fun Ios5PlayerPage(
                         when {
                             deviceCasting -> "正在投屏到 ${sender.device?.name}"
                             sender.device != null && sender.waiting -> "等待 ${sender.device?.name} 接受"
-                            casting -> "网页投屏出声中"
+                            castingWeb -> "网页投屏出声中"
                             !castConnected -> "投屏：选择设备或查看网页地址"
                             else -> "选择投屏目标"
                         },
-                        tint = if (deviceCasting || casting) Color(0xFF3B8CFA) else Color(0xFF9AA0AB),
+                        tint = if (deviceCasting || castingWeb) Color(0xFF3B8CFA) else Color(0xFF9AA0AB),
                         modifier = Modifier.size(52.dp).clip(CircleShape)
                             .pointerInput(remoteMode) {
                                 detectTapGestures(

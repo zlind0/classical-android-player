@@ -75,6 +75,10 @@ fun CastReceiverOverlay() {
     }
 }
 
+/**
+ * 接收端确认浮层。目前 [CastPermission] 总是返回 Allow，所以不会出现；
+ * 保留给未来的权限管理（返回 Ask 时使用）。
+ */
 @Composable
 private fun IncomingScreen(
     s: CastReceiveState.Incoming,

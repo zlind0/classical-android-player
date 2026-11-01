@@ -55,7 +55,8 @@ sealed interface CastReceiveState {
 }
 
 /**
- * 接收端控制器：收到 /cast/offer 后弹接受界面；接受后
+ * 接收端控制器：收到 /cast/offer 后先过 [CastPermission] 准入（目前总是允许，
+ * 所以直接开始接收、不弹确认浮层）；接收后
  * - 音乐：轮询发送端 /state 与 /queue，用独立 ExoPlayer 拉 /audio（Range），
  *   所有操作回传 /cast/command，两边界面同步；
  * - 电子书：WebView 打开发送端网页（排版、底部音乐条都由发送端决定），
@@ -92,23 +93,42 @@ class CastReceiverController(
         when (_state.value) {
             is CastReceiveState.Idle -> Unit
             is CastReceiveState.Incoming, is CastReceiveState.Loading -> return false
-            // 已经在接收：发送端换了内容/重投，直接替换当前会话（重新弹接受界面）
+            // 已经在接收：发送端换了内容/重投，直接替换当前会话（重新走准入）
             else -> clear()
         }
-        _state.value = CastReceiveState.Incoming(offer)
-        return true
+        return when (CastPermission.decide(offer)) {
+            CastAdmission.Allow -> {
+                // 目前权限管理总是允许：直接开始接收，不弹「接受/拒绝」浮层。
+                beginAccept(offer)
+                true
+            }
+            // 保留给未来的权限管理：需要询问时仍然走原来的确认浮层。
+            CastAdmission.Ask -> {
+                _state.value = CastReceiveState.Incoming(offer)
+                true
+            }
+            CastAdmission.Deny -> false
+        }
     }
 
     fun accept() {
         val incoming = _state.value as? CastReceiveState.Incoming ?: return
-        val offer = incoming.offer
+        beginAccept(incoming.offer)
+    }
+
+    private fun beginAccept(offer: CastOffer) {
         senderName = offer.senderName.ifBlank { offer.host }
         baseUrl = offer.baseUrl
         contentType = offer.contentType
         _state.value = CastReceiveState.Loading(senderName, contentType)
-        when (contentType) {
-            CastContentType.MUSIC -> startMusic()
-            CastContentType.EBOOK -> startEbook()
+        // HTTP 线程也会走到这里（自动允许时），而播放器只能在主线程创建/操作。
+        scope.launch {
+            // 排队期间可能已被下一条请求/发送端停止顶掉，别把旧会话又拉起来。
+            if (baseUrl != offer.baseUrl) return@launch
+            when (contentType) {
+                CastContentType.MUSIC -> startMusic()
+                CastContentType.EBOOK -> startEbook()
+            }
         }
     }
 
@@ -253,6 +273,9 @@ class CastReceiverController(
 
     private fun applyRemote(rs: RemoteState) {
         val p = ensurePlayer()
+        // 发送端的音量条以“前置放大”下发：只调本接收端播放器的增益，
+        // 不动系统音量设置，也不会把接收端用户自己的音量改掉。
+        p.volume = rs.preamp.coerceIn(0f, 1f)
         val m = rs.music
         if (m.id.isBlank()) return
 
@@ -404,6 +427,8 @@ class CastReceiverController(
         val liked: Boolean = false,
         val senderId: String = "",
         val senderName: String = "",
+        /** 发送端音量条下发的播放器增益（0..1）；不涉及任何系统音量。 */
+        val preamp: Float = 1f,
         val music: RemoteMusic = RemoteMusic(),
     )
 
