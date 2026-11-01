@@ -1,13 +1,30 @@
-# Aurora 公网中继（Relay）实施方案 v1
+# 公网中继（PodRelay）实施方案 v1
 
 本文是公网中继的完整实施方案：协议、加密、认证、中继服务器、NAS 端（Windows 上的
 `desktop-app/`）、Android 客户端接入方式、部署与测试。实施完成后本文件即作为协议文档使用。
 
+- 产品名：**PodRelay**
 - 协议版本：`relay/v1`
 - 传输：`TLS 1.3`（`rustls`）承载自定义二进制帧，**不是 HTTP/HTTPS 应用层协议**
 - 中继服务器端口：单个高位 TCP 端口，默认 `21443`（服务器 80/443 在防火墙保持屏蔽）
 - 使用规模：单人、单 NAS、少量客户端设备
 - 依赖约束：中继服务器与 NAS 端都用 Rust，共享同一个协议 crate，不引入新的语言工具链
+
+### 命名与代码归属
+
+**所有中继相关代码集中放在仓库根目录的 `relay-server/`**，它是一个独立的 Cargo workspace，
+包含协议、公网服务端、NAS 侧 agent 库和一个多用途 CLI，四个 crate：
+
+| 位置 | crate | 说明 |
+|---|---|---|
+| `relay-server/protocol` | `pod-relay-protocol` | 帧、消息、加解密、快照格式；服务端与 NAS 端共用 |
+| `relay-server/server` | `pod-relay-server` | TLS 监听、会话、存储、调度等服务器核心（库） |
+| `relay-server/agent` | `pod-relay-agent` | NAS 侧的连接/索引/推送逻辑，纯库，不依赖 Tauri |
+| `relay-server/cli` | `pod-relay-cli` | 唯一二进制 `relay-server`：`server` / `gencert` / `keygen` / `fingerprint` / `status` / `fetch` / `selftest` |
+
+`desktop-app/` 只通过 path 依赖引入 `pod-relay-agent` 与 `pod-relay-protocol`，
+并提供一个把现有后端适配成 agent 所需接口的薄适配器；中继的业务逻辑不写进 `desktop-app/`。
+公网服务器上的部署路径统一为 `/etc/pod-relay`、`/var/lib/pod-relay`，systemd 单元名 `pod-relay`。
 
 ---
 
@@ -19,7 +36,7 @@
 2. 中继服务器**不接触媒体明文**，也不需要 NAS 的完整文件系统视图；它保存的是客户端可直接取用的加密分片。
 3. NAS 主动把后续要听的分片预推到中继服务器，客户端按自己的消费节奏取用；补推由中继服务器按需触发。
 4. 客户端现有的资料库同步、播放、封面缓存、电子书下载、投屏代理逻辑**不做结构性重写**。
-5. NAS 端只改 `desktop-app/`，不新增部署单元；Windows 上双击运行后即可用。
+5. NAS 上只有一个进程：中继逻辑以 `relay-server/agent` 库的形式链接进 `desktop-app/`，不新增部署单元；Windows 上双击运行后即可用。
 
 ### 1.2 约束
 
@@ -91,42 +108,62 @@
 
 ```
 aurora/
+├── relay-server/                       # 独立 Cargo workspace：所有中继代码
+│   ├── Cargo.toml                      # [workspace] members = ["protocol", "server", "agent", "cli"]
+│   ├── protocol/                       # pod-relay-protocol
+│   │   └── src/{lib,frame,msg,crypto,snapshot,error,file_id}.rs
+│   ├── server/                         # pod-relay-server：服务器核心（库）
+│   │   └── src/{config,tls,session,store,snapshot,policy,admin}.rs
+│   ├── agent/                          # pod-relay-agent（NAS 侧，纯库）
+│   │   ├── src/{lib,config,client,index,snapshot,push,stats}.rs
+│   │   └── src/backend.rs              # trait LibraryBackend：由宿主实现
+│   ├── cli/                            # pod-relay-cli，[[bin]] name = "relay-server"
+│   │   └── src/{main,gencert,fingerprint,status,fetch,selftest}.rs
+│   └── README.md
 ├── desktop-app/
-│   ├── Cargo.toml                      # 新增 workspace（成员：src-tauri、crates/relay-protocol、crates/relay-server）
-│   ├── crates/
-│   │   ├── relay-protocol/             # 帧、消息、加解密、快照格式（NAS 与中继服务器共用）
-│   │   │   ├── Cargo.toml
-│   │   │   └── src/{lib,frame,msg,crypto,snapshot,error}.rs
-│   │   └── relay-server/               # 部署在公网服务器
-│   │       ├── Cargo.toml
-│   │       └── src/{main,config,tls,server,session,store,snapshot,policy,admin}.rs
 │   ├── src-tauri/
-│   │   ├── Cargo.toml                  # 依赖 relay-protocol
+│   │   ├── Cargo.toml                  # 依赖 pod-relay-agent / pod-relay-protocol（path）
 │   │   └── src/
-│   │       ├── relay/
-│   │       │   ├── mod.rs              # RelayAgent：生命周期、重连、主循环
-│   │       │   ├── config.rs           # 配置读写（app data 目录 relay.json + 证书/密钥文件）
-│   │       │   ├── index.rs            # file_id → 路由路径索引
-│   │       │   ├── source.rs           # 通过 oneshot + Range 取字节、取 stat
-│   │       │   ├── snapshot.rs         # /library/all → gzip → 加密 → 分块推
-│   │       │   └── push.rs             # 分片推送、读窗口、节流
+│   │       ├── relay_backend.rs        # 薄适配器：实现 LibraryBackend，走 oneshot
 │   │       ├── commands.rs             # + relay 配置/状态命令
-│   │       └── lib.rs                  # 初始化 relay agent，挂到 AppState
+│   │       └── lib.rs                  # 启动/停止 agent，挂到 AppState
 │   └── src/components/RelayPanel.tsx   # 设置与状态 UI
 └── app/src/main/java/com/aurora/music/data/relay/   # Android 侧（新增）
     ├── RelayConfig.kt / RelayProto.kt / RelayCrypto.kt / RelayTls.kt
     ├── RelayClient.kt / RelayStore.kt / RelayProxy.kt / RelayService.kt
 ```
 
-新增 Rust 依赖（`src-tauri` 与 `relay-server` 各取所需）：
+`pod-relay-agent` 与宿主（`desktop-app`）的边界只有一个 trait：
+
+```rust
+// relay-server/agent/src/backend.rs
+#[async_trait]
+pub trait LibraryBackend: Send + Sync {
+    async fn library_version(&self) -> Result<i64>;
+    async fn snapshot_json(&self) -> Result<Vec<u8>>;
+    async fn stat(&self, path: &str) -> Result<Stat>;              // path 由 file_id 索引得到
+    async fn fetch_range(&self, path: &str, start: u64, end: u64) -> Result<Vec<u8>>;
+    async fn live(&self, req: LiveRequest) -> Result<LiveResponse>;
+}
+```
+
+工程约定：`relay-server/target/`、`relay-server/tmp/` 需加入仓库 `.gitignore`；临时产物只放
+`relay-server/tmp/` 或仓库根 `tmp/`，不写系统临时目录。
+
+`desktop-app/src-tauri/src/relay_backend.rs` 用现有的 `HttpState` + `build_router()` 实现这五个方法
+（见 §10.2），其余（连接、重连、索引、快照、推送、节流）全部在 `relay-server/agent` 内。
+
+新增 Rust 依赖（按 crate 各取所需）：
 
 ```
-relay-protocol = { path = "../crates/relay-protocol" }
-tokio-rustls = "0.26"   rustls = "0.23"   rustls-pemfile = "2"
-aes-gcm = "0.10"        hmac = "0.12"     sha2 = "0.10"
-flate2 = "1"            rand = "0.8"      base64 = "0.22"
-tower = { version = "0.5", features = ["util"] }   # 仅 src-tauri，用于 oneshot
-rcgen = "0.13"                                      # 仅 relay-server：生成自签证书
+# relay-server/protocol
+serde, serde_json, aes-gcm, hmac, sha2, flate2, rand, thiserror
+# relay-server/server
+tokio, tokio-rustls, rustls, rustls-pemfile, rcgen, anyhow, pod-relay-protocol
+# relay-server/agent
+tokio, tokio-rustls, rustls, rustls-pemfile, base64, anyhow, async-trait, pod-relay-protocol
+# desktop-app/src-tauri
+pod-relay-agent, pod-relay-protocol, tower = { features = ["util"] }   # oneshot
 ```
 
 ---
@@ -220,7 +257,7 @@ rcgen = "0.13"                                      # 仅 relay-server：生成�
 | `0x50 ADMIN_STATS_REQ` | C→R | 空 |
 | `0x51 ADMIN_STATS_OK` | R→C | `sessions:u32`，`host_online:u8`，`store_used:u64`，`store_cap:u64`，`hit:u64`，`miss:u64`，`evicted:u64`，`lib_version:i64` |
 
-只允许携带合法客户端证书的会话调用（由 `relayctl` 使用），不开放其他管理端口。
+只允许携带合法客户端证书的会话调用（由 `relay-server status` 使用），不开放其他管理端口。
 
 ### 5.7 一次播放的时序
 
@@ -269,13 +306,13 @@ file_id = SHA-256( UTF8(kind) ‖ 0x00 ‖ UTF8(key) )[0..16]
 ### 7.1 密钥材料
 
 - `media_key`：32 字节随机，NAS 首次启用中继时生成，写入 app data 目录 `relay/media.key`。
-- `key_id = BE64( HMAC-SHA256(media_key, "aurora-relay/v1/id")[0..8] )`，用于两端核对。
+- `key_id = BE64( HMAC-SHA256(media_key, "pod-relay/v1/id")[0..8] )`，用于两端核对。
 - 派生：
 
 ```
-k_media = HMAC-SHA256(media_key, "aurora-relay/v1/media")
-k_meta  = HMAC-SHA256(media_key, "aurora-relay/v1/meta")
-k_live  = HMAC-SHA256(media_key, "aurora-relay/v1/live")
+k_media = HMAC-SHA256(media_key, "pod-relay/v1/media")
+k_meta  = HMAC-SHA256(media_key, "pod-relay/v1/meta")
+k_live  = HMAC-SHA256(media_key, "pod-relay/v1/live")
 ```
 
 `media_key` 只存在于 NAS 与客户端；中继服务器配置里没有这把钥匙。
@@ -391,33 +428,48 @@ main → 读配置 → 构建 rustls ServerConfig（mTLS + 指纹白名单）
 ### 9.6 日志与健康检查
 
 - 结构化单行日志（时间、会话、事件、`file_id` 前缀、字节数）；不打印任何明文。
-- 健康检查只走协议：`relayctl status` 携带客户端证书发 `ADMIN_STATS_REQ`。
+- 健康检查只走协议：`relay-server status` 携带客户端证书发 `ADMIN_STATS_REQ`。
 - **不开任何 HTTP/HTTPS 监听端口**（服务器 80/443 已屏蔽，本方案也不需要）。
 
 ---
 
-## 10. NAS 端（`desktop-app/` 改造）
+## 10. NAS 端（`desktop-app/` 适配 + `relay-server/agent`）
 
-### 10.1 结构
+### 10.1 职责划分
 
-```
-desktop-app/src-tauri/src/
-├── relay/
-│   ├── mod.rs        # RelayAgent：状态机、连接、重连、命令通道
-│   ├── config.rs     # relay.json + 证书/密钥文件路径（app data 目录）
-│   ├── index.rs      # 从快照重建 file_id → (method, path) 索引
-│   ├── source.rs     # oneshot 调本地路由：stat() 与 fetch_range()
-│   ├── snapshot.rs   # 生成快照、gzip、加密、分块推送
-│   └── push.rs       # WANT 处理、读窗口、限并发、水位响应
-└── lib.rs            # 启动时创建 agent，挂到 AppState；配置变化时重建
+中继逻辑全部在 `relay-server/agent` 里（连接、重连、`file_id` 索引、快照推送、分片推送、节流、
+水位响应、状态统计）。`desktop-app/` 只做三件事：
+
+1. `src-tauri/src/relay_backend.rs`：实现 `pod_relay_agent::LibraryBackend`，把现有后端能力暴露给 agent；
+2. `src-tauri/src/lib.rs`：读配置、按开关启动/停止 `AgentHandle`，句柄挂进 `AppState`；
+3. Tauri 命令 + React 面板：配置、证书导入、密钥展示、状态展示。
+
+因此 `desktop-app/` 的改动保持在两百行以内，中继本身的演进不触碰资料库后端代码。
+
+```rust
+// src-tauri/src/relay_backend.rs（示意）
+pub struct HostBackend {
+    router: axum::Router,
+    state: HttpState,     // db / info / cache_dir
+}
+
+#[async_trait]
+impl pod_relay_agent::LibraryBackend for HostBackend {
+    async fn library_version(&self) -> Result<i64> { /* db::library_version */ }
+    async fn snapshot_json(&self) -> Result<Vec<u8>> { /* db::wire_snapshot → serde_json */ }
+    async fn stat(&self, path: &str) -> Result<Stat> { /* oneshot + Range: bytes=0-0 */ }
+    async fn fetch_range(&self, path: &str, start: u64, end: u64) -> Result<Vec<u8>> { /* oneshot */ }
+    async fn live(&self, req: LiveRequest) -> Result<LiveResponse> { /* oneshot POST */ }
+}
 ```
 
 ### 10.2 数据来源：复用现有后端，不经网络
 
-agent 持有与 `http_server` 相同的 `HttpState`（`db`、`info`、`cache_dir`）以及 `build_router()` 产出的 `Router`：
+`relay_backend.rs` 持有与 `http_server` 相同的 `HttpState`（`db`、`info`、`cache_dir`）以及
+`build_router()` 产出的 `Router`：
 
 ```rust
-// source.rs
+// src-tauri/src/relay_backend.rs
 let req = Request::builder()
     .method("GET")
     .uri(format!("/media/music?id={}", enc(id)))
@@ -438,7 +490,7 @@ let bytes = axum::body::to_bytes(res.into_body(), MAX_WINDOW).await?;
 
 这条设计决定带来两个直接收益：不占端口、不受 Windows 防火墙影响；agent 与 HTTP 服务器永远看到同一份数据。
 
-### 10.3 主循环
+### 10.3 主循环（`relay-server/agent`）
 
 ```
 loop {
@@ -451,8 +503,8 @@ loop {
             ping/keepalive       : 30s
             library_version_poll : 60s；变化则重建索引 + 推快照
             WANT(f, i, prio)     : 入队（按文件合并成 8 分片窗口）
-            STAT_REQ(f)          : source::stat → STAT_OK / STAT_ERR
-            LIVE_FWD(seq, ct)    : 解密 → oneshot → 加密 → LIVE_REPLY
+            STAT_REQ(f)          : backend::stat → STAT_OK / STAT_ERR
+            LIVE_FWD(seq, ct)    : 解密 → backend::live → 加密 → LIVE_REPLY
             CACHE_STATUS         : 更新水位状态（暂停/恢复预读）
         }
     }
@@ -460,14 +512,14 @@ loop {
 }
 ```
 
-### 10.4 快照推送
+### 10.4 快照推送（`relay-server/agent/src/snapshot.rs`）
 
-1. 起连接后与每 60 秒：读本地 `library_version`。
-2. 与中继服务器 `HELLO_OK.host_lib_version` 不同时：`db::wire_snapshot` → `serde_json` → `gzip`。
+1. 起连接后与每 60 秒：调 `backend.library_version()`。
+2. 与中继服务器 `HELLO_OK.host_lib_version` 不同时：`backend.snapshot_json()` → `gzip`。
 3. `SNAPSHOT_BEGIN` + 512 KiB `SNAPSHOT_CHUNK` 序列 + `SNAPSHOT_END`。
 4. 失败（断线/被顶号）则丢弃本次推送，下一轮重来；快照始终可整体重推，不做增量。
 
-### 10.5 分片推送
+### 10.5 分片推送（`relay-server/agent/src/push.rs`）
 
 - **显式 `WANT`**：立即调度，优先级最高。按文件把相邻请求合并成一个窗口（默认 8 分片 = 2 MiB），一次 oneshot 取回后切片加密推送。
 - **`WANT_AHEAD`**：进预读队列，仅在 `pressure=0` 时执行；每文件最多提前 32 分片。
@@ -477,7 +529,8 @@ loop {
 
 ### 10.6 配置与本地文件
 
-app data 目录（Windows：`%APPDATA%\com.aurora.desktop\`）：
+`relay-server/agent/src/config.rs` 定义配置结构；`desktop-app` 负责把它持久化到 app data 目录
+（Windows：`%APPDATA%\com.aurora.desktop\`）：
 
 ```
 relay.json          # 配置
@@ -521,7 +574,8 @@ relay/nas.key       # 导入的私钥
 - 状态区：连接状态、最近一次快照版本、缓存水位条、最近错误；
 - 所有配置持久化在 `relay.json`，重启后保留（遵循"回到界面不需要重新调节"）。
 
-`lib.rs` 的 `setup` 中：读取配置 → 若 `enabled` 则 `RelayAgent::start(db, info, cache_dir, config)`；配置变更时 `stop()` 再 `start()`。agent 的句柄放进现有 `AppState`，进程退出时随 `Drop` 关闭连接。
+`lib.rs` 的 `setup` 中：读取配置 → 若 `enabled` 则 `pod_relay_agent::start(HostBackend::new(...), config)`；
+配置变更时 `stop()` 再 `start()`。返回的 `AgentHandle` 放进现有 `AppState`，进程退出时随 `Drop` 关闭连接。
 
 ---
 
@@ -603,13 +657,13 @@ Range → 分片：
 ```json
 {
   "listen": "0.0.0.0:21443",
-  "tls": { "cert": "/etc/aurora-relay/certs/relay.crt", "key": "/etc/aurora-relay/certs/relay.key" },
+  "tls": { "cert": "/etc/pod-relay/certs/relay.crt", "key": "/etc/pod-relay/certs/relay.key" },
   "auth": {
     "hostFingerprints": ["sha256/…"],
     "clientFingerprints": ["sha256/…"]
   },
   "store": {
-    "dir": "/var/lib/aurora-relay/store",
+    "dir": "/var/lib/pod-relay/store",
     "capacityBytes": 21474836480,
     "fileTtlDays": 14
   },
@@ -651,11 +705,13 @@ relay-server fingerprint certs/nas.crt
 relay-server fingerprint certs/pixel9.crt
 
 # 3. 启动
-relay-server server --config /etc/aurora-relay/relay.json
-systemctl enable --now aurora-relay
+relay-server server --config /etc/pod-relay/relay.json
+systemctl enable --now pod-relay
 ```
 
-构建：在服务器上 `cargo build --release`，或本机 `cargo build --release --target x86_64-unknown-linux-musl` 后拷贝静态二进制。无外部运行时依赖，无 HTTP 端口，无反向代理。
+构建：`cd relay-server && cargo build --release -p pod-relay-cli`，产物 `target/release/relay-server` 可直接部署；
+也可用 `--target x86_64-unknown-linux-musl` 交叉编译静态二进制。
+无外部运行时依赖，无 HTTP 端口，无反向代理。
 
 ### 14.2 NAS（Windows）
 
@@ -675,9 +731,10 @@ NAS 只需出站访问 `21443/tcp`，不需要任何入站端口，NAT 后可直
 
 ### 15.1 Rust
 
-- `relay-protocol`：帧边界、超长帧拒绝、GCM 往返、篡改检测、快照分块与 gzip、`file_id` 向量。
-- `relay-server`：内存 store 单测；`selftest` 子命令启动"假 NAS + 假客户端"，推送 10 MiB 随机文件 → 逐片取回校验；容量压到 2 MiB 触发淘汰；`pressure` 切换；NAS 掉线/重连；慢客户端被断开。
-- `desktop-app`：`cargo build`；`relay` 模块单测覆盖索引重建（`music/audiobook/ebook/songart/cover/defaultart` 六类映射）与 Range 窗口切分。
+- `pod-relay-protocol`：帧边界、超长帧拒绝、GCM 往返、篡改检测、快照分块与 gzip、`file_id` 向量。
+- `pod-relay-server`：内存 store 单测；`selftest` 子命令启动"假 NAS + 假客户端"，推送 10 MiB 随机文件 → 逐片取回校验；容量压到 2 MiB 触发淘汰；`pressure` 切换；NAS 掉线/重连；慢客户端被断开。
+- `pod-relay-agent`：索引重建（`music/audiobook/ebook/songart/cover/defaultart` 六类映射）、推送窗口切分、水位状态机（用假 `LibraryBackend`）。
+- `desktop-app`：`cargo build`；`relay_backend.rs` 的 stat/Range 适配对本地 router 做单测。
 
 ### 15.2 Android
 
@@ -686,7 +743,8 @@ NAS 只需出站访问 `21443/tcp`，不需要任何入站端口，NAT 后可直
 
 ### 15.3 端到端（本机）
 
-`relay-server selftest` 覆盖协议与存储；`desktop-app` 打开中继、指向本机 `relay-server`，用一个测试客户端（`relay-server fetch --range`）逐字节比对原文件，并比对 `/library/all` 解密结果与桌面端 HTTP 返回。
+`relay-server selftest` 覆盖协议与存储；`desktop-app` 打开中继、指向本机 `relay-server`，
+用 `relay-server fetch --range` 逐字节比对原文件，并比对 `/library/all` 解密结果与桌面端 HTTP 返回。
 
 ---
 
@@ -694,23 +752,24 @@ NAS 只需出站访问 `21443/tcp`，不需要任何入站端口，NAT 后可直
 
 | 阶段 | 内容 | 完成标准 |
 |---|---|---|
-| P0 | `relay-protocol` crate：帧、消息、加解密、快照格式、测试向量 | `cargo test -p relay-protocol` 全绿 |
-| P1 | `relay-server`：mTLS、会话、存储、STAT/FRAG、WANT、水位、快照版本、`selftest` | `selftest` 通过；手工抓包确认无明文 |
-| P2 | `desktop-app` relay agent：配置、索引、oneshot 取数、快照推送、分片推送 | 本机端到端取任意 Range 与原文件一致；快照解密正确 |
+| P0 | `relay-server/protocol`：帧、消息、加解密、快照格式、测试向量 | `cd relay-server && cargo test -p pod-relay-protocol` 全绿 |
+| P1 | `relay-server/server`：mTLS、会话、存储、STAT/FRAG、WANT、水位、快照版本、`selftest` | `cargo run -p pod-relay-cli -- selftest` 通过；抓包确认无明文 |
+| P2 | `relay-server/agent` + `desktop-app` 适配：`LibraryBackend`、索引、快照推送、分片推送 | 本机端到端取任意 Range 与原文件一致；快照解密正确 |
 | P3 | `desktop-app` UI 与命令：面板、状态、密钥展示、证书导入 | 面板状态正确；重启后配置保留 |
 | P4 | Android 传输层：Proto/Crypto/Tls/Client/Store + 单测 | `compileDebugKotlin` + `testDebugUnitTest` 通过 |
 | P5 | Android 代理与接入：Proxy、Service、多端点同步、设置页 | 播放/封面/下载/电子书全部可用；断 Wi-Fi 自动切中继 |
-| P6 | 加固与运维：节流、日志、systemd、SIGHUP、`relayctl` 风格状态查询 | 断线 5 秒内恢复；连续播放 30 分钟无内存增长 |
+| P6 | 加固与运维：节流、日志、systemd、SIGHUP、`relay-server status` | 断线 5 秒内恢复；连续播放 30 分钟无内存增长 |
 
 提交拆分（英文，写明背景/改动/效果）：
 
-1. `relay: add framed protocol crate with AES-GCM payloads`
-2. `relay: implement relay server with encrypted fragment store`
-3. `desktop-app: add in-process relay agent reusing the library router`
-4. `desktop-app: expose relay configuration and status in the UI`
-5. `android: add relay transport and loopback HTTP proxy`
-6. `android: add relay settings and endpoint fallback`
-7. `docs: document the public relay protocol`
+1. `relay-server: add framed protocol crate with AES-GCM payloads`
+2. `relay-server: implement relay server with encrypted fragment store`
+3. `relay-server: add NAS agent library with backend trait`
+4. `desktop-app: implement relay backend adapter over the library router`
+5. `desktop-app: expose relay configuration and status in the UI`
+6. `android: add relay transport and loopback HTTP proxy`
+7. `android: add relay settings and endpoint fallback`
+8. `docs: document the PodRelay protocol`
 
 ---
 

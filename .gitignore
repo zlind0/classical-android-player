@@ -14,3 +14,6 @@ app/.cxx/
 decent/*/.cxx/
 *.hprof
 lib-titlemerge/build/
+desktop-app/src-tauri/target/
+relay-server/target/
+relay-server/tmp/
