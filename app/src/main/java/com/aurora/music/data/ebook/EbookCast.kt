@@ -239,6 +239,8 @@ class EbookCastController(
     /** 最近一次拿到的局域网地址（网页地址）；网络切换后由 serveLoop 刷新。 */
     @Volatile private var webLanUrl: String = ""
     @Volatile private var book: ParsedEbook? = null
+    /** 随机阅读的按章兜底：当前 [book] 里空章可从这里按需取正文。 */
+    @Volatile private var chapterProvider: ((Int) -> EbookChapter?)? = null
     /** 手机阅读页当前页首（章/段/字），开投时作为大屏的初始定位。 */
     @Volatile private var readerAnchor: EbookCastAnchor? = null
     /** 大屏端当前锚点；网页刷新/重新打开时从它恢复。不在遥控页时跟随手机阅读进度。 */
@@ -297,6 +299,15 @@ class EbookCastController(
         scope.launch { clientWatcher() }
     }
 
+    /**
+     * 随机阅读：整本 EPUB 还没解析完时，大屏按章取正文的兜底来源。
+     * 回调在 HTTP 线程执行，可以阻塞（内部按需向 feed 服务端取这一章）；
+     * 普通本地书不需要设置，[setBook] 里的整本正文已经齐全。
+     */
+    fun setChapterProvider(provider: ((Int) -> EbookChapter?)?) {
+        chapterProvider = provider
+    }
+
     /** 阅读页打开时注入整本正文，供大屏按章取内容；关闭时清空 → 网页回到音乐界面。 */
     fun setBook(book: ParsedEbook?) {
         this.book = book
@@ -340,10 +351,11 @@ class EbookCastController(
      * 手机阅读页当前页首锚点。不在遥控页时它就是唯一真相：
      * 每次翻页都把大屏定位到同一“章:段:字”，网页进度 = 手机阅读进度。
      */
-    fun setReaderAnchor(anchor: EbookCastAnchor) {
+    fun setReaderAnchor(anchor: EbookCastAnchor, force: Boolean = false) {
         readerAnchor = anchor
-        // 遥控页开着时由遥控端驱动，不拿手机翻页打断大屏
-        if (remote) return
+        // 遥控页开着时由遥控端驱动，不拿手机翻页打断大屏。
+        // force 只用于“换书”这种锚点已经不适用的情况。
+        if (remote && !force) return
         if (focus == anchor) return
         focus = anchor
         focusGen += 1
@@ -463,9 +475,7 @@ class EbookCastController(
             if (lan != null && lan != webLanUrl) webLanUrl = lan
             val loopback = mode == EbookCastMode.PRESENTATION
             val url = "http://${if (loopback) "127.0.0.1" else lan!!}:${srv.port}/"
-            val initial = readerAnchor ?: book?.chapters?.takeIf { it.isNotEmpty() }?.let {
-                EbookCastAnchor(0, 0, 0)
-            }
+            val initial = readerAnchor ?: focus ?: book?.let { initialCastAnchor(it) }
             focus = initial
             focusGen += 1
             turnOffset = 0
@@ -966,12 +976,23 @@ class EbookCastController(
     internal fun chapterJson(index: Int): ByteArray? {
         val b = book ?: return null
         val ch = b.chapters.getOrNull(index) ?: return null
+        // 随机阅读的正文是逐章送来的：本地这章还没缓存时，交给 provider 同步补一次。
+        // 已经缓存/整本解析完成后走本地，不再访问网络。
+        val loaded = if (ch.blocks.isEmpty()) chapterProvider?.invoke(index) else null
+        val title = loaded?.title?.takeIf { it.isNotBlank() } ?: chapterTitleOf(index)
         val wire = WireChapter(
             index = index,
-            title = chapterTitleOf(index),
-            blocks = ch.blocks.map { WireBlock(it.level, it.text) },
+            title = title,
+            blocks = (loaded?.blocks ?: ch.blocks).map { WireBlock(it.level, it.text) },
         )
         return gson.toJson(wire).toByteArray(Charsets.UTF_8)
+    }
+
+    /** 没有手机锚点时的兜底：优先落到第一个有正文的章，避免随机阅读停在第 0 个空章。 */
+    private fun initialCastAnchor(book: ParsedEbook): EbookCastAnchor? {
+        if (book.chapters.isEmpty()) return null
+        val firstWithText = book.chapters.indexOfFirst { it.blocks.isNotEmpty() }
+        return EbookCastAnchor(if (firstWithText >= 0) firstWithText else 0, 0, 0)
     }
 
     private fun chapterTitleOf(index: Int): String {

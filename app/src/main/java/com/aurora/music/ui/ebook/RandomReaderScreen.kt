@@ -59,6 +59,8 @@ import com.aurora.music.ui.ios5.Ios5GlossButton
 import com.aurora.music.viewmodel.PlayerViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 随机阅读：正文仍复用 [ReaderBody]（左右翻页/听书/选项），
@@ -470,9 +472,9 @@ fun RandomReaderScreen(
         },
         onPositionChanged = { chapter, block, char ->
             manager.rememberPosition(currentBook.path, chapter, block, char)
-            if (cast.state.value.mode != EbookCastMode.OFF) {
-                cast.setReaderAnchor(EbookCastAnchor(chapter, block, char))
-            }
+            // 始终记录眼睛位置：开始投屏时 start() 立刻用它定位大屏。
+            // 只在投屏开启后才记录会让第一帧回退到空白的第 0 章。
+            cast.setReaderAnchor(EbookCastAnchor(chapter, block, char))
         },
         onPlayFrom = { chapter, block, char ->
             scope.launch {
@@ -497,6 +499,27 @@ fun RandomReaderScreen(
     // 进入随机阅读就把当前书注入投屏控制器，已有投屏不会因为打开/关闭控制页而断掉。
     LaunchedEffect(displayBook) {
         cast.setBook(displayBook)
+    }
+    // 换书（上下滑）时强制把大屏锚点切到新书的位置；同一本书内章节缓存更新不动它。
+    LaunchedEffect(currentBook.path) {
+        if (cast.state.value.mode != EbookCastMode.OFF) {
+            val (c, b, ch) = currentPosition(currentBook)
+            cast.setReaderAnchor(EbookCastAnchor(c, b, ch), force = true)
+        }
+    }
+    // 整本还没解析完时，大屏翻到未缓存的章节会同步回调这里，从 feed 按章取正文，
+    // 所以投屏不依赖“整本 EPUB 解析完成”就能从当前屏幕内容正常显示、翻页。
+    DisposableEffect(currentBook.path) {
+        val path = currentBook.path
+        cast.setChapterProvider { chapter ->
+            manager.cachedChapter(path, chapter)?.takeIf { it.blocks.isNotEmpty() }
+                ?: runBlocking {
+                    withTimeoutOrNull(20_000L) {
+                        manager.loadChapter(path, chapter)
+                    }
+                }
+        }
+        onDispose { cast.setChapterProvider(null) }
     }
     LaunchedEffect(castOpen, castActive) {
         if (!castOpen && !castActive) return@LaunchedEffect
