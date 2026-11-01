@@ -23,6 +23,32 @@ class RelayProtoTest {
     }
 
     @Test
+    fun u16WritesTwoBytes() {
+        val bytes = RelayProto.Writer().u16(2).build()
+        assertArrayEquals(byteArrayOf(0, 2), bytes)
+    }
+
+    @Test
+    fun helloUsesRustFieldLayout() {
+        // relay-server/protocol/src/msg.rs 的 Hello 布局：u8 role + u16 ver + u64 keyId + u32 caps + bytes auth。
+        val payload = RelayProto.Writer()
+            .u8(RelayProto.ROLE_CLIENT)
+            .u16(RelayProto.PROTOCOL_VERSION)
+            .u64(7L)
+            .u32(0)
+            .bytes(ByteArray(0))
+            .build()
+        assertEquals(1 + 2 + 8 + 4 + 4, payload.size)
+
+        val reader = RelayProto.Reader(payload)
+        assertEquals(RelayProto.ROLE_CLIENT, reader.u8())
+        assertEquals(RelayProto.PROTOCOL_VERSION, reader.u16())
+        assertEquals(7L, reader.u64())
+        assertEquals(0, reader.u32())
+        assertEquals(0, reader.bytes().size)
+    }
+
+    @Test
     fun libVersionReplyDecodes() {
         val payload = RelayProto.Writer()
             .i64(42L)

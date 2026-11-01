@@ -84,7 +84,10 @@ object RelayProto {
     class Writer {
         private val out = ByteArrayOutputStream()
         fun u8(v: Int) = apply { out.write(v and 0xFF) }
-        fun u16(v: Int) = apply { u32(v and 0xFFFF) }
+        fun u16(v: Int) = apply {
+            out.write((v ushr 8) and 0xFF)
+            out.write(v and 0xFF)
+        }
         fun u32(v: Int) = apply {
             out.write((v ushr 24) and 0xFF)
             out.write((v ushr 16) and 0xFF)
