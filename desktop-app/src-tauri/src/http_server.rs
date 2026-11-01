@@ -7,7 +7,7 @@ use axum::body::Body;
 use axum::extract::{Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Json;
 use axum::Router;
 use rusqlite::Connection;
@@ -24,6 +24,7 @@ pub struct HttpState {
     pub db: Arc<Db>,
     pub info: Arc<ServerInfo>,
     pub cache_dir: PathBuf,
+    pub pairing: Arc<crate::relay_pairing::PairingState>,
 }
 
 pub fn build_router(state: HttpState) -> Router {
@@ -40,6 +41,7 @@ pub fn build_router(state: HttpState) -> Router {
         .route("/media/ebook", get(media_ebook))
         .route("/media/songart", get(media_songart))
         .route("/media/cover", get(media_cover))
+        .route("/relay/pair", post(relay_pair))
         .fallback(not_found)
         .layer(
             CorsLayer::new()
@@ -77,6 +79,22 @@ fn json_response(value: serde_json::Value) -> Response {
         Err(err) => text_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("serialize error: {err}"),
+            "text/plain; charset=utf-8",
+        ),
+    }
+}
+
+/// LAN pairing endpoint: hands the freshly generated phone credentials and the
+/// relay configuration to a phone that presents a valid pairing token.
+async fn relay_pair(
+    State(state): State<HttpState>,
+    Json(request): Json<crate::relay_pairing::PairRequest>,
+) -> Response {
+    match state.pairing.fulfill(&request) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => text_response(
+            StatusCode::BAD_REQUEST,
+            err.to_string(),
             "text/plain; charset=utf-8",
         ),
     }

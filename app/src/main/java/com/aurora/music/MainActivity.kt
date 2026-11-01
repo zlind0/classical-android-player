@@ -35,6 +35,7 @@ class MainActivity : ComponentActivity() {
         }
         super.onCreate(savedInstanceState)
         val container = (application as AuroraApplication).container
+        handleRelayIntent(intent)
         handleEbookIntent(intent)
         setContent {
             val uiPrefs by container.settingsStore.uiPrefs.collectAsStateWithLifecycle(initialValue = UiPrefs())
@@ -47,7 +48,16 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        handleRelayIntent(intent)
         handleEbookIntent(intent)
+    }
+
+    /** 公网中继配对码：podrelay://pair?...（系统相机扫码后跳进来）。 */
+    private fun handleRelayIntent(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val data = intent.dataString ?: return
+        if (!data.startsWith("podrelay://pair", ignoreCase = true)) return
+        (application as AuroraApplication).container.relayService.acceptPairUri(data)
     }
 
     /** 文件关联打开 epub/mobi/azw/azw3：拷入默认书架（md5+大小去重）后在阅读页打开。 */

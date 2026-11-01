@@ -109,6 +109,18 @@ impl SnapshotStore {
         }
     }
 
+    /// Removes every stored snapshot (media key changed / host reset).
+    pub fn clear_all(&self) {
+        if let Ok(entries) = fs::read_dir(&self.root) {
+            for entry in entries.flatten() {
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    let _ = fs::remove_dir_all(entry.path());
+                }
+            }
+        }
+        let _ = fs::create_dir_all(&self.root);
+    }
+
     pub fn disk_usage(&self) -> u64 {
         fn walk(dir: &Path, total: &mut u64) {
             if let Ok(entries) = fs::read_dir(dir) {

@@ -61,6 +61,13 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- 公网中继配对：系统相机扫码或点击 podrelay://pair 链接 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="podrelay" />
+            </intent-filter>
             <!-- 电子书：作为 epub/mobi/azw/azw3 的打开方式（带类型） -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

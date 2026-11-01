@@ -40,6 +40,7 @@ impl ClientLink {
             ver: PROTOCOL_VERSION,
             key_id: config.key_id().unwrap_or(0),
             caps: 0,
+            auth: Vec::new(),
         })
         .await?;
         let (_, hello) = link.recv(Duration::from_secs(10)).await?;

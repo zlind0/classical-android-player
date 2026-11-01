@@ -6,7 +6,6 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, DistinguishedName, SignatureScheme};
-use std::collections::HashSet;
 use std::sync::Arc;
 
 pub fn install_provider() {
@@ -88,40 +87,33 @@ impl ServerCertVerifier for PinnedServerVerifier {
     }
 }
 
+/// Accepts any client certificate; authorization happens after HELLO, where the
+/// relay knows the role and can check the fingerprint against its dynamic list.
 #[derive(Debug)]
-pub struct AllowListClientVerifier {
-    allowed: HashSet<String>,
+pub struct AnyClientVerifier {
     provider: Arc<rustls::crypto::CryptoProvider>,
 }
 
-impl AllowListClientVerifier {
-    pub fn new(allowed: HashSet<String>) -> Self {
-        AllowListClientVerifier {
-            allowed,
+impl AnyClientVerifier {
+    pub fn new() -> Self {
+        AnyClientVerifier {
             provider: provider(),
         }
     }
 }
 
-impl ClientCertVerifier for AllowListClientVerifier {
+impl ClientCertVerifier for AnyClientVerifier {
     fn root_hint_subjects(&self) -> &[DistinguishedName] {
         &[]
     }
 
     fn verify_client_cert(
         &self,
-        end_entity: &CertificateDer<'_>,
+        _end_entity: &CertificateDer<'_>,
         _intermediates: &[CertificateDer<'_>],
         _now: UnixTime,
     ) -> Result<ClientCertVerified, rustls::Error> {
-        let got = fingerprint_der(end_entity.as_ref());
-        if self.allowed.contains(&got) {
-            Ok(ClientCertVerified::assertion())
-        } else {
-            Err(rustls::Error::General(format!(
-                "client certificate not allowed: {got}"
-            )))
-        }
+        Ok(ClientCertVerified::assertion())
     }
 
     fn verify_tls12_signature(
@@ -167,16 +159,14 @@ impl ClientCertVerifier for AllowListClientVerifier {
     }
 }
 
-pub fn server_config(cert: &std::path::Path, key: &std::path::Path, allowed: HashSet<String>) -> Result<Arc<rustls::ServerConfig>> {
-    if allowed.is_empty() {
-        return Err(anyhow!(
-            "no host/client fingerprints configured; refusing to start"
-        ));
-    }
+pub fn server_config(
+    cert: &std::path::Path,
+    key: &std::path::Path,
+) -> Result<Arc<rustls::ServerConfig>> {
     let certs = load_certs(cert)?;
     let key = load_key(key)?;
     let provider = provider();
-    let verifier = AllowListClientVerifier::new(allowed);
+    let verifier = AnyClientVerifier::new();
     let config = rustls::ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()?
         .with_client_cert_verifier(Arc::new(verifier))

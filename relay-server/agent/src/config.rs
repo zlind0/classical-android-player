@@ -20,6 +20,9 @@ pub struct RelayEndpoint {
     pub server_fingerprint: String,
     pub client_cert: PathBuf,
     pub client_key: PathBuf,
+    /// Sent in `HELLO` so a fresh relay can bind this NAS. Empty after binding.
+    #[serde(default)]
+    pub host_token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

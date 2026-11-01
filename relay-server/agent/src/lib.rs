@@ -49,17 +49,40 @@ struct LivePayload {
 pub struct AgentHandle {
     stop: watch::Sender<bool>,
     status: Arc<RwLock<AgentStatus>>,
+    control: tokio::sync::mpsc::UnboundedSender<Msg>,
     stopped: AtomicBool,
 }
 
 impl AgentHandle {
     /// Builds a handle around an externally spawned `run` future.
-    pub fn from_parts(stop: watch::Sender<bool>, status: Arc<RwLock<AgentStatus>>) -> AgentHandle {
+    pub fn from_parts(
+        stop: watch::Sender<bool>,
+        status: Arc<RwLock<AgentStatus>>,
+        control: tokio::sync::mpsc::UnboundedSender<Msg>,
+    ) -> AgentHandle {
         AgentHandle {
             stop,
             status,
+            control,
             stopped: AtomicBool::new(false),
         }
+    }
+
+    /// Authorizes a client certificate on the relay. Queued while offline.
+    pub fn authorize_client(&self, client_id: [u8; 16], label: &str, fingerprint: &str) {
+        let _ = self.control.send(Msg::AuthorizeClient {
+            client_id,
+            label: label.to_string(),
+            fingerprint: fingerprint.to_string(),
+        });
+    }
+
+    pub fn revoke_client(&self, client_id: [u8; 16]) {
+        let _ = self.control.send(Msg::RevokeClient { client_id });
+    }
+
+    pub fn reset_clients(&self) {
+        let _ = self.control.send(Msg::ResetClients);
     }
 
     pub fn status(&self) -> AgentStatus {
@@ -87,26 +110,62 @@ pub fn spawn(backend: Arc<dyn LibraryBackend>, config: AgentConfig) -> AgentHand
     let (tx, rx) = watch::channel(false);
     let status = Arc::new(RwLock::new(AgentStatus::default()));
     let task_status = status.clone();
-    tokio::spawn(run(backend, config, rx, task_status));
+    let (control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(run_with_control(
+        backend,
+        config,
+        rx,
+        task_status,
+        control_rx,
+    ));
     AgentHandle {
         stop: tx,
         status,
+        control: control_tx,
         stopped: AtomicBool::new(false),
     }
+}
+
+pub async fn run_with_control(
+    backend: Arc<dyn LibraryBackend>,
+    config: AgentConfig,
+    stop: watch::Receiver<bool>,
+    status: Arc<RwLock<AgentStatus>>,
+    mut control: tokio::sync::mpsc::UnboundedReceiver<Msg>,
+) {
+    run_inner(backend, config, stop, status, &mut control).await
 }
 
 pub async fn run(
     backend: Arc<dyn LibraryBackend>,
     config: AgentConfig,
+    stop: watch::Receiver<bool>,
+    status: Arc<RwLock<AgentStatus>>,
+) {
+    let (_tx, mut control) = tokio::sync::mpsc::unbounded_channel();
+    run_inner(backend, config, stop, status, &mut control).await;
+}
+
+async fn run_inner(
+    backend: Arc<dyn LibraryBackend>,
+    config: AgentConfig,
     mut stop: watch::Receiver<bool>,
     status: Arc<RwLock<AgentStatus>>,
+    control: &mut tokio::sync::mpsc::UnboundedReceiver<Msg>,
 ) {
     let mut backoff = 1u64;
     loop {
         if *stop.borrow() {
             break;
         }
-        let outcome = session(backend.clone(), config.clone(), &mut stop, status.clone()).await;
+        let outcome = session(
+            backend.clone(),
+            config.clone(),
+            &mut stop,
+            control,
+            status.clone(),
+        )
+        .await;
         set_status(&status, |s| {
             s.connected = false;
         });
@@ -144,6 +203,7 @@ async fn session(
     backend: Arc<dyn LibraryBackend>,
     config: AgentConfig,
     stop: &mut watch::Receiver<bool>,
+    control: &mut tokio::sync::mpsc::UnboundedReceiver<Msg>,
     status: Arc<RwLock<AgentStatus>>,
 ) -> Result<()> {
     let master = config.media_key()?;
@@ -204,6 +264,11 @@ async fn session(
                         s.lib_version = version;
                         s.last_sync_ms = now_ms();
                     });
+                }
+            }
+            message = control.recv() => {
+                if let Some(message) = message {
+                    link.send(message).await?;
                 }
             }
             incoming = link.recv(Duration::from_secs(30)) => {

@@ -42,15 +42,6 @@ pub struct TlsConfig {
     pub key: PathBuf,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AuthConfig {
-    #[serde(default)]
-    pub host_fingerprints: Vec<String>,
-    #[serde(default)]
-    pub client_fingerprints: Vec<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoreConfig {
@@ -113,9 +104,12 @@ impl Default for WatermarkConfig {
 pub struct Config {
     #[serde(default = "default_listen")]
     pub listen: String,
-    pub tls: TlsConfig,
+    /// Address advertised in the bootstrap line; defaults to `listen`.
     #[serde(default)]
-    pub auth: AuthConfig,
+    pub public_addr: Option<String>,
+    /// Optional explicit certificate paths; generated on first start when absent.
+    #[serde(default)]
+    pub tls: Option<TlsConfig>,
     pub store: StoreConfig,
     #[serde(default)]
     pub limits: LimitsConfig,

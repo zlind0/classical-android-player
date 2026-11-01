@@ -116,6 +116,7 @@ class RelayClient(private val config: RelayConfig) {
                     .u16(RelayProto.PROTOCOL_VERSION)
                     .u64(settings.keyId)
                     .u32(0)
+                    .bytes(ByteArray(0))
                     .build(),
             ),
         )

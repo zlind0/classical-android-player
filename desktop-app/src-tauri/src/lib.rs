@@ -7,6 +7,7 @@ mod meta;
 mod models;
 mod relay_backend;
 mod relay_host;
+mod relay_pairing;
 mod scanner;
 mod util;
 
@@ -59,14 +60,28 @@ pub fn run() {
                 started_at: now_ms(),
             });
 
+            let (pair_tx, mut pair_rx) = tokio::sync::mpsc::unbounded_channel();
+            let pairing = Arc::new(relay_pairing::PairingState::new(pair_tx));
+
             let http_state = http_server::HttpState {
                 db: database.clone(),
                 info: info.clone(),
                 cache_dir: cache_dir.clone(),
+                pairing: pairing.clone(),
             };
 
-            let relay = relay_host::RelayManager::load(data_dir.clone(), http_state.clone());
+            let relay = relay_host::RelayManager::load(
+                data_dir.clone(),
+                http_state.clone(),
+                pairing.clone(),
+            );
             let _ = relay.start_if_enabled();
+            let relay_for_pairs = relay.clone();
+            tauri::async_runtime::spawn(async move {
+                while let Some(outcome) = pair_rx.recv().await {
+                    relay_for_pairs.authorize_client(outcome);
+                }
+            });
             eprintln!("[aurora] relay {}", if relay.settings().enabled { "enabled" } else { "disabled" });
 
             app.manage(AppState {
@@ -101,8 +116,12 @@ pub fn run() {
             commands::get_server_info,
             commands::relay_status,
             commands::relay_apply_settings,
-            commands::relay_import_cert,
-            commands::relay_regenerate_media_key,
+            commands::relay_apply_bootstrap,
+            commands::relay_start_pairing,
+            commands::relay_cancel_pairing,
+            commands::relay_revoke_device,
+            commands::relay_reset_identity,
+            commands::relay_reset_encryption,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aurora Desktop");

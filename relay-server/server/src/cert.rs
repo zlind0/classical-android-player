@@ -94,3 +94,29 @@ pub fn generate(role: &str, cn: &str, sans: &[String], out: &Path) -> Result<Pat
     );
     Ok(crt_path)
 }
+
+/// Generates a certificate and key entirely in memory (used for phones).
+pub fn generate_pem(cn: &str) -> Result<(String, String, String)> {
+    let mut params = CertificateParams::new(vec![cn.to_string()])?;
+    params.distinguished_name.push(DnType::CommonName, cn);
+    params.subject_alt_names = vec![SanType::DnsName(cn.to_string().try_into()?)];
+    params.is_ca = rcgen::IsCa::NoCa;
+    let key_pair = KeyPair::generate()?;
+    let cert = params.self_signed(&key_pair)?;
+    let fingerprint = fingerprint_der(cert.der().as_ref());
+    Ok((cert.pem(), key_pair.serialize_pem(), fingerprint))
+}
+
+/// Ensures a self-signed server certificate exists, generating it on first run.
+pub fn ensure_self_signed(
+    cert_path: &Path,
+    key_path: &Path,
+    cn: &str,
+    sans: &[String],
+) -> Result<(String, bool)> {
+    if cert_path.is_file() && key_path.is_file() {
+        return Ok((fingerprint_file(cert_path)?, false));
+    }
+    generate("relay", cn, sans, &cert_path.with_extension(""))?;
+    Ok((fingerprint_file(cert_path)?, true))
+}

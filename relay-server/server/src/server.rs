@@ -1,5 +1,6 @@
 //! Relay server: TLS accept loop, session handling, fragment dispatch.
 
+use crate::auth::AuthStore;
 use crate::config::Config;
 use crate::snapshot::SnapshotStore;
 use crate::store::{FragmentStore, StatInfo};
@@ -10,6 +11,7 @@ use pod_relay_protocol::msg::{err, FileId, Msg, ROLE_CLIENT, ROLE_HOST};
 use pod_relay_protocol::snapshot::SnapshotHeader;
 use pod_relay_protocol::{from_frame, to_frame};
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -41,7 +43,9 @@ pub struct Shared {
     pub config: Config,
     pub store: Arc<FragmentStore>,
     pub snapshots: Arc<SnapshotStore>,
+    pub auth: Arc<AuthStore>,
     nas: Mutex<Option<NasLink>>,
+    failures: Mutex<HashMap<IpAddr, (u32, i64)>>,
     pending_stats: Mutex<HashMap<u32, PendingStat>>,
     pending_live: Mutex<HashMap<u32, PendingLive>>,
     seq: AtomicU32,
@@ -98,6 +102,40 @@ impl Shared {
             .ok()
             .and_then(|nas| nas.as_ref().map(|link| link.tx.clone()))
     }
+
+    fn auth_failed(&self, ip: Option<IpAddr>) -> bool {
+        let Some(ip) = ip else {
+            return false;
+        };
+        let now = now_secs();
+        let mut failures = self.failures.lock().unwrap();
+        failures.retain(|_, (_, at)| now - *at < 60);
+        let entry = failures.entry(ip).or_insert((0, now));
+        entry.0 += 1;
+        entry.1 = now;
+        entry.0 > 12
+    }
+
+    fn clear_failures(&self, ip: Option<IpAddr>) {
+        if let Some(ip) = ip {
+            if let Ok(mut failures) = self.failures.lock() {
+                failures.remove(&ip);
+            }
+        }
+    }
+}
+
+fn url_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 pub struct Relay {
@@ -108,12 +146,49 @@ pub struct Relay {
 
 impl Relay {
     pub async fn bind(config: Config) -> Result<Relay> {
-        let mut allowed = std::collections::HashSet::new();
-        allowed.extend(config.auth.host_fingerprints.iter().cloned());
-        allowed.extend(config.auth.client_fingerprints.iter().cloned());
-        let tls_config = tls::server_config(&config.tls.cert, &config.tls.key, allowed)?;
-
         std::fs::create_dir_all(config.store.dir.join("frag"))?;
+
+        let certs_dir = config.store.dir.join("certs");
+        let (cert_path, key_path) = match &config.tls {
+            Some(tls) => (tls.cert.clone(), tls.key.clone()),
+            None => (certs_dir.join("relay.crt"), certs_dir.join("relay.key")),
+        };
+        let host = config
+            .public_addr
+            .clone()
+            .unwrap_or_else(|| config.listen.clone());
+        let cn = host.rsplit_once(':').map(|(h, _)| h.to_string()).unwrap_or_else(|| host.clone());
+        let (fingerprint, created) = crate::cert::ensure_self_signed(
+            &cert_path,
+            &key_path,
+            &cn,
+            &[
+                format!("dns:{cn}"),
+                "dns:pod-relay.local".to_string(),
+            ],
+        )?;
+        let tls_config = tls::server_config(&cert_path, &key_path)?;
+
+        let auth = Arc::new(AuthStore::open(&config.store.dir)?);
+        if let Some(token) = auth.ensure_token()? {
+            eprintln!("[pod-relay] host enrollment token created");
+            eprintln!(
+                "podrelay://relay?v=2&a={}&p={}&t={}",
+                url_encode(&host),
+                url_encode(&fingerprint),
+                url_encode(&token)
+            );
+        } else {
+            eprintln!(
+                "[pod-relay] already enrolled (host {}), certificate {}",
+                auth.host_fingerprint().unwrap_or_else(|| "not bound".into()),
+                fingerprint
+            );
+        }
+        if created {
+            eprintln!("[pod-relay] generated TLS certificate {fingerprint}");
+        }
+
         let store = Arc::new(FragmentStore::open(
             &config.store.dir,
             config.store.capacity_bytes,
@@ -130,7 +205,9 @@ impl Relay {
                 config,
                 store,
                 snapshots,
+                auth,
                 nas: Mutex::new(None),
+                failures: Mutex::new(HashMap::new()),
                 pending_stats: Mutex::new(HashMap::new()),
                 pending_live: Mutex::new(HashMap::new()),
                 seq: AtomicU32::new(1),
@@ -213,6 +290,12 @@ async fn session(
         .and_then(|certs| certs.first())
         .map(|cert| crate::cert::fingerprint_der(cert.as_ref()))
         .unwrap_or_default();
+    let peer_ip = stream
+        .get_ref()
+        .0
+        .peer_addr()
+        .ok()
+        .map(|addr| addr.ip());
 
     let (mut reader, mut writer) = tokio::io::split(stream);
     let (tx, mut rx) = mpsc::unbounded_channel::<(u32, Msg)>();
@@ -230,8 +313,14 @@ async fn session(
     let idle = Duration::from_secs(shared.config.limits.session_idle_sec.max(10));
     let (_, hello) =
         tokio::time::timeout(idle, read_msg(&mut reader, &mut decoder, &mut buf)).await??;
-    let role = match hello {
-        Msg::Hello { role, ver, .. } => {
+    let (role, hello_key_id, hello_auth) = match hello {
+        Msg::Hello {
+            role,
+            ver,
+            key_id,
+            auth,
+            ..
+        } => {
             if ver != pod_relay_protocol::msg::PROTOCOL_VERSION {
                 let _ = tx.send((
                     0,
@@ -245,7 +334,7 @@ async fn session(
                 let _ = writer_task.await;
                 return Err(anyhow!("unsupported protocol version"));
             }
-            role
+            (role, key_id, auth)
         }
         _ => {
             let _ = tx.send((
@@ -262,6 +351,47 @@ async fn session(
         }
     };
 
+    let supplied_token = std::str::from_utf8(&hello_auth).ok().filter(|t| !t.is_empty());
+    let authorized = match role {
+        ROLE_HOST => shared.auth.host_allowed(&peer_fingerprint, supplied_token),
+        ROLE_CLIENT => shared.auth.client_allowed(&peer_fingerprint),
+        _ => false,
+    };
+    if !authorized {
+        let limited = shared.auth_failed(peer_ip);
+        let (code, msg) = if limited {
+            (err::RATE_LIMITED, "too many failed attempts")
+        } else if role == ROLE_CLIENT {
+            (err::DEVICE_REVOKED, "device is not authorized")
+        } else {
+            (err::UNAUTHORIZED, "host is not authorized")
+        };
+        eprintln!(
+            "[pod-relay] rejected role {role} from {peer_fingerprint}: {msg}"
+        );
+        let _ = tx.send((0, Msg::Error { code, msg: msg.to_string() }));
+        drop(guard);
+        drop(tx);
+        let _ = writer_task.await;
+        return Err(anyhow!("authorization failed"));
+    }
+    shared.clear_failures(peer_ip);
+
+    let mut reset_store = false;
+    if role == ROLE_HOST {
+        if let Err(err) = shared.auth.bind_host(&peer_fingerprint) {
+            eprintln!("[pod-relay] persist host binding failed: {err}");
+        }
+        if hello_key_id != 0 && shared.auth.key_id() != hello_key_id {
+            eprintln!("[pod-relay] media key changed, purging relay cache");
+            shared.store.clear_all();
+            shared.snapshots.clear_all();
+            let _ = shared.auth.set_key_id(hello_key_id);
+            reset_store = true;
+        }
+    }
+    let _ = reset_store;
+
     let _ = tx.send((
         0,
         Msg::HelloOk {
@@ -274,33 +404,6 @@ async fn session(
             store_cap: shared.store.capacity(),
         },
     ));
-
-    let role_allowed = if role == ROLE_HOST {
-        shared
-            .config
-            .auth
-            .host_fingerprints
-            .contains(&peer_fingerprint)
-    } else {
-        shared
-            .config
-            .auth
-            .client_fingerprints
-            .contains(&peer_fingerprint)
-    };
-    if !role_allowed {
-        let _ = tx.send((
-            0,
-            Msg::Error {
-                code: err::UNAUTHORIZED,
-                msg: "certificate is not allowed for this role".to_string(),
-            },
-        ));
-        drop(guard);
-        drop(tx);
-        let _ = writer_task.await;
-        return Err(anyhow!("role not allowed for peer certificate"));
-    }
 
     if role == ROLE_HOST {
         {
@@ -688,6 +791,34 @@ fn handle_host(
                     }
                 }
             }
+        }
+        Msg::AuthorizeClient {
+            client_id,
+            label,
+            fingerprint,
+        } => {
+            let ok = shared.auth.authorize(client_id, &label, &fingerprint).is_ok();
+            if ok {
+                eprintln!(
+                    "[pod-relay] authorized device {} ({})",
+                    crate::auth::hex(&client_id),
+                    label
+                );
+            }
+            let _ = tx.send((req, Msg::Ack { ok }));
+        }
+        Msg::RevokeClient { client_id } => {
+            let ok = shared.auth.revoke(&client_id).is_ok();
+            eprintln!(
+                "[pod-relay] revoked device {}",
+                crate::auth::hex(&client_id)
+            );
+            let _ = tx.send((req, Msg::Ack { ok }));
+        }
+        Msg::ResetClients => {
+            let ok = shared.auth.revoke_all().is_ok();
+            eprintln!("[pod-relay] revoked all devices");
+            let _ = tx.send((req, Msg::Ack { ok }));
         }
         Msg::LiveReply { seq, status, ct } => {
             let pending = shared.pending_live.lock().unwrap().remove(&seq);

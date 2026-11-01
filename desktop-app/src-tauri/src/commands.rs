@@ -189,25 +189,59 @@ pub fn relay_apply_settings(
 }
 
 #[tauri::command]
-pub fn relay_import_cert(
+pub fn relay_apply_bootstrap(
     state: State<'_, AppState>,
-    cert_path: String,
-    key_path: String,
+    line: String,
 ) -> CmdResult<serde_json::Value> {
     state
         .relay
-        .import_cert(&cert_path, &key_path)
+        .apply_bootstrap(&line)
         .map_err(|err| err.to_string())?;
     Ok(state.relay.status())
 }
 
 #[tauri::command]
-pub fn relay_regenerate_media_key(
+pub fn relay_start_pairing(
     state: State<'_, AppState>,
+    label: String,
 ) -> CmdResult<serde_json::Value> {
     state
         .relay
-        .regenerate_media_key()
+        .start_pairing(&label)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn relay_cancel_pairing(state: State<'_, AppState>) {
+    state.relay.cancel_pairing();
+}
+
+#[tauri::command]
+pub fn relay_revoke_device(
+    state: State<'_, AppState>,
+    id: String,
+) -> CmdResult<serde_json::Value> {
+    state
+        .relay
+        .revoke_device(&id)
+        .map_err(|err| err.to_string())?;
+    Ok(state.relay.status())
+}
+
+#[tauri::command]
+pub fn relay_reset_identity(state: State<'_, AppState>) -> CmdResult<serde_json::Value> {
+    state
+        .relay
+        .reset_identity()
+        .map_err(|err| err.to_string())?;
+    Ok(state.relay.status())
+}
+
+#[tauri::command]
+pub fn relay_reset_encryption(state: State<'_, AppState>) -> CmdResult<serde_json::Value> {
+    state
+        .relay
+        .reset_encryption()
         .map_err(|err| err.to_string())?;
     Ok(state.relay.status())
 }

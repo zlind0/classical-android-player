@@ -32,8 +32,11 @@ anyhow = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tower = { version = "0.5", features = ["util"] }
 pod-relay-agent = { path = "../../relay-server/agent" }
+pod-relay-server = { path = "../../relay-server/server" }
 pod-relay-protocol = { path = "../../relay-server/protocol" }
 base64 = "0.22"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+rand = "0.8"
 async-trait = "0.1"
 
 [profile.release]

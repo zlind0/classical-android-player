@@ -26,7 +26,7 @@ impl Drop for Discovery {
     }
 }
 
-fn local_ipv4() -> String {
+pub(crate) fn local_ipv4() -> String {
     let socket = match UdpSocket::bind("0.0.0.0:0") {
         Ok(socket) => socket,
         Err(_) => return "127.0.0.1".to_string(),

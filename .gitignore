@@ -1,5 +1,6 @@
 # Classical fork: upstream ships no gitignore; keep build outputs out of the repo.
 tmp/
+tmp2/
 *.iml
 .gradle/
 .kotlin/

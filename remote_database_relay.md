@@ -1,10 +1,10 @@
-# 公网中继（PodRelay）实施方案 v1
+# 公网中继（PodRelay）实施方案 v2
 
 本文是公网中继的完整实施方案：协议、加密、认证、中继服务器、NAS 端（Windows 上的
 `desktop-app/`）、Android 客户端接入方式、部署与测试。实施完成后本文件即作为协议文档使用。
 
 - 产品名：**PodRelay**
-- 协议版本：`relay/v1`
+- 协议版本：`relay/v2`（认证模型变更自 v1；`pod-relay/v1/*` 是密钥派生域分隔符，保持不变以兼容旧密钥）
 - 传输：`TLS 1.3`（`rustls`）承载自定义二进制帧，**不是 HTTP/HTTPS 应用层协议**
 - 中继服务器端口：单个高位 TCP 端口，默认 `21443`（服务器 80/443 在防火墙保持屏蔽）
 - 使用规模：单人、单 NAS、少量客户端设备
@@ -20,7 +20,7 @@
 | `relay-server/protocol` | `pod-relay-protocol` | 帧、消息、加解密、快照格式；服务端与 NAS 端共用 |
 | `relay-server/server` | `pod-relay-server` | TLS 监听、会话、存储、调度等服务器核心（库） |
 | `relay-server/agent` | `pod-relay-agent` | NAS 侧的连接/索引/推送逻辑，纯库，不依赖 Tauri（复用 server crate 的 TLS/证书辅助函数） |
-| `relay-server/cli` | `pod-relay-cli` | 唯一二进制 `relay-server`：`server` / `gencert` / `keygen` / `fingerprint` / `status` / `fetch` / `selftest` |
+| `relay-server/cli` | `pod-relay-cli` | 唯一二进制 `relay-server`：`server` / `show` / `gencert`（高级） / `keygen` / `fingerprint` / `status` / `fetch` / `selftest` |
 
 `desktop-app/` 只通过 path 依赖引入 `pod-relay-agent` 与 `pod-relay-protocol`，
 并提供一个把现有后端适配成 agent 所需接口的薄适配器；中继的业务逻辑不写进 `desktop-app/`。
@@ -45,7 +45,8 @@
 | NAS 是 Windows，后端已在 `desktop-app/` 内 | NAS 侧以 Tauri 进程内模块形式实现，复用同一份 DB/HTTP/媒体代码，不额外起服务、不引入环回 HTTP |
 | 服务器 80/443 已被防火墙屏蔽 | 中继只监听一个高位端口；不使用 ACME、不使用 `GET /health` 之类 HTTP 探活；自签证书 + 指纹固定 |
 | 公网中继不能装 NAS 的解密密钥 | 媒体与元数据一律应用层加密，中继只做容器 |
-| 一人使用 | 不做账号体系，端点用证书指纹固定 |
+| 一人使用 | 不做账号体系；端点用 mTLS 证书，指纹由 NAS 动态登记，用户不手改 relay 配置 |
+| 手机加入必须与 NAS 同局域网 | 二维码只做握手，证书/密钥/配置在局域网内通过 NAS 的 HTTP 接口交接，不经过公网中继 |
 | 客户端是 Android，播放器只认 HTTP + Range | Android 侧在本机回环端口上提供 HTTP 代理，把 Range 请求翻译成分片请求 |
 
 ---
@@ -101,6 +102,9 @@
 5. **文件标识用不可逆哈希。** `file_id = SHA-256(kind ‖ 0x00 ‖ key)` 取前 16 字节。客户端本来就有 `id/path`，NAS 也有，两侧可独立算出同一个 `file_id`；中继服务器只见到 16 字节不透明 ID，看不到任何路径与曲目 id。
 6. **快照也加密并缓存。** 曲名、书名、作者、绝对路径都在 `/library/all` 里；不加密就等于送给中继服务器。快照按版本缓存后，NAS 短暂离线时客户端仍能浏览目录。
 7. **服务器不使用 80/443。** 中继只监听高位端口，TLS 之上的应用层是自定义帧；防火墙只为该端口放行 TCP 入站。健康检查用同一协议的 `ADMIN_STATS`，不额外开 HTTP 端口。
+8. **首次启动零手工证书。** relay 自动生成自己的证书与 host token；桌面端自动生成 NAS 证书与媒体密钥；用户只需把 relay 打印的一行引导串粘到 NAS。
+9. **设备授权由 NAS 决定，不由 relay 配置决定。** 手机证书在配对时由 NAS 现场生成，NAS 通过 host 会话把指纹登记到 relay；relay 只保存"已授权指纹"这份运行时状态。
+10. **二维码只做局域网握手。** 码里只有 NAS 的局域网地址与一个一次性 token；证书、私钥、`media_key` 全部在局域网内交接，二维码很小，也不会把密钥送到公网中继。
 
 ---
 
@@ -118,14 +122,16 @@ aurora/
 │   │   ├── src/{lib,config,client,index,snapshot,push,stats}.rs
 │   │   └── src/backend.rs              # trait LibraryBackend：由宿主实现
 │   ├── cli/                            # pod-relay-cli，[[bin]] name = "relay-server"
-│   │   └── src/{main,gencert,fingerprint,status,fetch,selftest}.rs
+│   │   └── src/{main,gencert,fingerprint,status,fetch,selftest}.rs  # server 启动时自动 bootstrap
 │   └── README.md
 ├── desktop-app/
 │   ├── src-tauri/
 │   │   ├── Cargo.toml                  # 依赖 pod-relay-agent / pod-relay-protocol（path）
 │   │   └── src/
 │   │       ├── relay_backend.rs        # 薄适配器：实现 LibraryBackend，走 oneshot
-│   │       ├── relay_host.rs           # relay.json / media.key / 证书导入 / 启停与状态
+│   │       ├── relay_host.rs           # relay.json / 自动证书 / 配对登记 / 启停与状态
+│   │       ├── relay_pairing.rs        # 二维码内容、pairing token、手机证书签发
+│   │       ├── relay_http.rs           # 局域网 /relay/pair 接口（挂到现有 router）
 │   │       ├── commands.rs             # + relay 配置/状态命令
 │   │       └── lib.rs                  # 启动/停止 agent，挂到 AppState
 │   └── src/components/RelayPanel.tsx   # 设置与状态 UI
@@ -169,7 +175,7 @@ pod-relay-agent, pod-relay-protocol, tower = { features = ["util"] }   # oneshot
 
 ---
 
-## 5. 协议规范 relay/v1
+## 5. 协议规范 relay/v2
 
 ### 5.1 帧
 
@@ -187,15 +193,20 @@ pod-relay-agent, pod-relay-protocol, tower = { features = ["util"] }   # oneshot
 
 | 类型 | 方向 | 载荷 |
 |---|---|---|
-| `0x01 HELLO` | 两端 → 中继 | `role:u8`（1=NAS，2=CLIENT），`ver:u16=1`，`key_id:u64`，`caps:u32` |
+| `0x01 HELLO` | 两端 → 中继 | `role:u8`（1=NAS，2=CLIENT），`ver:u16=2`，`key_id:u64`，`caps:u32`，`auth_len:u8`，`auth`（NAS 首次绑定时是 host token，之后为空；客户端为空） |
 | `0x02 HELLO_OK` | 中继 → 两端 | `ver:u16`，`session_id:u64`，`relay_ms:i64`，`host_online:u8`，`host_lib_version:i64`，`store_used:u64`，`store_cap:u64` |
 | `0x03 PING` / `0x04 PONG` | 双向 | `nonce:u64` |
 | `0x7F ERROR` | 双向 | `code:u16`，`msg:utf8` |
 
-- 认证完全由 mTLS 承担；`HELLO` 只协商版本、角色、`key_id` 一致性。
+- TLS 仍是双向认证：两端都必须出示证书；但**证书只在客户端缓存其指纹，授权判定在 `HELLO` 之后完成**（TLS 握手阶段 relay 还拿不到角色与 token）。
+- 授权规则：
+  - NAS：连接证书的指纹已在 `auth.json.host` 中，或本次 `HELLO.auth` 是有效的 host token（首次绑定/换证书后重新绑定）。绑定成功后 relay 把该指纹写入 `auth.json.host`，旧指纹作废。
+  - 客户端：连接证书的指纹必须已由 NAS 通过 `AUTHORIZE_CLIENT` 登记且未撤销。
+  - 不满足则回 `ERROR unauthorized` 并断开；同一来源 IP 连续失败超过阈值时限速。
 - 每 30 秒一次 `PING`；90 秒无任何帧判死并断开。
-- 错误码：`1 bad_frame`、`2 unsupported_version`、`3 unauthorized`、`4 key_mismatch`、`5 host_offline`、`6 not_found`、`7 throttled`、`8 internal`、`9 upstream_error`。
+- 错误码：`1 bad_frame`、`2 unsupported_version`、`3 unauthorized`、`4 key_mismatch`、`5 host_offline`、`6 not_found`、`7 throttled`、`8 internal`、`9 upstream_error`、`10 invalid_token`、`11 token_expired`、`12 device_revoked`、`13 rate_limited`。
 - 角色约束：NAS 会话每台中继服务器只允许一个，新连接顶掉旧连接；客户端会话可多个。
+- `HELLO.key_id` 与 relay 记录不一致时，relay 在完成授权后清空全部分片与快照（说明媒体密钥已被更换）。
 
 ### 5.3 资料库快照
 
@@ -259,8 +270,16 @@ pod-relay-agent, pod-relay-protocol, tower = { features = ["util"] }   # oneshot
 |---|---|---|
 | `0x50 ADMIN_STATS_REQ` | C→R | 空 |
 | `0x51 ADMIN_STATS_OK` | R→C | `sessions:u32`，`host_online:u8`，`store_used:u64`，`store_cap:u64`，`hit:u64`，`miss:u64`，`evicted:u64`，`lib_version:i64` |
+| `0x52 AUTHORIZE_CLIENT` | N→R | `client_id[16]`，`label:utf8`，`fingerprint:utf8` |
+| `0x53 REVOKE_CLIENT` | N→R | `client_id[16]` |
+| `0x56 RESET_CLIENTS` | N→R | 空 |
+| `0x57 ACK` | R→N | `req`（回帧的 req_id），`ok:u8` |
 
-只允许携带合法客户端证书的会话调用（由 `relay-server status` 使用），不开放其他管理端口。
+- `AUTHORIZE_CLIENT` 只接受 host 会话；relay 持久化到 `auth.json`，客户端在下一次连接时即可通过授权。
+- 设备列表以 NAS 本地 `devices.json` 为准；relay 端只负责授权/撤销，不提供列表查询。
+- `REVOKE_CLIENT` 让该指纹立即失效（已建立的会话在下一次心跳/请求时断开）。
+- `RESET_CLIENTS` 清空所有客户端授权，不影响 host。
+- 管理类消息只允许 host 会话；`ADMIN_STATS_REQ` 允许任何已授权会话（`relay-server status` 使用）。不开放其他管理端口。
 
 ### 5.7 一次播放的时序
 
@@ -350,31 +369,99 @@ AAD   = "AURLIB1\0" ‖ BE64(version) ‖ BE32(chunk_index)
 
 ---
 
-## 8. 证书与端点认证
+## 8. 凭据、自动签发与端点认证
 
-### 8.1 证书
+### 8.1 凭据清单
 
-三对自签证书，ECDSA P-256，有效期 10 年，无需 CA：
+| 凭据 | 生成者 | 存放 | 用途 |
+|---|---|---|---|
+| `relay.crt` / `relay.key` | relay 首次启动自动生成 | relay 磁盘 | 服务端身份；NAS 与手机用**证书 DER 的 SHA-256** 固定 |
+| host token（32B） | relay 首次启动自动生成 | relay `auth.json` + NAS `relay.json`（`relay-server show` 可再次打印） | NAS 首次绑定与换证书后重新绑定 |
+| `nas.crt` / `nas.key` | 桌面端首次启用自动生成 | 桌面端 `relay/` 目录 | NAS 的 mTLS 身份 |
+| `phone.crt` / `phone.key` | 桌面端每次配对时自动生成 | 手机 `filesDir/relay/` | 该手机的 mTLS 身份；每台设备各一份 |
+| `media_key`（32B） | 桌面端首次启用自动生成 | NAS + 手机 | **内容端到端加密**，relay 没有 |
+| `key_id` | 由 `media_key` 派生 | 三端 | 校验密钥一致、触发 relay 清缓存 |
+| pairing token（32B） | 桌面端每次配对时生成 | 只存在 NAS 内存 + 二维码 | 局域网配对的单次凭证，TTL 10 分钟 |
 
-```bash
-# 在任意一台机器上生成，产物拷到对应端点
-relay-server gencert --role relay  --cn relay.example.com --san dns:relay.example.com,ip:203.0.113.10 --out certs/relay
-relay-server gencert --role host   --cn aurora-nas     --out certs/nas
-relay-server gencert --role client --cn pixel-9        --out certs/pixel9
-relay-server fingerprint certs/relay.crt      # 打印 sha256/....（证书 DER 的 SHA-256）
+relay 上只有它自己的证书与私钥；端点证书与私钥只在 NAS / 手机本地，relay 只保存**已授权端点的指纹**（公开信息，且由 NAS 通过连接动态登记，不再手改配置）。
+
+### 8.2 首次启动：全部自动
+
+**relay**（`relay-server server` 启动时检查）：
+
+1. `certs/relay.crt|key` 不存在 → 用 `rcgen` 生成自签证书（ECDSA P-256，10 年），打印 `sha256/...` 指纹。
+2. `auth.json` 不存在 → 生成 32 字节 host token 并保存（relay 磁盘本身就是最高信任边界；`relay-server show` 依赖它重新打印引导串）。
+3. 打印一行引导串（`relay-server show` 可再次打印）：
+
+```
+podrelay://relay?v=2&a=relay.example.com:21443&p=sha256/…&t=<hostToken>
 ```
 
-- 固定指纹的对象是**叶子证书 DER 的 SHA-256**，不用 CA、不做链校验，直接相等比较；证书换新就同时更新两端配置。
-- NAS 与 Android 把中继服务器证书指纹写进配置；中继服务器把 NAS 与各客户端的证书指纹写进白名单。
-- 中继服务器要求 `ClientAuth: RequireAnyClientCert`，在自定义校验里比对白名单，不匹配立即断开。
-- 白名单还区分角色：只有 `host_fingerprints` 里的证书可以发 `HELLO(role=NAS)`，只有 `client_fingerprints` 里的证书可以发 `HELLO(role=CLIENT)`；两者都通过 TLS 证书校验后才会进入会话。
-- 修改白名单后 `SIGHUP` 重载，已建立的会话不中断；证书文件本身不放公网服务器之外的位置。
+4. 配置里不再需要 `auth.hostFingerprints` / `auth.clientFingerprints`；TLS 证书路径缺省时自动创建。
 
-### 8.2 密钥分发
+**桌面端**（首次启用中继）：
 
-1. NAS 启用中继时生成 `media.key`，UI 显示 Base64 与 `key_id` 前 8 位。
-2. 手机端在中继设置里粘贴该 Base64；两端 `key_id` 不一致时设置页直接报"密钥不匹配"。
-3. 证书文件通过局域网文件传输或数据线导入；中继服务器的 `relay.crt` 指纹由用户手工核对（前 8 位足够）。
+1. 生成 `media_key`（已有逻辑）与 NAS 的 `nas.crt`/`nas.key`（新增，`rcgen`）。
+2. 粘贴 relay 的引导串，自动填入地址、指纹、host token。
+3. 连接成功后 relay 把 NAS 指纹写入 `auth.json.host`；面板显示"已连接 · 快照版本 N"。
+4. 之后 NAS 换证书只需重新粘贴一次 host token，relay 自动替换旧指纹。
+
+### 8.3 局域网配对：二维码只做握手
+
+**约束**：配对时手机与 NAS 必须处于同一局域网。二维码里不放证书、密钥或公网地址，只放局域网配对入口。
+
+二维码内容（约 90 字符）：
+
+```
+podrelay://pair?v=2&h=<NAS 局域网 IP>&p=<NAS HTTP 端口>&t=<pairing token>&n=<设备名>&id=<deviceId>
+```
+
+流程：
+
+1. 桌面端「添加设备」→ 生成 `pairing token`（TTL 10 分钟、单次使用）+ 该手机的密钥对与自签证书；二维码由后端用 `qrcode` 生成 SVG 返回给面板，面板显示倒计时与"作废"。
+2. 手机（系统相机扫 → `podrelay://` 深链进入 App，或手动粘贴）调用 NAS 的局域网接口：
+
+```http
+POST http://<h>:<p>/relay/pair
+Content-Type: application/json
+
+{"token":"<pairing token>","deviceName":"Pixel 9","platform":"android"}
+```
+
+3. NAS 校验 token（存在、未过期、未使用）；成功后返回：
+
+```json
+{
+  "version": 2,
+  "relay": { "addr": "relay.example.com:21443", "fingerprint": "sha256/…" },
+  "keyId": 123456789,
+  "mediaKeyB64": "…",
+  "certPem": "-----BEGIN CERTIFICATE-----…",
+  "keyPem": "-----BEGIN PRIVATE KEY-----…",
+  "deviceId": "…",
+  "deviceName": "Aurora NAS"
+}
+```
+
+4. 手机把证书/私钥写入 `filesDir/relay/`，保存中继配置（地址/指纹/`media_key`），启动 `RelayService`。
+5. NAS 在手机成功取走凭据后，通过 host 会话发 `AUTHORIZE_CLIENT{client_id, label, fingerprint}`；relay 持久化。若此时 relay 断线，NAS 把授权项放进待办队列，重连后补发。
+6. 手机随后与 relay 建立 mTLS 连接并正常同步。
+
+为什么可以这样：现有局域网协议本身就是明文 HTTP，安全边界是"可信局域网"；配对只在这个边界内发生。二维码即使被同一局域网的人扫到，也只能拿到一次配对机会；NAS 端有 TTL、单次使用与随时撤销，默认不弹确认（扫码即加入）。
+
+### 8.4 撤销、换证书与换密钥
+
+**撤销单台设备**：面板设备列表 → 撤销 → NAS 从本地登记表删除，并向 relay 发 `REVOKE_CLIENT`。手机重连时 TLS 仍能完成（relay 接受任意客户端证书），但 `HELLO` 授权失败，收到 `ERROR device_revoked`，App 清空中继配置并提示重新配对。
+
+**撤销全部设备**：`RESET_CLIENTS`，用于换手机、怀疑二维码泄漏。
+
+**更换 NAS 证书**：面板「重置中继身份」→ 重新生成 `nas.crt/key` → 用已保存的 host token 重新绑定。已配对手机不受影响（它们信任的是 relay 证书与 `media_key`）。
+
+**更换媒体密钥**：面板「重置端到端加密」→ 明确警告：**relay 上已缓存的加密分片、NAS 上已推送的快照、所有手机的中继配置全部作废，需要重新配对**。确认后生成新 `media_key`，relay 在 host 重连时发现 `HELLO.key_id` 变化，删除全部 fragment 与 snapshot。建议同时撤销全部设备。
+
+### 8.5 为什么不是"证书不上 relay"
+
+relay 上现在只有**它自己的**证书与私钥，以及"哪些端点指纹已授权"这份列表。前者是任何 TLS 服务端都必须持有的身份；后者是公开信息的散列，且由 NAS 动态登记，用户不再手工维护。端点的私钥从未离开 NAS 或手机，因此 relay 既不能冒充 NAS，也不能解密内容。
 
 ---
 
@@ -383,7 +470,7 @@ relay-server fingerprint certs/relay.crt      # 打印 sha256/....（证书 DER 
 ### 9.1 运行时结构
 
 ```
-main → 读配置 → 构建 rustls ServerConfig（mTLS + 指纹白名单）
+main → 读配置/自动生成证书 → 构建 rustls ServerConfig（mTLS；授权在 HELLO 阶段完成）
      → TcpListener 绑定一个高位端口
      → accept 循环：每连接一个 tokio 任务
         ├ 握手：HELLO → HELLO_OK
@@ -445,11 +532,12 @@ main → 读配置 → 构建 rustls ServerConfig（mTLS + 指纹白名单）
 水位响应、状态统计）。`desktop-app/` 只做三件事：
 
 1. `src-tauri/src/relay_backend.rs`：实现 `pod_relay_agent::LibraryBackend`，把现有后端能力暴露给 agent；
-2. `src-tauri/src/relay_host.rs`：`relay.json`、`relay/media.key`、证书导入、agent 启停与状态；
-3. `src-tauri/src/lib.rs` 与 `commands.rs`：把 manager 挂进 `AppState` 并暴露 `relay_*` 命令；
-4. `src/components/RelayPanel.tsx`：配置、证书导入、密钥展示、状态展示。
+2. `src-tauri/src/relay_host.rs`：`relay.json`、自动生成 `media.key` 与 NAS 证书、按引导串连接、agent 启停与状态；
+3. `src-tauri/src/relay_pairing.rs` + `relay_http.rs`：配对 token、手机证书签发、局域网 `/relay/pair` 接口、设备登记；
+4. `src-tauri/src/lib.rs` 与 `commands.rs`：把 manager 挂进 `AppState` 并暴露 `relay_*` 命令；
+5. `src/components/RelayPanel.tsx`：引导串、二维码、设备列表、密钥与状态。
 
-因此 `desktop-app/` 的改动保持在两百行以内，中继本身的演进不触碰资料库后端代码。
+`desktop-app/` 只承担"身份与配对"这一层：证书/密钥的生成、二维码、局域网接口、设备登记；中继本身的协议与推送逻辑仍全部在 `relay-server/`，资料库后端代码不受影响。
 
 ```rust
 // src-tauri/src/relay_backend.rs（示意）
@@ -500,7 +588,7 @@ let bytes = axum::body::to_bytes(res.into_body(), MAX_WINDOW).await?;
 ```
 loop {
     connect_tls(relay_addr, pin, nas_cert, nas_key)
-    send HELLO(role=NAS, key_id)
+    send HELLO(role=NAS, key_id, host_token)
     on HELLO_OK:
         若 host_lib_version != 本地 library_version → 推快照
     loop {
@@ -538,10 +626,10 @@ loop {
 （Windows：`%APPDATA%\com.aurora.desktop\`）：
 
 ```
-relay.json          # 配置
-relay/media.key     # 32 字节，Base64 文本
-relay/nas.crt       # 导入的客户端证书
-relay/nas.key       # 导入的私钥
+relay.json            # 中继配置（地址/指纹/host token/开关）
+relay/media.key       # 32 字节，Base64 文本，首次启用自动生成
+relay/nas.crt|.key    # NAS 的 mTLS 证书，首次启用自动生成
+relay/devices.json    # 本机记录的已配对设备（client_id/label/指纹/时间）
 ```
 
 `relay.json`：
@@ -551,15 +639,16 @@ relay/nas.key       # 导入的私钥
   "enabled": true,
   "addr": "relay.example.com:21443",
   "serverFingerprint": "sha256/…",
-  "certPath": "C:\\Users\\you\\AppData\\Roaming\\com.aurora.desktop\\relay\\nas.crt",
-  "keyPath": "C:\\Users\\you\\AppData\\Roaming\\com.aurora.desktop\\relay\\nas.key",
+  "hostToken": "…",
   "readaheadFragments": 8,
   "maxInflightReads": 4,
   "snapshotPollSec": 60
 }
 ```
 
-`relay/media.key` 是 Base64 文本；首次启用时由 `relay_host.rs` 生成，面板里展示同样的内容与 `key_id`。
+- `hostToken` 来自 relay 首次启动打印的 `podrelay://relay?...` 引导串；面板粘贴一次即可。
+- `nas.crt/key`、`media.key` 缺失时自动生成，用户不再需要准备或导入任何文件。
+- `devices.json` 只用于面板展示与撤销；真正的授权列表在 relay 的 `auth.json`。
 
 ### 10.7 Tauri 命令与 UI
 
@@ -567,18 +656,22 @@ relay/nas.key       # 导入的私钥
 
 | 命令 | 作用 |
 |---|---|
-| `relay_get_status` | 返回配置 + 运行状态：连接中/已连接、NAS 在线、快照版本、缓存水位、最近错误 |
-| `relay_set_config` | 保存地址、指纹、证书路径、开关；保存后重建 agent |
-| `relay_import_cert` | 打开文件选择器导入 `.crt`/`.key` 到 `relay/` |
-| `relay_get_media_key` | 返回 `media_key` 的 Base64 与 `key_id` |
-| `relay_regenerate_media_key` | 生成新密钥（提示会清空中继缓存，客户端需重新配置） |
+| `relay_status` | 配置 + 运行状态 + 媒体密钥/`key_id` + 已配对设备 + 局域网地址 |
+| `relay_apply_bootstrap` | 解析 `podrelay://relay?...` 引导串，写入地址/指纹/host token 并重连 |
+| `relay_apply_settings` | 高级模式下手动保存配置 |
+| `relay_start_pairing` | 生成 pairing token、手机证书，返回二维码 SVG 与过期时间 |
+| `relay_cancel_pairing` | 作废当前配对码 |
+| `relay_revoke_device` | 撤销单台设备（同步 `REVOKE_CLIENT` 到 relay） |
+| `relay_reset_identity` | 重新生成 NAS 证书并用 host token 重新绑定（不影响已配对设备） |
+| `relay_reset_encryption` | 换 `media_key` 并撤销全部设备（强警告：全部缓存作废） |
 
-前端新增 `src/components/RelayPanel.tsx`，挂在现有侧栏的一个「公网中继」分区：
+前端 `src/components/RelayPanel.tsx`：
 
-- 开关、地址、服务器指纹（前 8 位校验提示）、证书导入按钮；
-- 媒体密钥展示与复制；
-- 状态区：连接状态、最近一次快照版本、缓存水位条、最近错误；
-- 所有配置持久化在 `relay.json`，重启后保留（遵循"回到界面不需要重新调节"）。
+- 首次使用：一个「粘贴中转服务器信息」输入框（`podrelay://relay?...`）；
+- 连接成功后显示快照版本、缓存水位、媒体密钥与 `key_id`；
+- 「添加设备」：二维码 + 倒计时 + 作废按钮 + 可选的"需要在本机确认"开关；
+- 设备列表、撤销、"重置中继身份"、"重置端到端加密"（红色确认框）；
+- 所有配置持久化在 `relay.json`，重启后保留。
 
 `lib.rs` 的 `setup` 中：读取配置 → 若 `enabled` 则 `pod_relay_agent::start(HostBackend::new(...), config)`；
 配置变更时 `stop()` 再 `start()`。返回的 `AgentHandle` 放进现有 `AppState`，进程退出时随 `Drop` 关闭连接。
@@ -591,7 +684,7 @@ relay/nas.key       # 导入的私钥
 
 | 文件 | 职责 |
 |---|---|
-| `RelayConfig.kt` | 配置持久化：启用、地址、指纹、客户端证书/私钥 PEM、`media_key`、代理端口；文件写入 `filesDir/relay/` |
+| `RelayConfig.kt` | 配置持久化：启用、地址、指纹、`media_key`、代理端口；证书/私钥由配对流程写入 `filesDir/relay/`，手动 PEM 仅作为高级项 |
 | `RelayProto.kt` | 帧编解码与消息常量（与 Rust 一一对应）；`fileId(kind, key)` 同算法 |
 | `RelayCrypto.kt` | HMAC 派生、`AES/GCM/NoPadding`、快照解密与 gzip 解压 |
 | `RelayTls.kt` | PEM 解析、`KeyManagerFactory`、指纹固定的 `X509TrustManager`、建连 |
@@ -599,6 +692,8 @@ relay/nas.key       # 导入的私钥
 | `RelayStore.kt` | 解密后的快照 JSON 落盘（按版本）；分片内存 LRU（32 MiB） |
 | `RelayProxy.kt` | `127.0.0.1:47001` 的 HTTP/1.1 服务（复用手写 HTTP 与 `HttpUtil` 风格） |
 | `RelayService.kt` | 生命周期与状态 `StateFlow`：连接状态、`deviceId/deviceName`、端点 |
+| `RelayPairing.kt` | 局域网配对：解析 `podrelay://pair` 深链、调用 NAS `/relay/pair`、写入证书与密钥 |
+| `RelayPairUri.kt` | 配对 URI 的解析与校验（纯 JVM 可测） |
 
 ### 11.2 代理路由与映射
 
@@ -626,14 +721,17 @@ Range → 分片：
 - 代理端口固定 `47001`，占用时顺延 `47001..47009`，写回配置；重启后 URL 不变。
 - 离线判定沿用现有逻辑：代理回 503 → 本设备标记离线、保留缓存、未缓存条目置灰。
 
-### 11.4 设置界面
+### 11.4 加入流程与设置界面
 
-`IntegrationsSettingsScreen` 增加「公网中继」入口 → 新页面：
+入口保持不变：「设置 → 通用 → 公网中继」。默认界面只有三件事：
 
-- 开关、地址、服务器指纹；
-- 客户端证书与私钥（PEM 粘贴或文件导入）、`media_key`（显示 `key_id` 前 8 位核对）；
-- 「连接测试」：显示中继版本、NAS 在线、快照版本、缓存水位；
-- 保存后重建 `RelayService`，配置持久化。
+1. **扫码/粘贴配对**：`podrelay://pair?...` 深链（系统相机扫码后点击）或手动粘贴；
+2. 手机与 NAS 在同一局域网时，点击「加入」→ 调用 `POST http://<h>:<p>/relay/pair` → 自动拿到证书、私钥、`media_key` 与中继地址/指纹 → 写入 `filesDir/relay/` 并启动服务；
+3. 状态区：已连接 / 源设备在线 / 快照版本 / 最近错误。
+
+手动配置（地址、指纹、证书 PEM、`media_key`）折叠在「高级」里，供调试与跨网段场景使用。
+
+配对失败要区分原因：不在同一局域网（连接超时）、配对码过期/已使用/已作废、NAS 未连接中继。
 
 ---
 
@@ -648,7 +746,11 @@ Range → 分片：
 | 中继磁盘将满 | `pressure=1/2`；按 TTL + LRU 淘汰；必要时拒绝预读 |
 | 分片损坏 / 篡改 | GCM 校验失败 → 丢弃该分片并向中继重取一次；仍失败回 503 |
 | 密钥不匹配 | `HELLO_OK.key_id` 与本地不符 → 设置页提示，不同步 |
-| 证书更换 | 两端更新指纹/证书，中继 `SIGHUP` 重载白名单 |
+| 证书更换 | NAS 重新生成证书后用 host token 重新绑定；relay 自动替换指纹，无需手改配置 |
+| 设备被撤销 | relay 在 `HELLO` 阶段回 `device_revoked`；手机清空中继配置并提示重新配对，已下载媒体不受影响 |
+| 配对码过期/误用 | NAS 端丢弃并按 `pairing token` TTL 拒绝；面板提示重新生成 |
+| 手机与 NAS 不同局域网 | 配对请求连不上 NAS；设置页提示"需要与 NAS 在同一 Wi-Fi" |
+| 更换媒体密钥 | relay 检测 `key_id` 变化并清空 fragment/snapshot；所有手机需重新配对 |
 | NAS 端后端端口变化 | agent 不经端口，直接走内存路由，不受影响 |
 | 超大文件（如 100 MB EPUB） | 约 400 分片整本下载；代理按流水持续供片，单分片远小于客户端 45 秒读超时 |
 | 重复 `WANT` 风暴 | 中继去重 + 在途上限 + 客户端重试退避 |
@@ -663,11 +765,7 @@ Range → 分片：
 ```json
 {
   "listen": "0.0.0.0:21443",
-  "tls": { "cert": "/etc/pod-relay/certs/relay.crt", "key": "/etc/pod-relay/certs/relay.key" },
-  "auth": {
-    "hostFingerprints": ["sha256/…"],
-    "clientFingerprints": ["sha256/…"]
-  },
+  "publicAddr": "relay.example.com:21443",
   "store": {
     "dir": "/var/lib/pod-relay/store",
     "capacityBytes": 21474836480,
@@ -685,17 +783,35 @@ Range → 分片：
 }
 ```
 
+`certs/` 与 `auth.json` 首次启动自动生成，无需手写：
+
+```json
+{
+  "host": "sha256/…",
+  "hostToken": "…",
+  "keyId": 4602678819172646912,
+  "clients": [
+    { "id": "5f2c…", "label": "Pixel 9", "fingerprint": "sha256/…",
+      "createdAt": 1730000000, "lastSeenAt": 1730000600 }
+  ]
+}
+```
+
+`publicAddr` 决定引导串里打印的公网地址；缺省时用 `listen`。`tls` 字段也可省略，表示证书自动生成在 `store/certs/`。
+
 ### 13.2 NAS `relay.json`
 
-见 10.6。
+见 10.6；`hostToken` 来自 relay 首次启动打印的引导串。
 
 ### 13.3 客户端
 
-由设置页写入 SharedPreferences，`media_key` 与证书文件落在 `filesDir/relay/`。
+由配对流程写入 SharedPreferences 与 `filesDir/relay/`；手动配置折叠在高级设置里。
 
 ---
 
 ## 14. 部署
+
+部署只保留三步：启动 relay → 复制一行 → 在 NAS 粘贴。
 
 ### 14.1 公网服务器
 
@@ -703,35 +819,35 @@ Range → 分片：
 # 1. 只放行一个高位端口（80/443 保持屏蔽，方案不需要它们）
 firewall-cmd --add-port=21443/tcp --permanent && firewall-cmd --reload   # 或对应云安全组规则
 
-# 2. 生成证书与指纹
-relay-server gencert --role relay  --cn relay.example.com --san dns:relay.example.com,ip:203.0.113.10 --out certs/relay
-relay-server gencert --role host   --cn aurora-nas --out certs/nas
-relay-server gencert --role client --cn pixel-9   --out certs/pixel9
-relay-server fingerprint certs/nas.crt
-relay-server fingerprint certs/pixel9.crt
-
-# 3. 启动
+# 2. 首次启动：自动生成证书与 host token，并打印引导串
+#    在配置里加 "publicAddr": "relay.example.com:21443"，引导串才会带上公网地址
 relay-server server --config /etc/pod-relay/relay.json
+#   [pod-relay] generated TLS certificate  sha256/AbCd...
+#   [pod-relay] host enrollment ready
+#   podrelay://relay?v=2&a=relay.example.com:21443&p=sha256/AbCd...&t=...
+
 systemctl enable --now pod-relay
 ```
 
-构建：`cd relay-server && cargo build --release -p pod-relay-cli`，产物 `target/release/relay-server` 可直接部署；
-也可用 `--target x86_64-unknown-linux-musl` 交叉编译静态二进制。
-无外部运行时依赖，无 HTTP 端口，无反向代理。
+`relay.json` 只保留 `listen` / `store` / `limits` / `watermark`；证书与 `auth.json` 自动生成在 `store` 同级目录。忘记引导串时执行 `relay-server show` 再打印一次。
+
+构建：`cd relay-server && cargo build --release -p pod-relay-cli`，产物 `target/release/relay-server`；无外部运行时依赖、无 HTTP 端口、无反向代理。
 
 ### 14.2 NAS（Windows）
 
-1. 把 `certs/nas.crt`、`certs/nas.key` 拷到 Windows，在「公网中继」面板导入。
-2. 填入中继地址 `relay.example.com:21443` 与 `relay.crt` 的指纹。
-3. 复制面板显示的 `media_key`。
+1. 打开桌面端「公网中继」，把 `podrelay://relay?...` 整行粘进去（地址、指纹、host token 一次填好）。
+2. 首次启用会自动生成 `media_key` 与 NAS 证书，无需任何证书文件操作。
+3. 面板显示"已连接 · 快照版本 N"即完成。
 
-NAS 只需出站访问 `21443/tcp`，不需要任何入站端口，NAT 后可直接工作。
+NAS 只需出站访问 `21443/tcp`，不需要任何入站端口；但**配对时手机必须与 NAS 在同一局域网**。
 
 ### 14.3 Android
 
-安装后在「设置 → 集成 → 公网中继」填入地址与指纹，粘贴客户端证书、私钥与 `media_key`，保存后即可在资料库列表里看到同一台 NAS；在家会自动回落到局域网端点。
+1. NAS 面板点「添加设备」，显示二维码（10 分钟有效）。
+2. 手机连同一个 Wi-Fi，用系统相机扫码并点击链接，确认后自动完成证书与密钥交接。
+3. 回到资料库列表即可看到 NAS；在家走局域网，在外走中继。
 
----
+换手机：撤销旧设备 → 重新扫码。换媒体密钥：面板「重置端到端加密」→ 所有手机重新扫码。
 
 ## 15. 测试方案
 
@@ -760,26 +876,22 @@ NAS 只需出站访问 `21443/tcp`，不需要任何入站端口，NAT 后可直
 
 | 阶段 | 内容 | 完成标准 |
 |---|---|---|
-| P0 | `relay-server/protocol`：帧、消息、加解密、快照格式、测试向量 | `cd relay-server && cargo test -p pod-relay-protocol` 全绿 |
-| P1 | `relay-server/server`：mTLS、会话、存储、STAT/FRAG、WANT、水位、快照版本、`selftest` | `cargo run -p pod-relay-cli -- selftest` 通过；抓包确认无明文 |
-| P2 | `relay-server/agent` + `desktop-app` 适配：`LibraryBackend`、索引、快照推送、分片推送 | 本机端到端取任意 Range 与原文件一致；快照解密正确 |
-| P3 | `desktop-app` UI 与命令：面板、状态、密钥展示、证书导入 | 面板状态正确；重启后配置保留 |
-| P4 | Android 传输层：Proto/Crypto/Tls/Client/Store + 单测 | `compileDebugKotlin` + `testDebugUnitTest` 通过 |
-| P5 | Android 代理与接入：Proxy、Service、多端点同步、设置页 | 播放/封面/下载/电子书全部可用；断 Wi-Fi 自动切中继 |
-| P6 | 加固与运维：节流、日志、systemd、SIGHUP、`relay-server status` | 断线 5 秒内恢复；连续播放 30 分钟无内存增长 |
+| P0 | 协议 v2：`HELLO.auth`、设备管理消息、错误码；relay 首次启动自动生成证书与 host token | `cargo run -p pod-relay-cli -- selftest` 覆盖 host 绑定/客户端授权/撤销/换 key 清库 |
+| P1 | relay 动态授权：`auth.json`、`AUTHORIZE/REVOKE/LIST/RESET`、限速、`key_id` 变化清库 | 手改配置不再需要；重启后授权仍在 |
+| P2 | 桌面端自动签发：NAS 证书、引导串粘贴、手机证书生成、`POST /relay/pair`、`devices.json` | 面板完成引导 + 配对 + 撤销全流程 |
+| P3 | 桌面端 UI：二维码（SVG）、倒计时、设备列表、重置中继身份/端到端加密 | 配置全部持久化；警告文案与二次确认齐全 |
+| P4 | Android：`podrelay` 深链、局域网配对、设置页重构、错误提示 | `compileDebugKotlin` + 配对 URI 单测通过 |
+| P5 | 端到端联调（本机模拟手机）与文档更新 | 配对 → 连接 → 播放 → 撤销 → 重新配对全链路走通 |
 
-提交拆分（英文，写明背景/改动/效果）：
+提交拆分（英文）：
 
-1. `relay-server: add framed protocol crate with AES-GCM payloads`
-2. `relay-server: implement relay server with encrypted fragment store`
-3. `relay-server: add NAS agent library with backend trait`
-4. `desktop-app: implement relay backend adapter over the library router`
-5. `desktop-app: expose relay configuration and status in the UI`
-6. `android: add relay transport and loopback HTTP proxy`
-7. `android: add relay settings and endpoint fallback`
-8. `docs: document the PodRelay protocol`
-
----
+1. `relay-server: add token-based host binding and dynamic client authorization`
+2. `relay-server: bootstrap TLS material and enrollment token on first start`
+3. `relay-server: purge cached media when the media key changes`
+4. `desktop-app: auto-generate relay identity and serve LAN pairing`
+5. `desktop-app: add QR pairing, device management and encryption reset`
+6. `android: join a relay through LAN pairing`
+7. `docs: document the zero-touch relay setup`
 
 ## 17. 风险与取舍
 
@@ -800,26 +912,32 @@ NAS 只需出站访问 `21443/tcp`，不需要任何入站端口，NAT 后可直
 
 ## 19. 实现状态
 
-本方案已落地为可编译、可自测的代码，仓库内对应关系：
+v2（本文档的目标形态）已经落地：
 
 | 组件 | 位置 | 验证方式 |
 |---|---|---|
-| 协议 / 加密 / 快照格式 | `relay-server/protocol` | `cargo test -p pod-relay-protocol` |
-| 公网服务器 | `relay-server/server` + `relay-server/cli` | `cargo run -p pod-relay-cli -- selftest` |
-| NAS agent | `relay-server/agent` | 与上一条同一套 selftest；在桌面端进程内运行 |
-| 桌面端适配与面板 | `desktop-app/src-tauri/src/relay_backend.rs`、`relay_host.rs`、`desktop-app/src/components/RelayPanel.tsx` | `cargo check`（`desktop-app/src-tauri`）、`npm run build` |
-| Android 客户端 | `app/src/main/java/com/aurora/music/data/relay/*`、`ui/screens/settings/RelaySettingsScreen.kt` | `./gradlew :app:compileDebugKotlin`、`./gradlew :app:testDebugUnitTest --tests 'com.aurora.music.data.relay.*'` |
+| 协议 v2（HELLO.auth、动态授权、错误码） | `relay-server/protocol` | `cargo test -p pod-relay-protocol` |
+| relay 自动 bootstrap、`auth.json`、授权/撤销、换 key 清库 | `relay-server/server` | `cargo run -p pod-relay-cli -- selftest` |
+| `relay-server show` / `server` / `gencert` | `relay-server/cli` | 首次启动会打印 `podrelay://relay?...` |
+| NAS agent（host token、控制通道） | `relay-server/agent` | selftest 会走 host 绑定 + 客户端授权 |
+| 桌面端自动证书、引导串、局域网配对、设备登记、二维码 | `desktop-app/src-tauri/src/relay_host.rs`、`relay_pairing.rs`、`RelayPanel.tsx` | `cargo check`、`npm run build` |
+| Android 深链配对、证书/密钥落地、状态页 | `app/src/main/java/com/aurora/music/data/relay/*`、`RelaySettingsScreen.kt` | `compileDebugKotlin`、`testDebugUnitTest` |
 
 常用命令：
 
 ```bash
 cd relay-server
-cargo test                       # 协议单测
-cargo run -p pod-relay-cli -- selftest   # 中继 + agent + 客户端完整链路
-cargo build --release -p pod-relay-cli    # 产物 target/release/relay-server
+cargo test
+cargo run -p pod-relay-cli -- selftest
+cargo build --release -p pod-relay-cli
 ```
 
-第一次部署：`relay-server gencert` 生成三对证书 → 把 `nas.crt/nas.key` 导入桌面端面板 →
-面板复制 `media_key` → 手机端填写地址、指纹、证书、私钥、`media_key`。
+现在的接入流程就是 §14 的三步：启动 relay（自动生成证书与 token）→ 把打印的
+`podrelay://relay?...` 粘到 NAS 面板 → NAS 点「添加设备」，手机系统相机扫码。
 
-已知限制与后续项见 §17、§18；`relay-server/tmp/` 是自测产物目录，已加入 `.gitignore`。
+### 19.1 兼容与迁移
+
+- v1（手改指纹）与 v2（动态授权）协议不同，不能混用；升级后 NAS 与手机各配对一次。
+- 升级时保留现有 `media_key` 可继续使用已缓存分片；只有「重置端到端加密」才清空 relay 缓存并让所有设备重新配对。
+- 旧的 `hostFingerprints` / `clientFingerprints` / `certPath` / `keyPath` 配置项在 v2 中被忽略，可删除；面板会回到"粘贴引导串"状态。
+- `relay-server/tmp/` 是自测产物目录，已加入 `.gitignore`，由人工清理。

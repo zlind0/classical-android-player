@@ -1,6 +1,7 @@
 //! PodRelay server core: TLS listener, sessions, encrypted fragment store and
 //! the administrative helpers used by the CLI.
 
+pub mod auth;
 pub mod cert;
 pub mod config;
 pub mod server;

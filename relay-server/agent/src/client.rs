@@ -73,6 +73,7 @@ impl HostLink {
             ver: PROTOCOL_VERSION,
             key_id,
             caps: 0,
+            auth: config.relay.host_token.as_bytes().to_vec(),
         })
         .await?;
 

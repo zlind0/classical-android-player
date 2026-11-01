@@ -12,7 +12,7 @@ object RelayProto {
     const val MAX_FRAME = 4 * 1024 * 1024
 
     const val ROLE_CLIENT = 2
-    const val PROTOCOL_VERSION = 1
+    const val PROTOCOL_VERSION = 2
 
     const val HELLO = 0x01
     const val HELLO_OK = 0x02

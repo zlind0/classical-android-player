@@ -124,6 +124,26 @@ impl FragmentStore {
         Ok(total)
     }
 
+    /// Drops every cached fragment (used when the media key changes).
+    pub fn clear_all(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.files.clear();
+        }
+        if let Ok(mut cache) = self.stat_cache.lock() {
+            cache.clear();
+        }
+        let frag = self.root.join("frag");
+        if let Ok(shards) = fs::read_dir(&frag) {
+            for shard in shards.flatten() {
+                if shard.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    let _ = fs::remove_dir_all(shard.path());
+                }
+            }
+        }
+        let _ = fs::create_dir_all(&frag);
+        self.used.store(0, Ordering::Relaxed);
+    }
+
     pub fn capacity(&self) -> u64 {
         self.capacity
     }

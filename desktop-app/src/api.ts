@@ -117,11 +117,24 @@ export interface RelaySettings {
   enabled: boolean;
   addr: string;
   serverFingerprint: string;
-  certPath: string;
-  keyPath: string;
+  hostToken: string;
   readaheadFragments: number;
   maxInflightReads: number;
   snapshotPollSec: number;
+}
+
+export interface RelayDevice {
+  id: string;
+  label: string;
+  fingerprint: string;
+  createdAt: number;
+}
+
+export interface RelayPairStart {
+  uri: string;
+  svg: string;
+  label: string;
+  expiresAt: number;
 }
 
 export interface RelayAgentStatus {
@@ -141,6 +154,8 @@ export interface RelayStatus {
   mediaKey: string;
   keyId: number;
   agent: RelayAgentStatus | null;
+  devices: RelayDevice[];
+  pairing: { lanHost: string; lanPort: number };
 }
 
 export interface ScanProgress {
@@ -188,9 +203,15 @@ export const api = {
   relayStatus: () => invoke<RelayStatus>("relay_status"),
   relayApplySettings: (settings: RelaySettings) =>
     invoke<RelayStatus>("relay_apply_settings", { settings }),
-  relayImportCert: (certPath: string, keyPath: string) =>
-    invoke<RelayStatus>("relay_import_cert", { certPath, keyPath }),
-  relayRegenerateKey: () => invoke<RelayStatus>("relay_regenerate_media_key"),
+  relayApplyBootstrap: (line: string) =>
+    invoke<RelayStatus>("relay_apply_bootstrap", { line }),
+  relayStartPairing: (label: string) =>
+    invoke<RelayPairStart>("relay_start_pairing", { label }),
+  relayCancelPairing: () => invoke<void>("relay_cancel_pairing"),
+  relayRevokeDevice: (id: string) =>
+    invoke<RelayStatus>("relay_revoke_device", { id }),
+  relayResetIdentity: () => invoke<RelayStatus>("relay_reset_identity"),
+  relayResetEncryption: () => invoke<RelayStatus>("relay_reset_encryption"),
 };
 
 export function onScanProgress(handler: (progress: ScanProgress) => void): Promise<UnlistenFn> {

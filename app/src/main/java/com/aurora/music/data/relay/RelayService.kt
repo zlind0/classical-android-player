@@ -40,6 +40,13 @@ class RelayService(context: Context) {
         val lastError: String? = null,
     )
 
+    sealed class PairState {
+        data object Idle : PairState()
+        data object Joining : PairState()
+        data class Failed(val message: String) : PairState()
+        data class Joined(val deviceName: String) : PairState()
+    }
+
     private val appContext = context.applicationContext
     val config = RelayConfig(appContext)
     private val client = RelayClient(config)
@@ -49,6 +56,9 @@ class RelayService(context: Context) {
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
+
+    private val _pairState = MutableStateFlow<PairState>(PairState.Idle)
+    val pairState: StateFlow<PairState> = _pairState.asStateFlow()
 
     private var identityJob: Job? = null
 
@@ -135,6 +145,43 @@ class RelayService(context: Context) {
     fun restart() {
         stop()
         start()
+    }
+
+    /**
+     * 从 `podrelay://pair?...` 配对码加入：请求 NAS 的局域网接口，取回证书与密钥。
+     * 返回 false 表示不是配对码。
+     */
+    fun acceptPairUri(raw: String?): Boolean {
+        val uri = RelayPairUri.parse(raw) ?: return false
+        scope.launch {
+            _pairState.value = PairState.Joining
+            val deviceName = android.os.Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android"
+            runCatching { RelayPairing.fetch(uri, deviceName) }
+                .onSuccess { credentials ->
+                    val current = config.current
+                    config.save(
+                        current.copy(
+                            enabled = true,
+                            addr = credentials.relayAddr,
+                            fingerprint = credentials.relayFingerprint,
+                            certPem = credentials.certPem,
+                            keyPem = credentials.keyPem,
+                            mediaKey = credentials.mediaKeyB64,
+                        ),
+                    )
+                    store.clearSnapshot()
+                    restart()
+                    _pairState.value = PairState.Joined(credentials.deviceName)
+                }
+                .onFailure { error ->
+                    _pairState.value = PairState.Failed(error.message ?: "配对失败")
+                }
+        }
+        return true
+    }
+
+    fun clearPairState() {
+        _pairState.value = PairState.Idle
     }
 
     fun saveSettings(settings: RelaySettings) {

@@ -17,6 +17,7 @@ fn usage() {
         "PodRelay relay-server\n\n\
          usage:\n  \
          relay-server server --config relay.json\n  \
+         relay-server show --config relay.json\n  \
          relay-server gencert --role relay|host|client --cn NAME [--san dns:host|ip:addr ...] --out PATH\n  \
          relay-server keygen [--out PATH]\n  \
          relay-server fingerprint CERT\n  \
@@ -65,6 +66,7 @@ async fn run() -> Result<()> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     match argv.first().map(|s| s.as_str()).unwrap_or("") {
         "server" => cmd_server(&argv).await,
+        "show" => cmd_show(&argv),
         "gencert" => cmd_gencert(&argv),
         "keygen" => cmd_keygen(&argv),
         "fingerprint" => cmd_fingerprint(&argv),
@@ -83,6 +85,47 @@ async fn cmd_server(args: &[String]) -> Result<()> {
     let config = pod_relay_server::Config::load(Path::new(&config_path))?;
     let relay = pod_relay_server::Relay::bind(config).await?;
     relay.serve().await
+}
+
+fn cmd_show(args: &[String]) -> Result<()> {
+    let config_path = flag(args, "--config").ok_or_else(|| anyhow!("missing --config"))?;
+    let config = pod_relay_server::Config::load(Path::new(&config_path))?;
+    let cert = match &config.tls {
+        Some(tls) => tls.cert.clone(),
+        None => config.store.dir.join("certs").join("relay.crt"),
+    };
+    let fingerprint = pod_relay_server::cert::fingerprint_file(&cert)?;
+    let auth_text = std::fs::read_to_string(config.store.dir.join("auth.json"))
+        .context("read auth.json (start the server once first)")?;
+    let auth: serde_json::Value = serde_json::from_str(&auth_text)?;
+    let token = auth
+        .get("hostToken")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| anyhow!("host token missing"))?;
+    let host = config
+        .public_addr
+        .clone()
+        .unwrap_or_else(|| config.listen.clone());
+    println!(
+        "podrelay://relay?v=2&a={}&p={}&t={}",
+        url_encode(&host),
+        url_encode(&fingerprint),
+        url_encode(token)
+    );
+    Ok(())
+}
+
+fn url_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 fn cmd_gencert(args: &[String]) -> Result<()> {

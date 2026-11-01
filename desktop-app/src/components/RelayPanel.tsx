@@ -1,26 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
-import { api, formatBytes, type RelaySettings, type RelayStatus } from "../api";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { api, formatBytes, type RelayPairStart, type RelayStatus } from "../api";
 
 interface RelayPanelProps {
   onClose: () => void;
   onToast: (message: string) => void;
 }
 
-const emptySettings: RelaySettings = {
-  enabled: false,
-  addr: "relay.example.com:21443",
-  serverFingerprint: "",
-  certPath: "",
-  keyPath: "",
-  readaheadFragments: 8,
-  maxInflightReads: 4,
-  snapshotPollSec: 60,
-};
-
 export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
-  const [settings, setSettings] = useState<RelaySettings>(emptySettings);
   const [status, setStatus] = useState<RelayStatus | null>(null);
+  const [bootstrap, setBootstrap] = useState("");
+  const [pairLabel, setPairLabel] = useState("");
+  const [pairing, setPairing] = useState<RelayPairStart | null>(null);
+  const [now, setNow] = useState(Date.now());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,7 +19,6 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
     try {
       const next = await api.relayStatus();
       setStatus(next);
-      setSettings(next.settings);
       setError(null);
     } catch (err) {
       setError(String(err));
@@ -41,16 +31,31 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
     return () => window.clearInterval(timer);
   }, [load]);
 
-  const patch = (value: Partial<RelaySettings>) => setSettings((current) => ({ ...current, ...value }));
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
-  const save = async () => {
+  const configured = Boolean(status?.settings.hostToken && status?.settings.enabled);
+  const agent = status?.agent;
+  const connected = Boolean(agent?.connected);
+  const remaining = pairing ? Math.max(0, Math.ceil((pairing.expiresAt - now) / 1000)) : 0;
+
+  useEffect(() => {
+    if (pairing && remaining === 0) {
+      setPairing(null);
+      api.relayCancelPairing().catch(() => {});
+    }
+  }, [pairing, remaining]);
+
+  const connect = async () => {
     setBusy(true);
     setError(null);
     try {
-      const next = await api.relayApplySettings(settings);
+      const next = await api.relayApplyBootstrap(bootstrap.trim());
       setStatus(next);
-      setSettings(next.settings);
-      onToast("中继配置已保存");
+      setBootstrap("");
+      onToast("已连接中继，正在同步资料库…");
     } catch (err) {
       setError(String(err));
     } finally {
@@ -58,57 +63,73 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
     }
   };
 
-  const importCert = async () => {
+  const startPairing = async () => {
+    setBusy(true);
     setError(null);
     try {
-      const cert = await open({
-        multiple: false,
-        title: "选择 NAS 客户端证书 (nas.crt)",
-        filters: [{ name: "Certificate", extensions: ["crt", "pem"] }],
-      });
-      if (typeof cert !== "string") return;
-      const key = await open({
-        multiple: false,
-        title: "选择 NAS 客户端私钥 (nas.key)",
-        filters: [{ name: "Private key", extensions: ["key", "pem"] }],
-      });
-      if (typeof key !== "string") return;
-      const next = await api.relayImportCert(cert, key);
+      const start = await api.relayStartPairing(pairLabel);
+      setPairing(start);
+      setNow(Date.now());
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelPairing = async () => {
+    setPairing(null);
+    await api.relayCancelPairing().catch(() => {});
+  };
+
+  const revoke = async (id: string) => {
+    if (!window.confirm("撤销后该设备需要重新扫码配对，已下载的媒体不受影响。继续？")) return;
+    try {
+      const next = await api.relayRevokeDevice(id);
       setStatus(next);
-      setSettings(next.settings);
-      onToast("证书已导入");
+      onToast("设备已撤销");
     } catch (err) {
       setError(String(err));
     }
   };
 
-  const regenerate = async () => {
-    if (!window.confirm("重新生成媒体密钥会让中继已缓存的分片失效，手机端需要重新填写新密钥。继续？")) {
+  const resetIdentity = async () => {
+    if (!window.confirm("将重新生成 NAS 证书，并用当前 host token 重新绑定中继。已配对设备不受影响。继续？")) {
       return;
     }
-    setError(null);
     try {
-      const next = await api.relayRegenerateKey();
+      const next = await api.relayResetIdentity();
       setStatus(next);
-      setSettings(next.settings);
-      onToast("已生成新的媒体密钥");
+      onToast("已重置 NAS 证书");
     } catch (err) {
       setError(String(err));
     }
   };
 
-  const copyKey = async () => {
-    if (!status?.mediaKey) return;
+  const resetEncryption = async () => {
+    if (
+      !window.confirm(
+        "重置端到端加密会更换媒体密钥：中继上已缓存的分片、资料库快照、所有已配对设备全部作废，所有手机都要重新扫码配对。确定继续？",
+      )
+    ) {
+      return;
+    }
     try {
-      await navigator.clipboard.writeText(status.mediaKey);
-      onToast("媒体密钥已复制");
-    } catch {
-      onToast("复制失败，请手动选择文本");
+      const next = await api.relayResetEncryption();
+      setStatus(next);
+      setPairing(null);
+      onToast("媒体密钥已更换，请重新配对设备");
+    } catch (err) {
+      setError(String(err));
     }
   };
 
-  const agent = status?.agent;
+  const deviceCount = status?.devices.length ?? 0;
   const usage = agent && agent.storeCap > 0 ? Math.min(1, agent.storeUsed / agent.storeCap) : 0;
+  const bootstrapHint = useMemo(
+    () => "在服务器上首次启动 relay 时会打印一行 podrelay://relay?…，整行粘贴到这里",
+    [],
+  );
 
   return (
     <div className="relay-overlay" onClick={onClose}>
@@ -116,7 +137,7 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
         <header className="relay-head">
           <div>
             <h2>公网中继</h2>
-            <p>PodRelay：把资料库通过公网服务器共享给手机，服务器只保存加密分片。</p>
+            <p>PodRelay：公网服务器只保存加密分片，配对在局域网内完成。</p>
           </div>
           <button className="icon-btn" onClick={onClose} title="关闭">
             ×
@@ -125,93 +146,143 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
 
         {error && <div className="banner error">{error}</div>}
 
-        <label className="relay-switch">
-          <input
-            type="checkbox"
-            checked={settings.enabled}
-            onChange={(event) => patch({ enabled: event.target.checked })}
-          />
-          <span>启用中继</span>
-        </label>
-
-        <div className="relay-grid">
-          <label>
-            中继地址
-            <input
-              value={settings.addr}
-              placeholder="relay.example.com:21443"
-              onChange={(event) => patch({ addr: event.target.value })}
+        {!configured && (
+          <section className="relay-section">
+            <h3>连接中继服务器</h3>
+            <p className="relay-hint">{bootstrapHint}</p>
+            <textarea
+              className="relay-textarea"
+              rows={3}
+              placeholder="podrelay://relay?v=2&a=relay.example.com:21443&p=sha256/…&t=…"
+              value={bootstrap}
+              onChange={(event) => setBootstrap(event.target.value)}
             />
-          </label>
-          <label>
-            服务器指纹
-            <input
-              value={settings.serverFingerprint}
-              placeholder="sha256/…"
-              onChange={(event) => patch({ serverFingerprint: event.target.value })}
-            />
-          </label>
-          <label className="span-2">
-            客户端证书
-            <div className="relay-file">
-              <input value={settings.certPath} readOnly placeholder="尚未导入" />
-              <input value={settings.keyPath} readOnly placeholder="尚未导入私钥" />
-              <button className="btn ghost small" onClick={importCert}>
-                导入证书与私钥
+            <div className="relay-actions">
+              <button className="btn primary" disabled={busy || !bootstrap.trim()} onClick={connect}>
+                {busy ? "连接中…" : "连接"}
               </button>
             </div>
-          </label>
-        </div>
+          </section>
+        )}
 
-        <section className="relay-section">
-          <h3>媒体密钥</h3>
-          <p className="relay-hint">
-            这把钥匙只存在于 NAS 与手机端；中继服务器没有它。请把下面的内容填到手机「公网中继」设置里。
-          </p>
-          <div className="relay-key">
-            <code>{status?.mediaKey || "…"}</code>
-            <button className="btn ghost small" onClick={copyKey}>
-              复制
-            </button>
-          </div>
-          <div className="relay-hint">
-            key_id：<code>{(status?.keyId ?? 0).toString(16)}</code>
-            <button className="btn ghost small" onClick={regenerate}>
-              重新生成
-            </button>
-          </div>
-        </section>
-
-        <section className="relay-section">
-          <h3>运行状态</h3>
-          {!settings.enabled && <p className="relay-hint">中继未启用。</p>}
-          {settings.enabled && !agent && <p className="relay-hint">正在启动…</p>}
-          {agent && (
-            <>
+        {configured && (
+          <>
+            <section className="relay-section">
+              <h3>运行状态</h3>
               <div className="relay-status-row">
-                <span className={agent.connected ? "dot ok" : "dot bad"} />
-                {agent.connected ? "已连接中继" : "未连接"}
+                <span className={agent?.connected ? "dot ok" : "dot bad"} />
+                {agent?.connected ? "已连接中继" : "未连接"}
                 <span className="relay-hint">
-                  {agent.hostOnline ? "源设备在线" : "源设备离线"} · 快照版本 {agent.libVersion}
+                  快照版本 {agent?.libVersion ?? 0} · 配对设备 {deviceCount}
                 </span>
               </div>
               <div className="relay-meter">
                 <div style={{ width: `${Math.round(usage * 100)}%` }} />
               </div>
               <div className="relay-hint">
-                缓存占用 {formatBytes(agent.storeUsed)} / {formatBytes(agent.storeCap)}
+                缓存 {formatBytes(agent?.storeUsed ?? 0)} / {formatBytes(agent?.storeCap ?? 0)}
+                {status?.pairing.lanHost ? ` · 局域网 ${status.pairing.lanHost}:${status.pairing.lanPort}` : ""}
               </div>
-              {agent.lastError && <div className="banner error">{agent.lastError}</div>}
-            </>
-          )}
-        </section>
+              {agent?.lastError && <div className="banner error">{agent.lastError}</div>}
+            </section>
+
+            <section className="relay-section">
+              <h3>添加设备</h3>
+              <p className="relay-hint">
+                手机需要与这台电脑连同一个 Wi-Fi。用手机系统相机扫码，确认后自动完成证书与密钥交接。
+              </p>
+              <div className="relay-pair-row">
+                <input
+                  className="relay-input"
+                  placeholder="设备名，例如 Pixel 9"
+                  value={pairLabel}
+                  onChange={(event) => setPairLabel(event.target.value)}
+                />
+                <button className="btn primary" disabled={busy || !connected} onClick={startPairing}>
+                  生成配对码
+                </button>
+              </div>
+              {!connected && <div className="relay-hint">中继未连接时无法配对。</div>}
+              {pairing && (
+                <div className="relay-qr-wrap">
+                  <div className="relay-qr" dangerouslySetInnerHTML={{ __html: pairing.svg }} />
+                  <div className="relay-qr-meta">
+                    <strong>{pairing.label}</strong>
+                    <span className={remaining <= 60 ? "relay-countdown warn" : "relay-countdown"}>
+                      {Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, "0")}
+                    </span>
+                    <button className="btn ghost small" onClick={cancelPairing}>
+                      作废
+                    </button>
+                  </div>
+                  <code className="relay-uri">{pairing.uri}</code>
+                </div>
+              )}
+            </section>
+
+            <section className="relay-section">
+              <h3>已配对设备</h3>
+              {deviceCount === 0 && <p className="relay-hint">还没有设备。</p>}
+              <div className="relay-devices">
+                {status?.devices.map((device) => (
+                  <div className="relay-device" key={device.id}>
+                    <div>
+                      <strong>{device.label}</strong>
+                      <span className="relay-hint">{device.fingerprint.slice(0, 22)}…</span>
+                    </div>
+                    <button className="btn ghost small" onClick={() => revoke(device.id)}>
+                      撤销
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="relay-section">
+              <h3>媒体密钥</h3>
+              <div className="relay-key">
+                <code>{status?.mediaKey || "…"}</code>
+              </div>
+              <div className="relay-hint">
+                key_id <code>{(status?.keyId ?? 0).toString(16)}</code> · 已配对设备无需手动填写
+              </div>
+            </section>
+
+            <section className="relay-section">
+              <h3>维护</h3>
+              <div className="relay-actions spread">
+                <button className="btn ghost small" onClick={resetIdentity}>
+                  重置 NAS 证书
+                </button>
+                <button className="btn ghost small danger" onClick={resetEncryption}>
+                  重置端到端加密
+                </button>
+              </div>
+              <p className="relay-hint">
+                换服务器或重置 token 时，把新的 <code>podrelay://relay?…</code> 粘贴到上面的连接框即可。
+              </p>
+              <details className="relay-advanced">
+                <summary>重新填写引导串</summary>
+                <textarea
+                  className="relay-textarea"
+                  rows={3}
+                  placeholder="podrelay://relay?v=2&a=…&p=…&t=…"
+                  value={bootstrap}
+                  onChange={(event) => setBootstrap(event.target.value)}
+                />
+                <div className="relay-actions">
+                  <button className="btn ghost small" disabled={busy || !bootstrap.trim()} onClick={connect}>
+                    应用
+                  </button>
+                </div>
+              </details>
+            </section>
+          </>
+        )}
 
         <footer className="relay-actions">
           <button className="btn ghost" onClick={onClose}>
             关闭
-          </button>
-          <button className="btn primary" disabled={busy} onClick={save}>
-            {busy ? "保存中…" : "保存并应用"}
           </button>
         </footer>
       </div>

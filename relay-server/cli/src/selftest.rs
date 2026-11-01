@@ -98,14 +98,12 @@ pub async fn run() -> Result<()> {
     std::fs::create_dir_all(&base)?;
     println!("[selftest] workdir {}", base.display());
 
-    let relay_crt =
-        pod_relay_server::cert::generate("relay", "relay.local", &["dns:relay.local".into()], &base.join("relay"))?;
-    pod_relay_server::cert::generate("host", "nas", &["dns:nas".into()], &base.join("nas"))?;
-    pod_relay_server::cert::generate("client", "phone", &["dns:phone".into()], &base.join("phone"))?;
-
-    let relay_fp = fingerprint(&relay_crt)?;
-    let nas_fp = fingerprint(&base.join("nas.crt"))?;
-    let phone_fp = fingerprint(&base.join("phone.crt"))?;
+    let nas_crt =
+        pod_relay_server::cert::generate("host", "nas", &["dns:nas".into()], &base.join("nas"))?;
+    let phone_crt =
+        pod_relay_server::cert::generate("client", "phone", &["dns:phone".into()], &base.join("phone"))?;
+    let nas_fp = fingerprint(&nas_crt)?;
+    let phone_fp = fingerprint(&phone_crt)?;
 
     let master = [3u8; 32];
     let key_b64 = {
@@ -113,18 +111,13 @@ pub async fn run() -> Result<()> {
         base64::engine::general_purpose::STANDARD.encode(master)
     };
 
+    let store_dir = base.join("store");
     let config = pod_relay_server::Config {
         listen: "127.0.0.1:0".to_string(),
-        tls: pod_relay_server::config::TlsConfig {
-            cert: base.join("relay.crt"),
-            key: base.join("relay.key"),
-        },
-        auth: pod_relay_server::config::AuthConfig {
-            host_fingerprints: vec![nas_fp],
-            client_fingerprints: vec![phone_fp],
-        },
+        public_addr: Some("127.0.0.1:0".to_string()),
+        tls: None,
         store: pod_relay_server::config::StoreConfig {
-            dir: base.join("store"),
+            dir: store_dir.clone(),
             capacity_bytes: 64 * 1024 * 1024,
             file_ttl_days: 1,
         },
@@ -133,6 +126,16 @@ pub async fn run() -> Result<()> {
     };
     let relay = pod_relay_server::Relay::bind(config).await?;
     let addr = relay.local_addr()?.to_string();
+    let relay_fp = fingerprint(&store_dir.join("certs").join("relay.crt"))?;
+    let auth_json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(store_dir.join("auth.json"))?)?;
+    let host_token = auth_json
+        .get("hostToken")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    assert!(!host_token.is_empty(), "relay should bootstrap a host token");
+    let _ = nas_fp;
     tokio::spawn(async move {
         let _ = relay.serve().await;
     });
@@ -167,9 +170,10 @@ pub async fn run() -> Result<()> {
     let agent_config = AgentConfig {
         relay: RelayEndpoint {
             addr: addr.clone(),
-            server_fingerprint: relay_fp,
+            server_fingerprint: relay_fp.clone(),
             client_cert: base.join("nas.crt"),
             client_key: base.join("nas.key"),
+            host_token: host_token.clone(),
         },
         media: MediaConfig { key_b64: key_b64.clone() },
         push: PushConfig::default(),
@@ -181,6 +185,7 @@ pub async fn run() -> Result<()> {
             server_fingerprint: agent_config.relay.server_fingerprint.clone(),
             client_cert: base.join("phone.crt"),
             client_key: base.join("phone.key"),
+            host_token: String::new(),
         },
         media: MediaConfig {
             key_b64: key_b64.clone(),
@@ -196,6 +201,8 @@ pub async fn run() -> Result<()> {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     println!("[selftest] agent status {:?}", agent.status());
+    agent.authorize_client([9u8; 16], "selftest-phone", &phone_fp);
+    tokio::time::sleep(Duration::from_millis(300)).await;
 
     let mut client = loop {
         match ClientLink::connect(&client_config).await {

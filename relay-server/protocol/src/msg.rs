@@ -8,7 +8,7 @@ pub type FileId = [u8; 16];
 
 pub const ROLE_HOST: u8 = 1;
 pub const ROLE_CLIENT: u8 = 2;
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 
 pub const HELLO: u8 = 0x01;
 pub const HELLO_OK: u8 = 0x02;
@@ -48,6 +48,10 @@ pub const LIVE_REPLY: u8 = 0x43;
 
 pub const ADMIN_STATS_REQ: u8 = 0x50;
 pub const ADMIN_STATS_OK: u8 = 0x51;
+pub const AUTHORIZE_CLIENT: u8 = 0x52;
+pub const REVOKE_CLIENT: u8 = 0x53;
+pub const RESET_CLIENTS: u8 = 0x56;
+pub const ACK: u8 = 0x57;
 
 pub mod err {
     pub const BAD_FRAME: u16 = 1;
@@ -59,6 +63,10 @@ pub mod err {
     pub const THROTTLED: u16 = 7;
     pub const INTERNAL: u16 = 8;
     pub const UPSTREAM: u16 = 9;
+    pub const INVALID_TOKEN: u16 = 10;
+    pub const TOKEN_EXPIRED: u16 = 11;
+    pub const DEVICE_REVOKED: u16 = 12;
+    pub const RATE_LIMITED: u16 = 13;
 }
 
 /// A decoded message. `req` is carried by the frame itself.
@@ -69,6 +77,7 @@ pub enum Msg {
         ver: u16,
         key_id: u64,
         caps: u32,
+        auth: Vec<u8>,
     },
     HelloOk {
         ver: u16,
@@ -226,6 +235,18 @@ pub enum Msg {
         evicted: u64,
         lib_version: i64,
     },
+    AuthorizeClient {
+        client_id: [u8; 16],
+        label: String,
+        fingerprint: String,
+    },
+    RevokeClient {
+        client_id: [u8; 16],
+    },
+    ResetClients,
+    Ack {
+        ok: bool,
+    },
 }
 
 struct Reader<'a> {
@@ -328,11 +349,13 @@ impl Msg {
                 ver,
                 key_id,
                 caps,
+                auth,
             } => {
                 w.u8(*role);
                 w.u16(*ver);
                 w.u64(*key_id);
                 w.u32(*caps);
+                w.bytes(auth);
                 HELLO
             }
             Msg::HelloOk {
@@ -601,6 +624,25 @@ impl Msg {
                 w.i64(*lib_version);
                 ADMIN_STATS_OK
             }
+            Msg::AuthorizeClient {
+                client_id,
+                label,
+                fingerprint,
+            } => {
+                w.raw(client_id);
+                w.string(label);
+                w.string(fingerprint);
+                AUTHORIZE_CLIENT
+            }
+            Msg::RevokeClient { client_id } => {
+                w.raw(client_id);
+                REVOKE_CLIENT
+            }
+            Msg::ResetClients => RESET_CLIENTS,
+            Msg::Ack { ok } => {
+                w.bool(*ok);
+                ACK
+            }
         };
         (typ, w.out)
     }
@@ -613,6 +655,7 @@ impl Msg {
                 ver: r.u16()?,
                 key_id: r.u64()?,
                 caps: r.u32()?,
+                auth: r.bytes()?,
             },
             HELLO_OK => Msg::HelloOk {
                 ver: r.u16()?,
@@ -766,6 +809,16 @@ impl Msg {
                 evicted: r.u64()?,
                 lib_version: r.i64()?,
             },
+            AUTHORIZE_CLIENT => Msg::AuthorizeClient {
+                client_id: r.array::<16>()?,
+                label: r.string()?,
+                fingerprint: r.string()?,
+            },
+            REVOKE_CLIENT => Msg::RevokeClient {
+                client_id: r.array::<16>()?,
+            },
+            RESET_CLIENTS => Msg::ResetClients,
+            ACK => Msg::Ack { ok: r.bool()? },
             other => {
                 return Err(Error::Protocol(format!("unknown message type {other:#04x}")))
             }
@@ -799,7 +852,14 @@ mod tests {
             ver: PROTOCOL_VERSION,
             key_id: 42,
             caps: 0,
+            auth: b"token".to_vec(),
         });
+        round(Msg::AuthorizeClient {
+            client_id: [1u8; 16],
+            label: "phone".into(),
+            fingerprint: "sha256/x".into(),
+        });
+        round(Msg::Ack { ok: true });
         round(Msg::LibVersionOk {
             version: 123,
             key_id: 42,
