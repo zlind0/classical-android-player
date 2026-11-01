@@ -1071,6 +1071,12 @@ fun Ios5App() {
                                 onBack = { navController.popBackStack() },
                             )
                         }
+                        composable(Ios5Routes.SETTINGS_RELAY) {
+                            com.aurora.music.ui.screens.settings.RelaySettingsScreen(
+                                contentPadding = PaddingValues(0.dp),
+                                onBack = { navController.popBackStack() },
+                            )
+                        }
                         composable(Ios5Routes.SETTINGS_PERMISSIONS) {
                             com.aurora.music.ui.screens.settings.PermissionsScreen(
                                 contentPadding = PaddingValues(0.dp),

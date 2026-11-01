@@ -5,6 +5,8 @@ mod http_server;
 mod media;
 mod meta;
 mod models;
+mod relay_backend;
+mod relay_host;
 mod scanner;
 mod util;
 
@@ -18,6 +20,8 @@ pub struct AppState {
     pub info: Arc<ServerInfo>,
     pub scan_lock: Arc<Mutex<()>>,
     pub cache_dir: PathBuf,
+    pub data_dir: PathBuf,
+    pub relay: Arc<relay_host::RelayManager>,
 }
 
 fn boxed_error(error: impl ToString) -> Box<dyn std::error::Error> {
@@ -61,11 +65,17 @@ pub fn run() {
                 cache_dir: cache_dir.clone(),
             };
 
+            let relay = relay_host::RelayManager::load(data_dir.clone(), http_state.clone());
+            let _ = relay.start_if_enabled();
+            eprintln!("[aurora] relay {}", if relay.settings().enabled { "enabled" } else { "disabled" });
+
             app.manage(AppState {
                 db: database.clone(),
                 info: info.clone(),
                 scan_lock: Arc::new(Mutex::new(())),
                 cache_dir,
+                data_dir,
+                relay,
             });
 
             let discovery = discovery::start(&info);
@@ -89,6 +99,10 @@ pub fn run() {
             commands::list_books,
             commands::library_stats,
             commands::get_server_info,
+            commands::relay_status,
+            commands::relay_apply_settings,
+            commands::relay_import_cert,
+            commands::relay_regenerate_media_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aurora Desktop");

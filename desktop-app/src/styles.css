@@ -1437,3 +1437,169 @@ input[type="range"]::-webkit-slider-thumb {
     padding: 10px 16px;
   }
 }
+
+/* ---------------------------------------------------------- public relay */
+
+.relay-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 20, 35, 0.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 80;
+  padding: 24px;
+  backdrop-filter: blur(2px);
+}
+
+.relay-card {
+  width: min(720px, 100%);
+  max-height: 88vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(20, 26, 48, 0.24);
+  padding: 22px 24px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.relay-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.relay-head h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.relay-head p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.relay-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.relay-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.relay-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.relay-grid .span-2 {
+  grid-column: 1 / -1;
+}
+
+.relay-grid input {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  font-size: 12px;
+  font-family: inherit;
+  background: #fbfcff;
+}
+
+.relay-file {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.relay-section {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.relay-section h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.relay-hint {
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.relay-key {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.relay-key code {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.relay-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.dot.ok {
+  background: #2fb67c;
+}
+
+.dot.bad {
+  background: #d95c5c;
+}
+
+.relay-meter {
+  height: 6px;
+  border-radius: 999px;
+  background: #eef1f8;
+  overflow: hidden;
+}
+
+.relay-meter > div {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+
+.relay-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 4px;
+}

@@ -20,8 +20,9 @@ import {
 import { AddRootDialog } from "./components/AddRootDialog";
 import { AudiobooksView } from "./components/AudiobooksView";
 import { BooksView } from "./components/BooksView";
-import { HeadphonesIcon, MusicIcon, BookIcon, RefreshIcon } from "./components/Icons";
+import { HeadphonesIcon, MusicIcon, BookIcon, RefreshIcon, ServerIcon } from "./components/Icons";
 import { MusicView } from "./components/MusicView";
+import { RelayPanel } from "./components/RelayPanel";
 import { PlayerBar } from "./components/Player";
 import { Sidebar } from "./components/Sidebar";
 import { currentItem, type PlayItem, type PlayerState } from "./player";
@@ -60,6 +61,7 @@ export default function App() {
   const [addError, setAddError] = useState<string | null>(null);
 
   const [player, setPlayer] = useState<PlayerState | null>(null);
+  const [showRelay, setShowRelay] = useState(false);
   const [playToken, setPlayToken] = useState(0);
 
   const showToast = useCallback((message: string) => setToast(message), []);
@@ -277,6 +279,9 @@ export default function App() {
                 扫描中 {total.total > 0 ? `${Math.min(total.scanned, total.total)} / ${total.total}` : "…"}
               </span>
             )}
+            <button className="btn ghost small" onClick={() => setShowRelay(true)}>
+              <ServerIcon width={15} height={15} /> 公网中继
+            </button>
             <button
               className="btn ghost small"
               disabled={scanning || roots.length === 0}
@@ -327,6 +332,10 @@ export default function App() {
           />
         )}
       </main>
+
+      {showRelay && (
+        <RelayPanel onClose={() => setShowRelay(false)} onToast={showToast} />
+      )}
 
       {pendingPath && (
         <AddRootDialog

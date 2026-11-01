@@ -541,6 +541,8 @@ fun SettingsTab(
                     Ios5CellDivider()
                     Ios5Cell(title = "集成", onClick = { onOpen(Ios5Routes.SETTINGS_INTEGRATIONS) })
                     Ios5CellDivider()
+                    Ios5Cell(title = "公网中继", subtitle = "PodRelay / 远程访问", onClick = { onOpen(Ios5Routes.SETTINGS_RELAY) })
+                    Ios5CellDivider()
                     Ios5Cell(title = "权限", onClick = { onOpen(Ios5Routes.SETTINGS_PERMISSIONS) })
                     Ios5CellDivider()
                     Ios5Cell(title = "关于", onClick = { onOpen(Ios5Routes.SETTINGS_ABOUT) })

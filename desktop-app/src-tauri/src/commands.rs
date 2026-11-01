@@ -171,3 +171,43 @@ pub fn get_server_info(state: State<'_, AppState>) -> serde_json::Value {
         "startedAt": info.started_at,
     })
 }
+
+// ------------------------------------------------------------- public relay
+
+#[tauri::command]
+pub fn relay_status(state: State<'_, AppState>) -> serde_json::Value {
+    state.relay.status()
+}
+
+#[tauri::command]
+pub fn relay_apply_settings(
+    state: State<'_, AppState>,
+    settings: crate::relay_host::RelaySettings,
+) -> CmdResult<serde_json::Value> {
+    state.relay.apply(settings).map_err(|err| err.to_string())?;
+    Ok(state.relay.status())
+}
+
+#[tauri::command]
+pub fn relay_import_cert(
+    state: State<'_, AppState>,
+    cert_path: String,
+    key_path: String,
+) -> CmdResult<serde_json::Value> {
+    state
+        .relay
+        .import_cert(&cert_path, &key_path)
+        .map_err(|err| err.to_string())?;
+    Ok(state.relay.status())
+}
+
+#[tauri::command]
+pub fn relay_regenerate_media_key(
+    state: State<'_, AppState>,
+) -> CmdResult<serde_json::Value> {
+    state
+        .relay
+        .regenerate_media_key()
+        .map_err(|err| err.to_string())?;
+    Ok(state.relay.status())
+}

@@ -19,7 +19,7 @@
 |---|---|---|
 | `relay-server/protocol` | `pod-relay-protocol` | 帧、消息、加解密、快照格式；服务端与 NAS 端共用 |
 | `relay-server/server` | `pod-relay-server` | TLS 监听、会话、存储、调度等服务器核心（库） |
-| `relay-server/agent` | `pod-relay-agent` | NAS 侧的连接/索引/推送逻辑，纯库，不依赖 Tauri |
+| `relay-server/agent` | `pod-relay-agent` | NAS 侧的连接/索引/推送逻辑，纯库，不依赖 Tauri（复用 server crate 的 TLS/证书辅助函数） |
 | `relay-server/cli` | `pod-relay-cli` | 唯一二进制 `relay-server`：`server` / `gencert` / `keygen` / `fingerprint` / `status` / `fetch` / `selftest` |
 
 `desktop-app/` 只通过 path 依赖引入 `pod-relay-agent` 与 `pod-relay-protocol`，
@@ -113,7 +113,7 @@ aurora/
 │   ├── protocol/                       # pod-relay-protocol
 │   │   └── src/{lib,frame,msg,crypto,snapshot,error,file_id}.rs
 │   ├── server/                         # pod-relay-server：服务器核心（库）
-│   │   └── src/{config,tls,session,store,snapshot,policy,admin}.rs
+│   │   └── src/{lib,config,cert,tls,store,snapshot,server}.rs
 │   ├── agent/                          # pod-relay-agent（NAS 侧，纯库）
 │   │   ├── src/{lib,config,client,index,snapshot,push,stats}.rs
 │   │   └── src/backend.rs              # trait LibraryBackend：由宿主实现
@@ -125,6 +125,7 @@ aurora/
 │   │   ├── Cargo.toml                  # 依赖 pod-relay-agent / pod-relay-protocol（path）
 │   │   └── src/
 │   │       ├── relay_backend.rs        # 薄适配器：实现 LibraryBackend，走 oneshot
+│   │       ├── relay_host.rs           # relay.json / media.key / 证书导入 / 启停与状态
 │   │       ├── commands.rs             # + relay 配置/状态命令
 │   │       └── lib.rs                  # 启动/停止 agent，挂到 AppState
 │   └── src/components/RelayPanel.tsx   # 设置与状态 UI
@@ -201,7 +202,7 @@ pod-relay-agent, pod-relay-protocol, tower = { features = ["util"] }   # oneshot
 | 类型 | 方向 | 载荷 |
 |---|---|---|
 | `0x10 LIB_VERSION_REQ` | C→R | 空 |
-| `0x11 LIB_VERSION_OK` | R→C | `version:i64`，`total:u64`，`chunks:u32`，`key_id:u64`，`host_online:u8` |
+| `0x11 LIB_VERSION_OK` | R→C | `version:i64`，`key_id:u64`，`plain_len:u64`，`gz_len:u64`，`chunks:u32`，`salt[8]`，`host_online:u8` |
 | `0x12 LIB_SNAPSHOT_REQ` | C→R | `version:i64`，`chunk_index:u32` |
 | `0x13 LIB_SNAPSHOT_CHUNK` | R→C | `version:i64`，`chunk_index:u32`，`total:u64`，`data` |
 | `0x14 SNAPSHOT_BEGIN` | N→R | `version:i64`，`key_id:u64`，`plain_len:u64`，`gz_len:u64`，`chunks:u32`，`salt[8]` |
@@ -227,13 +228,15 @@ pod-relay-agent, pod-relay-protocol, tower = { features = ["util"] }   # oneshot
 | `0x32 HOST_PUSH_FRAG` | N→R | `file_id[16]`，`index:u32`，`ct` |
 | `0x33 HOST_PUSH_END` | N→R | `file_id[16]`，`ok:u8` |
 | `0x35 WANT` | R→N | `file_id[16]`，`index:u32`，`priority:u8`（1=客户端直取，2=预读） |
-| `0x36 STAT_REQ` | R→N | `file_id[16]` |
+| `0x36 STAT_REQ` | R→N | `file_id[16]`（实现上复用 `0x20`，解码相同；编号保留） |
 | `0x37 STAT_OK` | N→R | 同 `0x21` |
 | `0x38 STAT_ERR` | N→R | `file_id[16]`，`code:u16` |
 | `0x30 CACHE_STATUS` | R→N | `used:u64`，`cap:u64`，`pressure:u8`（0 正常 / 1 偏高 / 2 已满） |
 | `0x39 EVICT_NOTICE` | R→N | `file_id[16]`（仅日志用） |
 
 `STAT_OK` 是代理生成 `Content-Length` 与 `Content-Type` 的唯一来源；缺失时客户端无法回 HTTP 响应。
+
+`HOST_PUSH_BEGIN` 是幂等的：中继收到同一 `file_id` 且 `total/count` 未变时，保留已缓存分片，只更新 mime/salt/key_id；只有布局变化才重建容器。因此 NAS 可以按窗口多次推送同一文件，客户端拖动进度条时不会丢已缓存的分片。
 
 ### 5.5 直通请求（懒解析）
 
@@ -320,7 +323,7 @@ k_live  = HMAC-SHA256(media_key, "pod-relay/v1/live")
 ### 7.2 媒体分片
 
 - 分片大小 `F = 256 KiB`；`count = ceil(total / F)`；`index ∈ [0, count)`。
-- `salt[8]` 每文件随机，明文出现在 `STAT_OK` / `HOST_PUSH_BEGIN`（不影响安全，仅用于 nonce 唯一性）。
+- `salt[8]` 由 `HMAC-SHA256(media_key, "salt" ‖ file_id)` 前 8 字节确定性派生，明文出现在 `STAT_OK` / `HOST_PUSH_BEGIN`。确定性派生的目的是：中继淘汰后重新推送同一文件时 nonce 不变，客户端缓存的旧分片不会因 salt 变化而失效。
 - `nonce = BE32(index) ‖ salt[8]`；`AAD = file_id ‖ BE32(index)`。
 - 密文长度：非末片 `F + 16`，末片 `(total - index·F) + 16`。因为 `total` 已知，长度可精确推算，中继无需额外记录长度。
 - 明文是"NAS 后端返回给客户端的那些字节"，即视频文件经 ffmpeg 抽出的 m4a，而不是原始视频。
@@ -364,6 +367,7 @@ relay-server fingerprint certs/relay.crt      # 打印 sha256/....（证书 DER 
 - 固定指纹的对象是**叶子证书 DER 的 SHA-256**，不用 CA、不做链校验，直接相等比较；证书换新就同时更新两端配置。
 - NAS 与 Android 把中继服务器证书指纹写进配置；中继服务器把 NAS 与各客户端的证书指纹写进白名单。
 - 中继服务器要求 `ClientAuth: RequireAnyClientCert`，在自定义校验里比对白名单，不匹配立即断开。
+- 白名单还区分角色：只有 `host_fingerprints` 里的证书可以发 `HELLO(role=NAS)`，只有 `client_fingerprints` 里的证书可以发 `HELLO(role=CLIENT)`；两者都通过 TLS 证书校验后才会进入会话。
 - 修改白名单后 `SIGHUP` 重载，已建立的会话不中断；证书文件本身不放公网服务器之外的位置。
 
 ### 8.2 密钥分发
@@ -441,8 +445,9 @@ main → 读配置 → 构建 rustls ServerConfig（mTLS + 指纹白名单）
 水位响应、状态统计）。`desktop-app/` 只做三件事：
 
 1. `src-tauri/src/relay_backend.rs`：实现 `pod_relay_agent::LibraryBackend`，把现有后端能力暴露给 agent；
-2. `src-tauri/src/lib.rs`：读配置、按开关启动/停止 `AgentHandle`，句柄挂进 `AppState`；
-3. Tauri 命令 + React 面板：配置、证书导入、密钥展示、状态展示。
+2. `src-tauri/src/relay_host.rs`：`relay.json`、`relay/media.key`、证书导入、agent 启停与状态；
+3. `src-tauri/src/lib.rs` 与 `commands.rs`：把 manager 挂进 `AppState` 并暴露 `relay_*` 命令；
+4. `src/components/RelayPanel.tsx`：配置、证书导入、密钥展示、状态展示。
 
 因此 `desktop-app/` 的改动保持在两百行以内，中继本身的演进不触碰资料库后端代码。
 
@@ -546,14 +551,15 @@ relay/nas.key       # 导入的私钥
   "enabled": true,
   "addr": "relay.example.com:21443",
   "serverFingerprint": "sha256/…",
-  "certPath": "relay/nas.crt",
-  "keyPath": "relay/nas.key",
-  "fragmentBytes": 262144,
+  "certPath": "C:\\Users\\you\\AppData\\Roaming\\com.aurora.desktop\\relay\\nas.crt",
+  "keyPath": "C:\\Users\\you\\AppData\\Roaming\\com.aurora.desktop\\relay\\nas.key",
   "readaheadFragments": 8,
   "maxInflightReads": 4,
   "snapshotPollSec": 60
 }
 ```
+
+`relay/media.key` 是 Base64 文本；首次启用时由 `relay_host.rs` 生成，面板里展示同样的内容与 `key_id`。
 
 ### 10.7 Tauri 命令与 UI
 
@@ -733,12 +739,14 @@ NAS 只需出站访问 `21443/tcp`，不需要任何入站端口，NAT 后可直
 
 - `pod-relay-protocol`：帧边界、超长帧拒绝、GCM 往返、篡改检测、快照分块与 gzip、`file_id` 向量。
 - `pod-relay-server`：内存 store 单测；`selftest` 子命令启动"假 NAS + 假客户端"，推送 10 MiB 随机文件 → 逐片取回校验；容量压到 2 MiB 触发淘汰；`pressure` 切换；NAS 掉线/重连；慢客户端被断开。
-- `pod-relay-agent`：索引重建（`music/audiobook/ebook/songart/cover/defaultart` 六类映射）、推送窗口切分、水位状态机（用假 `LibraryBackend`）。
-- `desktop-app`：`cargo build`；`relay_backend.rs` 的 stat/Range 适配对本地 router 做单测。
+- `pod-relay-agent`：索引重建（`music/audiobook/ebook/songart/cover` 五类映射）、推送窗口切分、水位状态机（用假 `LibraryBackend`）。
+- `desktop-app`：`cargo build`；`relay_backend.rs` 的 stat/Range 适配走本地 router 的 oneshot。
+- 端到端：`relay-server selftest` 用内存后端跑完整链路（快照 / STAT / 分片 / 管理统计）。
 
 ### 15.2 Android
 
-- 纯 JVM 单测：`RelayProto` 编解码、`RelayCrypto`（使用 Rust 导出的测试向量）、Range→分片映射（含 suffix range、末片、空范围）。
+- 纯 JVM 单测：`RelayProto` 帧编解码、消息解码、`file_id` 固定向量、query 编码对齐。
+- 加密与 Range 映射在端到端联调中验证（`relay-server fetch --range` 可独立比对字节）。
 - 只做编译与单测；安装、真机播放、流量观察由你本人在手机上完成（不模拟点击、不截图）。
 
 ### 15.3 端到端（本机）
@@ -787,3 +795,31 @@ NAS 只需出站访问 `21443/tcp`，不需要任何入站端口，NAT 后可直
 ## 18. 本期不做
 
 多用户/账号体系、CA/PKI、HTTP/2/QUIC、中继侧转码或缩略图、播放状态跨设备同步、自动扫描调度、在线视频播放（沿用"只共享音轨"）、CRL/OCSP、中继管理用的 HTTP 面板。
+
+---
+
+## 19. 实现状态
+
+本方案已落地为可编译、可自测的代码，仓库内对应关系：
+
+| 组件 | 位置 | 验证方式 |
+|---|---|---|
+| 协议 / 加密 / 快照格式 | `relay-server/protocol` | `cargo test -p pod-relay-protocol` |
+| 公网服务器 | `relay-server/server` + `relay-server/cli` | `cargo run -p pod-relay-cli -- selftest` |
+| NAS agent | `relay-server/agent` | 与上一条同一套 selftest；在桌面端进程内运行 |
+| 桌面端适配与面板 | `desktop-app/src-tauri/src/relay_backend.rs`、`relay_host.rs`、`desktop-app/src/components/RelayPanel.tsx` | `cargo check`（`desktop-app/src-tauri`）、`npm run build` |
+| Android 客户端 | `app/src/main/java/com/aurora/music/data/relay/*`、`ui/screens/settings/RelaySettingsScreen.kt` | `./gradlew :app:compileDebugKotlin`、`./gradlew :app:testDebugUnitTest --tests 'com.aurora.music.data.relay.*'` |
+
+常用命令：
+
+```bash
+cd relay-server
+cargo test                       # 协议单测
+cargo run -p pod-relay-cli -- selftest   # 中继 + agent + 客户端完整链路
+cargo build --release -p pod-relay-cli    # 产物 target/release/relay-server
+```
+
+第一次部署：`relay-server gencert` 生成三对证书 → 把 `nas.crt/nas.key` 导入桌面端面板 →
+面板复制 `media_key` → 手机端填写地址、指纹、证书、私钥、`media_key`。
+
+已知限制与后续项见 §17、§18；`relay-server/tmp/` 是自测产物目录，已加入 `.gitignore`。

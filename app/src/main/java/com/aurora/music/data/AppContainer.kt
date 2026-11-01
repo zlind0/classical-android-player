@@ -123,11 +123,16 @@ class AppContainer(context: Context) {
     val remoteMediaCache = com.aurora.music.data.cast.RemoteMediaCache.also { it.init(appContext) }
     // 用户显式“下载”的远程条目：独立于边播边缓存，永不被播放窗口清理。
     val remoteDownloads = com.aurora.music.data.cast.RemoteDownloadManager(appContext)
+    // 公网中继（PodRelay）：本机回环 HTTP 代理 + 加密分片解密；
+    // 对外表现为同一台 NAS 的另一个端点，同步/播放/下载逻辑不区分传输方式。
+    val relayService = com.aurora.music.data.relay.RelayService(appContext).also { it.start() }
+
     val remoteLibrary = com.aurora.music.data.cast.RemoteLibraryManager(
         appContext,
         castDiscovery,
         ebookRecentLimit = { ebookPrefs.recentLimit.value },
         downloads = remoteDownloads,
+        relay = relayService,
     )
 
     val ebookCast = com.aurora.music.data.ebook.EbookCastController(

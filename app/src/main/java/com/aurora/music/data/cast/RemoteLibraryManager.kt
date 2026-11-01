@@ -54,6 +54,8 @@ class RemoteLibraryManager(
     private val discovery: CastDiscovery,
     private val ebookRecentLimit: () -> Int,
     private val downloads: RemoteDownloadManager,
+    /** 公网中继；未启用时为 null。它对外表现为同一台设备的另一个端点。 */
+    private val relay: com.aurora.music.data.relay.RelayService? = null,
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -184,7 +186,24 @@ class RemoteLibraryManager(
                             lastSeen = it.lastSeenAt,
                         )
                     }
-                (discovered + known).distinctBy { it.id }.forEach { syncDevice(it) }
+                // 同一台设备可能有多个端点：局域网优先，其次上次地址，最后本机中继代理。
+                val relayDevice = relay?.endpoint()?.let {
+                    CastDevice(
+                        id = it.deviceId,
+                        name = it.deviceName,
+                        host = it.host,
+                        port = it.port,
+                        source = "relay",
+                    )
+                }
+                val grouped = LinkedHashMap<String, MutableList<CastDevice>>()
+                (discovered + known).forEach { device ->
+                    grouped.getOrPut(device.id) { mutableListOf() }.add(device)
+                }
+                if (relayDevice != null) {
+                    grouped.getOrPut(relayDevice.id) { mutableListOf() }.add(relayDevice)
+                }
+                grouped.values.forEach { endpoints -> syncDevice(endpoints) }
             } catch (t: Throwable) {
                 // 单轮同步异常不能把常驻循环打死，否则会永久看不到对端。
                 android.util.Log.w("AuroraRemoteLibrary", "sync loop error", t)
@@ -194,30 +213,42 @@ class RemoteLibraryManager(
         }
     }
 
-    private suspend fun syncDevice(device: CastDevice) {
+    private suspend fun syncDevice(endpoints: List<CastDevice>) {
         // 先问轻量版本：时间戳没变就直接复用磁盘上的完整快照，不拉全量 meta。
-        val versionResult = fetchVersion(device)
-        if (versionResult == null) {
-            markOffline(device.id)
+        // 依次尝试每个端点，第一个成功的成为本轮通信地址。
+        val deviceId = endpoints.first().id
+        var device: CastDevice? = null
+        var versionResult: Pair<Boolean, Long>? = null
+        for (candidate in endpoints) {
+            val result = fetchVersion(candidate)
+            if (result != null) {
+                device = candidate
+                versionResult = result
+                break
+            }
+        }
+        val endpoint = device
+        if (endpoint == null || versionResult == null) {
+            markOffline(deviceId)
             return
         }
-        val cached = payloads[device.id]
+        val cached = payloads[endpoint.id]
         if (versionResult.first && cached != null &&
             cached.payload.libraryUpdatedAt > 0L &&
             cached.payload.libraryUpdatedAt == versionResult.second
         ) {
             // 版本一致：只刷新在线状态和最后连接时间，meta 不发。
             val now = System.currentTimeMillis()
-            val sameEndpoint = cached.host == device.host && cached.port == device.port
+            val sameEndpoint = cached.host == endpoint.host && cached.port == endpoint.port
             val wasOnline = cached.online && sameEndpoint
             val updated = cached.copy(
-                deviceName = device.name,
-                host = device.host,
-                port = device.port,
+                deviceName = endpoint.name,
+                host = endpoint.host,
+                port = endpoint.port,
                 online = true,
                 lastSeenAt = now,
             )
-            payloads[device.id] = updated
+            payloads[endpoint.id] = updated
             // lastSeen 每 15 秒写一次盘没必要；一小时落一次足够判断 30 天过期。
             if (!sameEndpoint || now - cached.lastSeenAt > LAST_SEEN_SAVE_INTERVAL_MS) {
                 RemoteLibraryDb.updateMeta(storeDir, updated)
@@ -229,7 +260,7 @@ class RemoteLibraryManager(
         val json = withContext(Dispatchers.IO) {
             runCatching {
                 val req = Request.Builder()
-                    .url("${device.baseUrl}/library/all?t=${System.currentTimeMillis()}")
+                    .url("${endpoint.baseUrl}/library/all?t=${System.currentTimeMillis()}")
                     .header("X-Aurora-Device", "1")
                     .get()
                     .build()
@@ -242,21 +273,21 @@ class RemoteLibraryManager(
             runCatching { gson.fromJson(it, RemoteLibraryWire::class.java) }.getOrNull()
         }
         if (wire == null) {
-            markOffline(device.id)
+            markOffline(endpoint.id)
             return
         }
         val now = System.currentTimeMillis()
         val fresh = RemoteLibrarySnapshot(
-            deviceId = device.id,
-            deviceName = device.name,
-            host = device.host,
-            port = device.port,
+            deviceId = endpoint.id,
+            deviceName = endpoint.name,
+            host = endpoint.host,
+            port = endpoint.port,
             fetchedAt = now,
             lastSeenAt = now,
-            payload = wire.copy(deviceId = device.id, deviceName = device.name),
+            payload = wire.copy(deviceId = endpoint.id, deviceName = endpoint.name),
             online = true,
         )
-        payloads[device.id] = fresh
+        payloads[endpoint.id] = fresh
         persistPayload(fresh)
         rebuildLibraries()
         scope.launch { prefetchArtwork(fresh); rebuildLibraries() }

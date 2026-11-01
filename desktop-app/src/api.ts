@@ -113,6 +113,36 @@ export interface ServerInfo {
   startedAt: number;
 }
 
+export interface RelaySettings {
+  enabled: boolean;
+  addr: string;
+  serverFingerprint: string;
+  certPath: string;
+  keyPath: string;
+  readaheadFragments: number;
+  maxInflightReads: number;
+  snapshotPollSec: number;
+}
+
+export interface RelayAgentStatus {
+  connected: boolean;
+  hostOnline: boolean;
+  libVersion: number;
+  storeUsed: number;
+  storeCap: number;
+  sessionId: number;
+  keyId: number;
+  lastSyncMs: number;
+  lastError: string | null;
+}
+
+export interface RelayStatus {
+  settings: RelaySettings;
+  mediaKey: string;
+  keyId: number;
+  agent: RelayAgentStatus | null;
+}
+
 export interface ScanProgress {
   rootId: number;
   rootName: string;
@@ -155,6 +185,12 @@ export const api = {
   listAudiobooks: () => invoke<AudiobookDto[]>("list_audiobooks"),
   listBooks: () => invoke<BookDto[]>("list_books"),
   libraryStats: () => invoke<LibraryStats>("library_stats"),
+  relayStatus: () => invoke<RelayStatus>("relay_status"),
+  relayApplySettings: (settings: RelaySettings) =>
+    invoke<RelayStatus>("relay_apply_settings", { settings }),
+  relayImportCert: (certPath: string, keyPath: string) =>
+    invoke<RelayStatus>("relay_import_cert", { certPath, keyPath }),
+  relayRegenerateKey: () => invoke<RelayStatus>("relay_regenerate_media_key"),
 };
 
 export function onScanProgress(handler: (progress: ScanProgress) => void): Promise<UnlistenFn> {
