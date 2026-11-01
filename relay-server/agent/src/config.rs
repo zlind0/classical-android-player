@@ -101,3 +101,17 @@ pub fn generate_media_key() -> (String, u64) {
     let encoded = base64::engine::general_purpose::STANDARD.encode(key);
     (encoded, pod_relay_protocol::crypto::key_id(&key))
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn example_agent_config_parses() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("agent.json.example");
+        let text = std::fs::read_to_string(path).expect("agent.json.example exists");
+        let config: super::AgentConfig = serde_json::from_str(&text).expect("must parse");
+        assert_eq!(config.push.readahead_fragments, 8);
+        assert_eq!(config.snapshot.poll_sec, 60);
+    }
+}

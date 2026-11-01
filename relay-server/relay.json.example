@@ -1,0 +1,21 @@
+{
+  "listen": "0.0.0.0:21443",
+  "publicAddr": "relay.example.com:21443",
+  "store": {
+    "dir": "/var/lib/pod-relay/store",
+    "capacityBytes": 21474836480,
+    "fileTtlDays": 14
+  },
+  "limits": {
+    "maxFrame": 4194304,
+    "maxSessions": 8,
+    "sessionIdleSec": 90,
+    "wantPerSec": 40,
+    "inflightPerClient": 32,
+    "inflightGlobal": 128
+  },
+  "watermark": {
+    "high": 0.85,
+    "full": 0.98
+  }
+}

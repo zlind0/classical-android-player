@@ -762,6 +762,8 @@ Range → 分片：
 
 ### 13.1 中继服务器 `relay.json`
 
+完整示例文件：`relay-server/relay.json.example`（单元测试会校验它始终能解析）。
+
 ```json
 {
   "listen": "0.0.0.0:21443",

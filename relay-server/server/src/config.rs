@@ -125,3 +125,18 @@ impl Config {
         Ok(config)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn example_config_parses() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("relay.json.example");
+        let config = super::Config::load(&path).expect("relay.json.example must parse");
+        assert_eq!(config.listen, "0.0.0.0:21443");
+        assert_eq!(config.public_addr.as_deref(), Some("relay.example.com:21443"));
+        assert_eq!(config.store.capacity_bytes, 20 * 1024 * 1024 * 1024);
+        assert!(config.tls.is_none());
+    }
+}

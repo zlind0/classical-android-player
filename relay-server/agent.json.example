@@ -1,0 +1,19 @@
+{
+  "relay": {
+    "addr": "relay.example.com:21443",
+    "serverFingerprint": "sha256/REPLACE_WITH_RELAY_FINGERPRINT",
+    "clientCert": "/etc/pod-relay/nas.crt",
+    "clientKey": "/etc/pod-relay/nas.key",
+    "hostToken": ""
+  },
+  "media": {
+    "keyB64": "REPLACE_WITH_32_BYTE_BASE64_MEDIA_KEY"
+  },
+  "push": {
+    "readaheadFragments": 8,
+    "maxInflightReads": 4
+  },
+  "snapshot": {
+    "pollSec": 60
+  }
+}
