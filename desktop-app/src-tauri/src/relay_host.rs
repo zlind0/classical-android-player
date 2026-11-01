@@ -306,6 +306,13 @@ impl RelayManager {
         Ok(serde_json::to_value(start)?)
     }
 
+    pub fn start_remote_pairing(&self, label: &str, ttl_minutes: u64) -> Result<Value> {
+        let start = self
+            .pairing
+            .start_remote(label, ttl_minutes.saturating_mul(60))?;
+        Ok(serde_json::to_value(start)?)
+    }
+
     pub fn cancel_pairing(&self) {
         self.pairing.cancel();
     }

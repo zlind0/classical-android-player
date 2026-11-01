@@ -212,6 +212,18 @@ pub fn relay_start_pairing(
 }
 
 #[tauri::command]
+pub fn relay_start_remote_pairing(
+    state: State<'_, AppState>,
+    label: String,
+    ttl_minutes: u64,
+) -> CmdResult<serde_json::Value> {
+    state
+        .relay
+        .start_remote_pairing(&label, ttl_minutes)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 pub fn relay_cancel_pairing(state: State<'_, AppState>) {
     state.relay.cancel_pairing();
 }

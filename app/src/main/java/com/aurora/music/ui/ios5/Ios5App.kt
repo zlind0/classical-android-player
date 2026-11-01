@@ -678,6 +678,7 @@ fun Ios5App() {
                                 remoteLibraries = browsingRemoteLibraries,
                                 remoteRecents = browsingRemoteAbookRecents,
                                 onPlayRemoteBook = { playRemoteAudiobook(it) },
+                                player = playerState,
                             )
                         }
                         composable(

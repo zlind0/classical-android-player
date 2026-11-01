@@ -57,6 +57,15 @@ val LocalIos5SwipeReveal = compositionLocalOf { 0f }
 /** 当前行的下载状态（由 [Ios5SwipeRow] 提供给状态图标）。 */
 val LocalRemoteDownloadState = compositionLocalOf { RemoteDownloadUi() }
 
+/** 当前条目是否通过公网中继访问；true 时用云图标代替局域网 Wi-Fi 图标。 */
+val LocalRemoteRelay = compositionLocalOf { false }
+
+/**
+ * 当前条目“正在打开/缓冲”的进度（0..1），null 表示没有打开动作。
+ * 中继云图标用它做顺时针上色；下载进度仍然统一使用圆环。
+ */
+val LocalRemoteOpenProgress = compositionLocalOf<Float?> { null }
+
 /**
  * 当前远端条目是否可用（设备在线，或条目本身已下载）。
  * 行组件读取它来变灰并禁止点击；默认 true，本地条目不受影响。
@@ -64,30 +73,42 @@ val LocalRemoteDownloadState = compositionLocalOf { RemoteDownloadUi() }
 val LocalRemoteAvailable = compositionLocalOf { true }
 
 /**
- * 远程条目的左侧状态图标：未下载 = WiFi，下载中 = 进度环，已下载 = 蓝色勾。
+ * 远程条目的左侧状态图标：
+ * - 局域网：未下载 = 深色 iOS5 Wi-Fi，下载中 = 进度环，已下载 = 蓝色勾；
+ * - 公网中继：浅色空心云，下载中按顺时针把线框染深，完成后整朵云为深色线框。
  * 右滑时会淡出，把位置让给蓝色下载按钮。
  */
 @Composable
 fun Ios5RemoteStatusIcon(modifier: Modifier = Modifier) {
     val state = LocalRemoteDownloadState.current
+    val relay = LocalRemoteRelay.current
+    val openProgress = LocalRemoteOpenProgress.current
     val reveal = LocalIos5SwipeReveal.current
     val a = (1f - reveal).coerceIn(0f, 1f)
-    when (state.status) {
-        RemoteDownloadStatus.DOWNLOADED -> Icon(
-            Icons.Filled.Check,
-            "已下载",
-            tint = Ios5Colors.IosBlue,
-            modifier = modifier.size(16.dp).alpha(a),
-        )
-
-        RemoteDownloadStatus.DOWNLOADING -> Ios5DownloadRing(
+    when {
+        // 用户显式下载：无论局域网还是中继，都用统一的圆环进度。
+        state.status == RemoteDownloadStatus.DOWNLOADING -> Ios5DownloadRing(
             progress = state.progress,
             diameter = 16.dp,
             color = Ios5Colors.IosBlue,
             modifier = modifier.alpha(a),
         )
 
-        RemoteDownloadStatus.IDLE -> Ios5WifiIcon(modifier.alpha(a))
+        state.status == RemoteDownloadStatus.DOWNLOADED -> Icon(
+            Icons.Filled.Check,
+            "已下载",
+            tint = Ios5Colors.IosBlue,
+            modifier = modifier.size(16.dp).alpha(a),
+        )
+
+        // 中继：空闲是浅色空心云；点击打开文件后按缓冲进度顺时针染深。
+        relay -> Ios5CloudIcon(
+            progress = openProgress ?: 0f,
+            completed = (openProgress ?: 0f) >= 1f,
+            modifier = modifier.alpha(a),
+        )
+
+        else -> Ios5WifiIcon(modifier.alpha(a))
     }
 }
 
@@ -264,12 +285,14 @@ fun RemoteDownloadSwipeRow(
     content: @Composable () -> Unit,
 ) {
     val context = LocalContext.current
-    val downloads = (context.applicationContext as AuroraApplication).container.remoteDownloads
+    val container = (context.applicationContext as AuroraApplication).container
+    val downloads = container.remoteDownloads
     val all by downloads.ui.collectAsStateWithLifecycle()
     val state = all[downloads.stateKey(kind, deviceId, remoteKey)] ?: RemoteDownloadUi()
+    val relay = container.remoteLibrary.isRelayDevice(deviceId)
     // 设备离线时未下载的条目变灰禁点；已下载条目仍可离线使用/删除。
     val enabled = remoteOnline || state.status == RemoteDownloadStatus.DOWNLOADED
-    CompositionLocalProvider(LocalRemoteAvailable provides enabled) {
+    CompositionLocalProvider(LocalRemoteAvailable provides enabled, LocalRemoteRelay provides relay) {
         Ios5SwipeRow(
             state = state,
             onDownload = onDownload,

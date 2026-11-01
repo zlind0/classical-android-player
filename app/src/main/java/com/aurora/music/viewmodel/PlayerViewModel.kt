@@ -65,6 +65,10 @@ data class PlayerUiState(
     val abookId: String? = null,
     val abookSpeed: Float = 1f,
     val abookGain: Float = 1f,
+    /** 当前曲目是否正在等待首批数据（远程中继时用于云图标缓冲反馈）。 */
+    val isBuffering: Boolean = false,
+    /** 已缓冲比例；未知时保持 0，由 UI 做渐进动画。 */
+    val bufferProgress: Float = 0f,
 ) {
     val durationSec: Int get() = current.durationSec
     val progress: Float get() = if (durationSec == 0) 0f else (positionSec / durationSec).coerceIn(0f, 1f)
@@ -579,7 +583,20 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             nowMs = nowMs,
         ) ?: return null
         lastPosition = next
-        _state.update { it.copy(positionSec = (next.positionMs / 1000f).coerceAtLeast(0f)) }
+        val buffering = c?.playbackState == androidx.media3.common.Player.STATE_BUFFERING
+        val duration = c?.duration ?: 0L
+        val buffered = if (duration > 0L && c != null) {
+            (c.bufferedPosition.toFloat() / duration).coerceIn(0f, 1f)
+        } else {
+            0f
+        }
+        _state.update {
+            it.copy(
+                positionSec = (next.positionMs / 1000f).coerceAtLeast(0f),
+                isBuffering = buffering,
+                bufferProgress = buffered,
+            )
+        }
         return next
     }
 

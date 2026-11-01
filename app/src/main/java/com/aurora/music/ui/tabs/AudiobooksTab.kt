@@ -29,8 +29,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.cast.RemoteDownloadKind
+import androidx.compose.runtime.CompositionLocalProvider
 import com.aurora.music.ui.components.Artwork
+import com.aurora.music.ui.components.LocalRemoteOpenProgress
 import com.aurora.music.ui.components.RemoteDownloadSwipeRow
+import com.aurora.music.viewmodel.PlayerUiState
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5Empty
 import com.aurora.music.ui.ios5.Ios5NavBar
@@ -46,6 +49,7 @@ fun AudiobooksTab(
     remoteLibraries: List<com.aurora.music.data.cast.RemoteDeviceLibrary> = emptyList(),
     remoteRecents: List<com.aurora.music.data.cast.RemoteAudiobookEntry> = emptyList(),
     onPlayRemoteBook: (com.aurora.music.data.cast.RemoteAudiobookEntry) -> Unit = {},
+    player: PlayerUiState? = null,
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val books by container.audiobookStore.books.collectAsStateWithLifecycle()
@@ -92,14 +96,20 @@ fun AudiobooksTab(
                             }
                         },
                     ) {
-                        AudiobookRow(
-                            title = b.displayTitle,
-                            subtitle = bookSubtitle(b.chapters.size, b.currentIndex, 0f, 0, played = true),
-                            coverPath = b.coverUrl,
-                            accentKey = b.key,
-                            remote = true,
-                            onClick = { onPlayRemoteBook(b) },
-                        )
+                        CompositionLocalProvider(
+                            LocalRemoteOpenProgress provides abookOpenProgress(
+                                container.remoteLibrary, b, player,
+                            ),
+                        ) {
+                            AudiobookRow(
+                                title = b.displayTitle,
+                                subtitle = bookSubtitle(b.chapters.size, b.currentIndex, 0f, 0, played = true),
+                                coverPath = b.coverUrl,
+                                accentKey = b.key,
+                                remote = true,
+                                onClick = { onPlayRemoteBook(b) },
+                            )
+                        }
                     }
                 }
             }
@@ -147,14 +157,20 @@ fun AudiobooksTab(
                             )
                         },
                     ) {
-                        AudiobookRow(
-                            title = entry.displayTitle,
-                            subtitle = bookSubtitle(entry.chapters.size, entry.currentIndex, 0f, 0, played = entry.lastPlayedAt > 0),
-                            coverPath = entry.coverUrl,
-                            accentKey = entry.key,
-                            remote = true,
-                            onClick = { onPlayRemoteBook(entry) },
-                        )
+                        CompositionLocalProvider(
+                            LocalRemoteOpenProgress provides abookOpenProgress(
+                                container.remoteLibrary, entry, player,
+                            ),
+                        ) {
+                            AudiobookRow(
+                                title = entry.displayTitle,
+                                subtitle = bookSubtitle(entry.chapters.size, entry.currentIndex, 0f, 0, played = entry.lastPlayedAt > 0),
+                                coverPath = entry.coverUrl,
+                                accentKey = entry.key,
+                                remote = true,
+                                onClick = { onPlayRemoteBook(entry) },
+                            )
+                        }
                     }
                 }
             }
@@ -163,6 +179,17 @@ fun AudiobooksTab(
             }
         }
     }
+}
+
+/** 点击远程有声书后，当前书正在等待首批数据时给云图标一个渐进缓冲。 */
+private fun abookOpenProgress(
+    manager: com.aurora.music.data.cast.RemoteLibraryManager,
+    entry: com.aurora.music.data.cast.RemoteAudiobookEntry,
+    player: PlayerUiState?,
+): Float? {
+    if (player == null) return null
+    if (player.abookId != manager.abookPlayId(entry)) return null
+    return if (player.isBuffering) 0.9f else 1f
 }
 
 internal fun bookSubtitle(chapters: Int, currentIndex: Int, pct: Float, skipped: Int, played: Boolean = false): String {

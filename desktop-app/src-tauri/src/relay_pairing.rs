@@ -45,6 +45,31 @@ pub struct PairStart {
     pub expires_at: i64,
 }
 
+/// Remote pairing is a self-contained string: the phone can import it without
+/// sharing a LAN with the NAS. The payload is gzip-compressed JSON encoded as
+/// URL-safe base64, so it survives chat apps and QR scanners unchanged.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemotePairStart {
+    pub code: String,
+    pub label: String,
+    pub expires_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteBundle {
+    version: u8,
+    relay: RelayInfo,
+    key_id: u64,
+    media_key_b64: String,
+    cert_pem: String,
+    key_pem: String,
+    device_id: String,
+    device_name: String,
+    expires_at: i64,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairRequest {
@@ -166,6 +191,59 @@ impl PairingState {
         Ok(PairStart {
             uri,
             svg,
+            label,
+            expires_at,
+        })
+    }
+
+    /// Creates a LAN-free pairing bundle. Unlike [start], there is no second
+    /// HTTP step: the returned string already contains the client certificate,
+    /// private key, relay pin and media key. The TTL is embedded in the bundle
+    /// and checked by the phone when it is imported.
+    pub fn start_remote(&self, label: &str, ttl_seconds: u64) -> Result<RemotePairStart> {
+        let context = self.context();
+        if context.relay_addr.is_empty() || context.relay_fingerprint.is_empty() {
+            return Err(anyhow!("中继尚未配置完成"));
+        }
+        let label = if label.trim().is_empty() {
+            "Aurora 手机".to_string()
+        } else {
+            label.trim().to_string()
+        };
+        let (cert_pem, key_pem, fingerprint) =
+            pod_relay_server::cert::generate_pem(&format!("aurora-{}", random_token()))?;
+        let ttl = ttl_seconds.clamp(60, 7 * 24 * 60 * 60);
+        let expires_at = now_ms() + ttl as i64 * 1000;
+        let bundle = RemoteBundle {
+            version: 2,
+            relay: RelayInfo {
+                addr: context.relay_addr.clone(),
+                fingerprint: context.relay_fingerprint.clone(),
+            },
+            key_id: context.key_id,
+            media_key_b64: context.media_key_b64.clone(),
+            cert_pem: cert_pem.clone(),
+            key_pem: key_pem.clone(),
+            device_id: context.device_id.clone(),
+            device_name: context.device_name.clone(),
+            expires_at,
+        };
+        let json = serde_json::to_vec(&bundle)?;
+        let mut encoder =
+            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        std::io::Write::write_all(&mut encoder, &json)?;
+        let gz = encoder.finish()?;
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(gz);
+        let code = format!("podrelay://remote?v=1&d={encoded}");
+        let _ = self.events.send(PairOutcome {
+            client_id: random_client_id(),
+            label: label.clone(),
+            fingerprint,
+        });
+        eprintln!("[pod-relay] device paired remotely: {label} (ttl {ttl}s)");
+        Ok(RemotePairStart {
+            code,
             label,
             expires_at,
         })

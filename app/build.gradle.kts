@@ -152,6 +152,12 @@ dependencies {
     implementation(libs.glance.appwidget)
     implementation(libs.glance.material3)
     implementation(libs.jaudiotagger)
+    // 内置二维码扫描器（配对页）：CameraX 预览 + ZXing 解码，不依赖系统相机或 GMS。
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.zxing.core)
     // 内置微软离线 TTS（电子书听书默认引擎）：client-sdk Java 绑定 + jniLibs 下的
     // embedded tts runtime；azure-core 仅在线鉴权用，离线用不到，排除以保 minSdk 24 可 dex
     implementation(libs.msspeech) { exclude(group = "com.azure") }

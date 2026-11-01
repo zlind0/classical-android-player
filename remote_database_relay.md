@@ -449,7 +449,35 @@ Content-Type: application/json
 
 为什么可以这样：现有局域网协议本身就是明文 HTTP，安全边界是"可信局域网"；配对只在这个边界内发生。二维码即使被同一局域网的人扫到，也只能拿到一次配对机会；NAS 端有 TTL、单次使用与随时撤销，默认不弹确认（扫码即加入）。
 
-### 8.4 撤销、换证书与换密钥
+### 8.4 远程配对：自带凭据的字符串
+
+局域网配对要求手机与 NAS 同网；远程配对把同一份配对响应直接打包进字符串，手机跨网络粘贴即可：
+
+```
+podrelay://remote?v=1&d=<base64url(gzip(json))>
+```
+
+JSON 字段与 `/relay/pair` 的响应一致，额外带 `expiresAt`：
+
+```json
+{
+  "version": 2,
+  "relay": { "addr": "relay.example.com:21443", "fingerprint": "sha256/…" },
+  "keyId": 123456789,
+  "mediaKeyB64": "…",
+  "certPem": "-----BEGIN CERTIFICATE-----…",
+  "keyPem": "-----BEGIN PRIVATE KEY-----…",
+  "deviceId": "…",
+  "deviceName": "Aurora NAS",
+  "expiresAt": 1730000600000
+}
+```
+
+- 桌面端「添加设备 → 远程配对」可自选有效期（分钟），生成后立即把客户端指纹登记到 NAS，手机导入前会校验 `expiresAt`。
+- 字符串包含私钥，等同于一次性的设备凭据；不要发到公开群组，过期后请重新生成。
+- 手机端「设置 → 公网中继 → 配对」可直接粘贴，也可以用内置二维码扫描器读取（二维码内容就是这整段字符串）。
+
+### 8.5 撤销、换证书与换密钥
 
 **撤销单台设备**：面板设备列表 → 撤销 → NAS 从本地登记表删除，并向 relay 发 `REVOKE_CLIENT`。手机重连时 TLS 仍能完成（relay 接受任意客户端证书），但 `HELLO` 授权失败，收到 `ERROR device_revoked`，App 清空中继配置并提示重新配对。
 
@@ -459,7 +487,7 @@ Content-Type: application/json
 
 **更换媒体密钥**：面板「重置端到端加密」→ 明确警告：**relay 上已缓存的加密分片、NAS 上已推送的快照、所有手机的中继配置全部作废，需要重新配对**。确认后生成新 `media_key`，relay 在 host 重连时发现 `HELLO.key_id` 变化，删除全部 fragment 与 snapshot。建议同时撤销全部设备。
 
-### 8.5 为什么不是"证书不上 relay"
+### 8.6 为什么不是"证书不上 relay"
 
 relay 上现在只有**它自己的**证书与私钥，以及"哪些端点指纹已授权"这份列表。前者是任何 TLS 服务端都必须持有的身份；后者是公开信息的散列，且由 NAS 动态登记，用户不再手工维护。端点的私钥从未离开 NAS 或手机，因此 relay 既不能冒充 NAS，也不能解密内容。
 
@@ -660,7 +688,8 @@ relay/devices.json    # 本机记录的已配对设备（client_id/label/指纹/
 | `relay_apply_bootstrap` | 解析 `podrelay://relay?...` 引导串，写入地址/指纹/host token 并重连 |
 | `relay_apply_settings` | 高级模式下手动保存配置 |
 | `relay_start_pairing` | 生成 pairing token、手机证书，返回二维码 SVG 与过期时间 |
-| `relay_cancel_pairing` | 作废当前配对码 |
+| `relay_start_remote_pairing` | 生成 gzip+Base64 远程配对字符串，可指定有效期（分钟） |
+| `relay_cancel_pairing` | 作废当前配对码/隐藏远程配对码 |
 | `relay_revoke_device` | 撤销单台设备（同步 `REVOKE_CLIENT` 到 relay） |
 | `relay_reset_identity` | 重新生成 NAS 证书并用 host token 重新绑定（不影响已配对设备） |
 | `relay_reset_encryption` | 换 `media_key` 并撤销全部设备（强警告：全部缓存作废） |

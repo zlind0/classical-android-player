@@ -155,6 +155,8 @@ data class RemoteDeviceLibrary(
     val audiobooks: List<RemoteAudiobookWire> = emptyList(),
     /** 这台设备是否有用户显式下载的条目；离线时也要保留在 UI 里。 */
     val hasDownloads: Boolean = false,
+    /** 最近一次同步是否经过公网中继（本机回环代理），而不是局域网直连。 */
+    val relay: Boolean = false,
 ) {
     val baseUrl: String get() = "http://$host:$port"
     val hasMusic: Boolean get() = songs.isNotEmpty()

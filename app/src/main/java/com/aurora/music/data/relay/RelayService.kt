@@ -152,25 +152,41 @@ class RelayService(context: Context) {
      * 返回 false 表示不是配对码。
      */
     fun acceptPairUri(raw: String?): Boolean {
+        if (RelayRemotePairing.looksLike(raw)) {
+            scope.launch {
+                _pairState.value = PairState.Joining
+                runCatching { RelayRemotePairing.decode(raw) }
+                    .onSuccess { credentials ->
+                        applyCredentials(
+                            addr = credentials.relayAddr,
+                            fingerprint = credentials.relayFingerprint,
+                            certPem = credentials.certPem,
+                            keyPem = credentials.keyPem,
+                            mediaKey = credentials.mediaKeyB64,
+                        )
+                        _pairState.value = PairState.Joined(
+                            credentials.deviceName.ifBlank { "公网中继" },
+                        )
+                    }
+                    .onFailure { error ->
+                        _pairState.value = PairState.Failed(error.message ?: "配对失败")
+                    }
+            }
+            return true
+        }
         val uri = RelayPairUri.parse(raw) ?: return false
         scope.launch {
             _pairState.value = PairState.Joining
             val deviceName = android.os.Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android"
             runCatching { RelayPairing.fetch(uri, deviceName) }
                 .onSuccess { credentials ->
-                    val current = config.current
-                    config.save(
-                        current.copy(
-                            enabled = true,
-                            addr = credentials.relayAddr,
-                            fingerprint = credentials.relayFingerprint,
-                            certPem = credentials.certPem,
-                            keyPem = credentials.keyPem,
-                            mediaKey = credentials.mediaKeyB64,
-                        ),
+                    applyCredentials(
+                        addr = credentials.relayAddr,
+                        fingerprint = credentials.relayFingerprint,
+                        certPem = credentials.certPem,
+                        keyPem = credentials.keyPem,
+                        mediaKey = credentials.mediaKeyB64,
                     )
-                    store.clearSnapshot()
-                    restart()
                     _pairState.value = PairState.Joined(credentials.deviceName)
                 }
                 .onFailure { error ->
@@ -178,6 +194,28 @@ class RelayService(context: Context) {
                 }
         }
         return true
+    }
+
+    private fun applyCredentials(
+        addr: String,
+        fingerprint: String,
+        certPem: String,
+        keyPem: String,
+        mediaKey: String,
+    ) {
+        val current = config.current
+        config.save(
+            current.copy(
+                enabled = true,
+                addr = addr,
+                fingerprint = fingerprint,
+                certPem = certPem,
+                keyPem = keyPem,
+                mediaKey = mediaKey,
+            ),
+        )
+        store.clearSnapshot()
+        restart()
     }
 
     fun clearPairState() {

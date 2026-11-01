@@ -98,8 +98,28 @@ class RemoteLibraryManager(
     private val _abookPlays = MutableStateFlow<Map<String, RemoteAbookPlay>>(emptyMap())
     val abookPlays: StateFlow<Map<String, RemoteAbookPlay>> = _abookPlays.asStateFlow()
 
+    /**
+     * 用户点击打开远程文件时的缓冲进度：key = `ebook|deviceId|path`。
+     * 目前只有电子书需要整本取回后才能打开；音乐/有声书的缓冲由播放器状态驱动。
+     */
+    private val _openProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
+    val openProgress: StateFlow<Map<String, Float>> = _openProgress.asStateFlow()
+
+    fun ebookOpenKey(deviceId: String, path: String): String = "ebook|$deviceId|$path"
+
+    private fun setOpenProgress(key: String, progress: Float) {
+        _openProgress.value = _openProgress.value + (key to progress.coerceIn(0f, 1f))
+    }
+
+    private fun clearOpenProgress(key: String) {
+        _openProgress.value = _openProgress.value - key
+    }
+
     /** 每一台设备的最近一次快照（含 offline），UI 直接读。 */
     private val payloads = ConcurrentHashMap<String, RemoteLibrarySnapshot>()
+
+    /** 当前同步端点是否为本机中继代理；用于切换 Wi-Fi / 云图标。 */
+    fun isRelayDevice(deviceId: String): Boolean = payloads[deviceId]?.relay == true
 
     /** 所有远程歌曲（音乐 + 有声书章节）按播放用 id 索引，缓存维护用。 */
     private val songsById = ConcurrentHashMap<String, Song>()
@@ -246,6 +266,7 @@ class RemoteLibraryManager(
                 host = endpoint.host,
                 port = endpoint.port,
                 online = true,
+                relay = endpoint.source == "relay",
                 lastSeenAt = now,
             )
             payloads[endpoint.id] = updated
@@ -284,8 +305,9 @@ class RemoteLibraryManager(
             port = endpoint.port,
             fetchedAt = now,
             lastSeenAt = now,
-            payload = wire.copy(deviceId = endpoint.id, deviceName = endpoint.name),
             online = true,
+            relay = endpoint.source == "relay",
+            payload = wire.copy(deviceId = endpoint.id, deviceName = endpoint.name),
         )
         payloads[endpoint.id] = fresh
         persistPayload(fresh)
@@ -839,7 +861,10 @@ class RemoteLibraryManager(
         } ?: "epub"
         val name = sha1(entry.remotePath) + "." + ext
         val dest = File(dir, name)
+        val openKey = ebookOpenKey(entry.deviceId, entry.remotePath)
+        if (dest.isFile && dest.length() > 0) setOpenProgress(openKey, 1f)
         if (!(dest.isFile && dest.length() > 0)) {
+            setOpenProgress(openKey, 0f)
             val tmp = File(dir, "$name.part")
             val ok = runCatching {
                 val req = Request.Builder()
@@ -849,11 +874,27 @@ class RemoteLibraryManager(
                 client.newCall(req).execute().use { r ->
                     if (!r.isSuccessful) return@use false
                     val body = r.body ?: return@use false
-                    tmp.outputStream().use { out -> body.byteStream().copyTo(out) }
+                    val total = body.contentLength()
+                    var read = 0L
+                    val buffer = ByteArray(64 * 1024)
+                    tmp.outputStream().use { out ->
+                        body.byteStream().use { input ->
+                            while (true) {
+                                val count = input.read(buffer)
+                                if (count <= 0) break
+                                out.write(buffer, 0, count)
+                                read += count
+                                if (total > 0L) {
+                                    setOpenProgress(openKey, (read.toFloat() / total * 0.98f).coerceAtMost(0.98f))
+                                }
+                            }
+                        }
+                    }
                     true
                 }
             }.getOrDefault(false)
             if (!ok || !(tmp.isFile && tmp.length() > 0)) {
+                clearOpenProgress(openKey)
                 runCatching { tmp.delete() }
                 return@withContext null
             }
@@ -861,6 +902,7 @@ class RemoteLibraryManager(
                 runCatching { tmp.copyTo(dest, overwrite = true) }
                 runCatching { tmp.delete() }
             }
+            setOpenProgress(openKey, 1f)
         }
         val now = System.currentTimeMillis()
         if (recordRecent) {
@@ -1161,6 +1203,7 @@ class RemoteLibraryManager(
             lastSeenAt = lastSeenAt,
             payload = payload,
             online = online,
+            relay = relay,
         ).toLibrary(context)
 
     private fun loadRecents() {
@@ -1296,6 +1339,7 @@ class RemoteLibraryManager(
         val lastSeenAt: Long = 0L,
         val payload: RemoteLibraryWire = RemoteLibraryWire(),
         val online: Boolean = false,
+        val relay: Boolean = false,
     ) {
         fun toLibrary(context: Context): RemoteDeviceLibrary {
             val sid = deviceId
@@ -1355,6 +1399,7 @@ class RemoteLibraryManager(
                 songs = songs, artists = artists, albums = albums,
                 ebookRoots = payload.ebookRoots,
                 ebooks = payload.ebooks, audiobooks = payload.audiobooks,
+                relay = relay,
             )
         }
     }

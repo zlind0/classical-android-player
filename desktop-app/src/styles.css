@@ -1622,6 +1622,11 @@ input[type="range"]::-webkit-slider-thumb {
   align-items: center;
 }
 
+.relay-ttl {
+  width: 88px;
+  margin-left: 6px;
+}
+
 .relay-qr-wrap {
   display: flex;
   flex-direction: column;

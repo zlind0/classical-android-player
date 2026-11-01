@@ -978,6 +978,8 @@ fun Ios5SongRow(
     showArtwork: Boolean = true,
     showSubtitle: Boolean = true,
     remote: Boolean = false,
+    /** 远程曲目正在等待首批数据时，云图标显示的缓冲进度；null = 未在打开。 */
+    openProgress: Float? = null,
     onClick: () -> Unit,
 ) {
     val remoteAvailable = LocalRemoteAvailable.current
@@ -991,7 +993,11 @@ fun Ios5SongRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (remote) {
-            com.aurora.music.ui.components.Ios5RemoteStatusIcon()
+            androidx.compose.runtime.CompositionLocalProvider(
+                com.aurora.music.ui.components.LocalRemoteOpenProgress provides openProgress,
+            ) {
+                com.aurora.music.ui.components.Ios5RemoteStatusIcon()
+            }
             Spacer(Modifier.width(8.dp))
         }
         if (showArtwork) {

@@ -45,6 +45,8 @@ import com.aurora.music.data.cast.RemoteEbookWire
 import com.aurora.music.ui.components.Ios5RemoteStatusIcon
 import com.aurora.music.ui.components.Ios5SwipeRow
 import com.aurora.music.ui.components.LocalRemoteAvailable
+import com.aurora.music.ui.components.LocalRemoteOpenProgress
+import com.aurora.music.ui.components.LocalRemoteRelay
 import com.aurora.music.ui.components.RemoteDownloadSwipeRow
 import com.aurora.music.ui.ios5.Ios5Cell
 import com.aurora.music.ui.ios5.Ios5Colors
@@ -544,8 +546,11 @@ private fun BookRow(
     onSave: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val downloads = (LocalContext.current.applicationContext as AuroraApplication)
-        .container.remoteDownloads
+    val container = (LocalContext.current.applicationContext as AuroraApplication).container
+    val downloads = container.remoteDownloads
+    val openProgress by container.remoteLibrary.openProgress.collectAsStateWithLifecycle()
+    val bookOpenKey = container.remoteLibrary.ebookOpenKey(book.deviceId, book.remotePath)
+    val bookOpen = openProgress[bookOpenKey]
     if (randomMode) {
         val savedPath = randomSessionSaved[savedKey]
         val saving = randomSessionSaving[savedKey] == true
@@ -559,6 +564,7 @@ private fun BookRow(
         )
         CompositionLocalProvider(
             LocalRemoteAvailable provides (lib.online || savedPath != null),
+            LocalRemoteRelay provides lib.relay,
         ) {
             Ios5SwipeRow(
                 state = state,
@@ -567,14 +573,16 @@ private fun BookRow(
                 allowDownload = lib.online,
                 downloadLabel = "存书架",
             ) {
-                EbookRow(
-                    title = book.displayTitle,
-                    subtitle = authorAndProgress(book.author, 0f),
-                    coverPath = book.coverUrl,
-                    accentKey = book.key,
-                    remote = true,
-                    onClick = onOpen,
-                )
+                CompositionLocalProvider(LocalRemoteOpenProgress provides bookOpen) {
+                    EbookRow(
+                        title = book.displayTitle,
+                        subtitle = authorAndProgress(book.author, 0f),
+                        coverPath = book.coverUrl,
+                        accentKey = book.key,
+                        remote = true,
+                        onClick = onOpen,
+                    )
+                }
             }
         }
         return
@@ -592,14 +600,16 @@ private fun BookRow(
             }
         },
     ) {
-        EbookRow(
-            title = book.displayTitle,
-            subtitle = authorAndProgress(book.author, 0f),
-            coverPath = book.coverUrl,
-            accentKey = book.key,
-            remote = true,
-            onClick = onOpen,
-        )
+        CompositionLocalProvider(LocalRemoteOpenProgress provides bookOpen) {
+            EbookRow(
+                title = book.displayTitle,
+                subtitle = authorAndProgress(book.author, 0f),
+                coverPath = book.coverUrl,
+                accentKey = book.key,
+                remote = true,
+                onClick = onOpen,
+            )
+        }
     }
 }
 

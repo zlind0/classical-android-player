@@ -17,6 +17,8 @@ internal data class RemoteLibrarySnapshot(
     val fetchedAt: Long = 0L,
     val lastSeenAt: Long = 0L,
     val online: Boolean = false,
+    /** 最近一次成功同步走的是公网中继（本机回环代理）。 */
+    val relay: Boolean = false,
     val payload: RemoteLibraryWire = RemoteLibraryWire(),
 )
 
@@ -33,7 +35,7 @@ internal data class RemoteLibrarySnapshot(
  */
 internal object RemoteLibraryDb {
 
-    private const val SCHEMA_VERSION = 4
+    private const val SCHEMA_VERSION = 5
     private const val DB_EXT = ".db"
 
     fun file(dir: File, deviceId: String): File = File(dir, safeId(deviceId) + DB_EXT)
@@ -152,6 +154,7 @@ internal object RemoteLibraryDb {
                 fetchedAt = meta["fetchedAt"]?.toLongOrNull() ?: 0L,
                 lastSeenAt = meta["lastSeenAt"]?.toLongOrNull() ?: 0L,
                 online = false,
+                relay = meta["relay"] == "1",
                 payload = RemoteLibraryWire(
                     deviceId = meta["payloadDeviceId"].orEmpty(),
                     deviceName = meta["payloadDeviceName"].orEmpty(),
@@ -193,6 +196,7 @@ internal object RemoteLibraryDb {
                 put("port", snapshot.port.toString())
                 put("fetchedAt", snapshot.fetchedAt.toString())
                 put("lastSeenAt", snapshot.lastSeenAt.toString())
+                put("relay", if (snapshot.relay) "1" else "0")
                 put("payloadDeviceId", snapshot.payload.deviceId)
                 put("payloadDeviceName", snapshot.payload.deviceName)
                 put("generatedAt", snapshot.payload.generatedAt.toString())
@@ -297,6 +301,7 @@ internal object RemoteLibraryDb {
                 put("host", snapshot.host)
                 put("port", snapshot.port.toString())
                 put("lastSeenAt", snapshot.lastSeenAt.toString())
+                put("relay", if (snapshot.relay) "1" else "0")
                 it.setTransactionSuccessful()
             } finally {
                 it.endTransaction()

@@ -118,6 +118,7 @@ pub fn run() {
             commands::relay_apply_settings,
             commands::relay_apply_bootstrap,
             commands::relay_start_pairing,
+            commands::relay_start_remote_pairing,
             commands::relay_cancel_pairing,
             commands::relay_revoke_device,
             commands::relay_reset_identity,

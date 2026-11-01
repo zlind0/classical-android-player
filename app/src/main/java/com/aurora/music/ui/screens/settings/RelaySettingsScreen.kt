@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.relay.RelayService
 import com.aurora.music.data.relay.RelaySettings
+import com.aurora.music.ui.components.QrScannerDialog
 import com.aurora.music.ui.ios5.Ios5ActionRow
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5SettingsPage
@@ -30,7 +31,7 @@ import com.aurora.music.ui.ios5.ios5Section
 
 /**
  * 公网中继（PodRelay）。默认流程：NAS 面板点「添加设备」显示二维码 →
- * 手机系统相机扫码 → 回到这里确认即可；证书与密钥通过局域网交接。
+ * 这里内置的扫描器（或系统相机）扫码即可；也可以粘贴跨网络的远程配对字符串。
  */
 @Composable
 fun RelaySettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
@@ -42,6 +43,7 @@ fun RelaySettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val stored = service.config.settings.collectAsState()
 
     var pairText by remember { mutableStateOf("") }
+    var scanning by remember { mutableStateOf(false) }
     var advanced by remember { mutableStateOf(false) }
     var enabled by remember { mutableStateOf(stored.value.enabled) }
     var addr by remember { mutableStateOf(stored.value.addr) }
@@ -80,7 +82,7 @@ fun RelaySettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                     fontSize = 13.sp,
                 )
                 Text(
-                    "3. 证书与媒体密钥只在局域网内交接，不经过公网服务器",
+                    "3. 也可以在电脑端生成「远程配对字符串」（可选择有效期），粘贴到下方即可跨网络配对",
                     color = Ios5Colors.TextSecondary,
                     fontSize = 12.sp,
                 )
@@ -99,15 +101,27 @@ fun RelaySettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                     Text(it, color = Ios5Colors.TextSecondary, fontSize = 12.sp)
                 }
             }
+            Ios5ActionRow("扫描配对二维码") { scanning = true }
             Ios5TextRow(
                 title = "配对码",
                 value = pairText,
-                placeholder = "podrelay://pair?…",
+                placeholder = "podrelay://pair?… 或 podrelay://remote?…",
                 singleLine = false,
             ) { pairText = it }
             Ios5ActionRow("使用配对码加入") {
                 val handled = service.acceptPairUri(pairText.trim())
                 message = if (handled) null else "配对码格式不正确"
+            }
+            if (scanning) {
+                QrScannerDialog(
+                    onDismiss = { scanning = false },
+                    onResult = { scanned ->
+                        scanning = false
+                        pairText = scanned.trim()
+                        val handled = service.acceptPairUri(scanned.trim())
+                        message = if (handled) null else "二维码不是有效的配对码"
+                    },
+                )
             }
         }
 

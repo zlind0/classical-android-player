@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, formatBytes, type RelayPairStart, type RelayStatus } from "../api";
+import {
+  api,
+  formatBytes,
+  type RelayPairStart,
+  type RelayRemotePairStart,
+  type RelayStatus,
+} from "../api";
 
 interface RelayPanelProps {
   onClose: () => void;
@@ -11,6 +17,8 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
   const [bootstrap, setBootstrap] = useState("");
   const [pairLabel, setPairLabel] = useState("");
   const [pairing, setPairing] = useState<RelayPairStart | null>(null);
+  const [remotePairing, setRemotePairing] = useState<RelayRemotePairStart | null>(null);
+  const [remoteTtlMinutes, setRemoteTtlMinutes] = useState(10);
   const [now, setNow] = useState(Date.now());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +48,9 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
   const agent = status?.agent;
   const connected = Boolean(agent?.connected);
   const remaining = pairing ? Math.max(0, Math.ceil((pairing.expiresAt - now) / 1000)) : 0;
+  const remoteRemaining = remotePairing
+    ? Math.max(0, Math.ceil((remotePairing.expiresAt - now) / 1000))
+    : 0;
 
   useEffect(() => {
     if (pairing && remaining === 0) {
@@ -47,6 +58,10 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
       api.relayCancelPairing().catch(() => {});
     }
   }, [pairing, remaining]);
+
+  useEffect(() => {
+    if (remotePairing && remoteRemaining === 0) setRemotePairing(null);
+  }, [remotePairing, remoteRemaining]);
 
   const connect = async () => {
     setBusy(true);
@@ -77,8 +92,33 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
     }
   };
 
+  const startRemotePairing = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const start = await api.relayStartRemotePairing(pairLabel, remoteTtlMinutes);
+      setRemotePairing(start);
+      setNow(Date.now());
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copyRemoteCode = async () => {
+    if (!remotePairing) return;
+    try {
+      await navigator.clipboard.writeText(remotePairing.code);
+      onToast("配对字符串已复制");
+    } catch {
+      onToast("复制失败，请手动选中复制");
+    }
+  };
+
   const cancelPairing = async () => {
     setPairing(null);
+    setRemotePairing(null);
     await api.relayCancelPairing().catch(() => {});
   };
 
@@ -137,7 +177,7 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
         <header className="relay-head">
           <div>
             <h2>公网中继</h2>
-            <p>PodRelay：公网服务器只保存加密分片，配对在局域网内完成。</p>
+            <p>PodRelay：公网服务器只保存加密分片；可在局域网扫码配对，也可生成跨网络配对字符串。</p>
           </div>
           <button className="icon-btn" onClick={onClose} title="关闭">
             ×
@@ -218,6 +258,62 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
                   <code className="relay-uri">{pairing.uri}</code>
                 </div>
               )}
+
+              <details className="relay-advanced">
+                <summary>远程配对（不需要同一 Wi-Fi）</summary>
+                <p className="relay-hint">
+                  生成一段包含中继地址、证书、私钥、媒体密钥的配对字符串，gzip + Base64 编码。
+                  发给手机后在「公网中继 → 配对」里粘贴即可；过期后手机端会拒绝导入。
+                </p>
+                <div className="relay-pair-row">
+                  <input
+                    className="relay-input"
+                    placeholder="设备名，例如 Pixel 9"
+                    value={pairLabel}
+                    onChange={(event) => setPairLabel(event.target.value)}
+                  />
+                  <label className="relay-hint">
+                    有效期
+                    <input
+                      className="relay-input relay-ttl"
+                      type="number"
+                      min={1}
+                      max={10080}
+                      value={remoteTtlMinutes}
+                      onChange={(event) =>
+                        setRemoteTtlMinutes(Math.max(1, Number(event.target.value) || 1))
+                      }
+                    />
+                    分钟
+                  </label>
+                  <button className="btn primary" disabled={busy || !connected} onClick={startRemotePairing}>
+                    生成远程配对码
+                  </button>
+                </div>
+                {remotePairing && (
+                  <div className="relay-qr-wrap">
+                    <div className="relay-qr-meta">
+                      <strong>{remotePairing.label}</strong>
+                      <span className={remoteRemaining <= 60 ? "relay-countdown warn" : "relay-countdown"}>
+                        {Math.floor(remoteRemaining / 60)}:{String(remoteRemaining % 60).padStart(2, "0")}
+                      </span>
+                      <button className="btn ghost small" onClick={copyRemoteCode}>
+                        复制
+                      </button>
+                      <button className="btn ghost small" onClick={() => setRemotePairing(null)}>
+                        隐藏
+                      </button>
+                    </div>
+                    <textarea
+                      className="relay-textarea"
+                      rows={4}
+                      readOnly
+                      value={remotePairing.code}
+                      onFocus={(event) => event.currentTarget.select()}
+                    />
+                  </div>
+                )}
+              </details>
             </section>
 
             <section className="relay-section">

@@ -137,6 +137,12 @@ export interface RelayPairStart {
   expiresAt: number;
 }
 
+export interface RelayRemotePairStart {
+  code: string;
+  label: string;
+  expiresAt: number;
+}
+
 export interface RelayAgentStatus {
   connected: boolean;
   hostOnline: boolean;
@@ -207,6 +213,8 @@ export const api = {
     invoke<RelayStatus>("relay_apply_bootstrap", { line }),
   relayStartPairing: (label: string) =>
     invoke<RelayPairStart>("relay_start_pairing", { label }),
+  relayStartRemotePairing: (label: string, ttlMinutes: number) =>
+    invoke<RelayRemotePairStart>("relay_start_remote_pairing", { label, ttlMinutes }),
   relayCancelPairing: () => invoke<void>("relay_cancel_pairing"),
   relayRevokeDevice: (id: string) =>
     invoke<RelayStatus>("relay_revoke_device", { id }),

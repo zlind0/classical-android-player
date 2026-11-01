@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,6 +45,7 @@ import com.aurora.music.data.cast.RemoteDownloadManager
 import com.aurora.music.model.Song
 import com.aurora.music.ui.components.Artwork
 import com.aurora.music.ui.components.Ios5RemoteStatusIcon
+import com.aurora.music.ui.components.LocalRemoteRelay
 import com.aurora.music.ui.components.RemoteDownloadSwipeRow
 import com.aurora.music.ui.ios5.Ios5ActionsHeader
 import com.aurora.music.ui.ios5.Ios5Cell
@@ -190,7 +192,11 @@ fun Ios5RemoteDetail(
                                 content = headerRow,
                             )
                         } else {
-                            headerRow()
+                            CompositionLocalProvider(
+                                LocalRemoteRelay provides container.remoteLibrary.isRelayDevice(deviceId),
+                            ) {
+                                headerRow()
+                            }
                         }
                     }
                 }
@@ -268,6 +274,7 @@ fun Ios5RemoteDetail(
                                 s.id == player.current.id,
                                 player.isPlaying,
                                 remote = true,
+                                openProgress = s.bufferProgress(player),
                             ) {
                                 onPlaySongs(shownSongs, i)
                             }
@@ -278,6 +285,14 @@ fun Ios5RemoteDetail(
         }
     }
 }
+
+/** 点击后到播放器真正可播之间的缓冲反馈；当前曲目越接近可播，云越深。 */
+private fun Song.bufferProgress(player: PlayerUiState): Float? =
+    if (id == player.current.id) {
+        if (player.isBuffering) 0.9f else 1f
+    } else {
+        null
+    }
 
 /** 远程专辑的合并行：与本地专辑详情的“大标题可展开 + 小标题连播”一致。 */
 private fun LazyListScope.remoteMergedAlbumRows(
@@ -363,6 +378,7 @@ private fun LazyListScope.remoteMergedAlbumRows(
                                         showArtwork = false,
                                         showSubtitle = false,
                                         remote = true,
+                                        openProgress = sub.song.bufferProgress(player),
                                     ) { onPlayAt(sub.index) }
                                 }
                             }
@@ -391,6 +407,7 @@ private fun LazyListScope.remoteMergedAlbumRows(
                             showArtwork = false,
                             showSubtitle = false,
                             remote = true,
+                            openProgress = single.song.bufferProgress(player),
                         ) { onPlayAt(single.index) }
                     }
                 }

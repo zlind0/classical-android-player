@@ -112,7 +112,17 @@ fun Ios5SongsBrowse(
                             remoteOnline = lib.online || s.streamUrl.startsWith("file:"),
                             onDownload = { downloads.downloadSong(lib.deviceId, lib.deviceName, s) },
                         ) {
-                            Ios5SongRow(s, s.id == player.current.id, player.isPlaying, remote = true) {
+                            Ios5SongRow(
+                                s,
+                                s.id == player.current.id,
+                                player.isPlaying,
+                                remote = true,
+                                openProgress = if (s.id == player.current.id) {
+                                    if (player.isBuffering) 0.9f else 1f
+                                } else {
+                                    null
+                                },
+                            ) {
                                 onPlaySongs(lib.songs, i)
                             }
                         }
@@ -259,7 +269,17 @@ fun Ios5GroupDetail(
                     )
                 }
                 ios5Rows(songs, key = { it.id }) { i, s ->
-                    Ios5SongRow(s, s.id == player.current.id, player.isPlaying, remote = remote) {
+                    Ios5SongRow(
+                        s,
+                        s.id == player.current.id,
+                        player.isPlaying,
+                        remote = remote,
+                        openProgress = if (remote && s.id == player.current.id) {
+                            if (player.isBuffering) 0.9f else 1f
+                        } else {
+                            null
+                        },
+                    ) {
                         onPlaySongs(songs, i)
                     }
                 }
