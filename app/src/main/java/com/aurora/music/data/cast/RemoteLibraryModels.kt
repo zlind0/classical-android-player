@@ -51,8 +51,52 @@ data class RemoteEbookScanResponse(
     val books: List<RemoteEbookDetail> = emptyList(),
 )
 
-/** 客户端为某个远程随机书库保存的当前随机结果；未点“重新随机”前保持不变。 */
-data class RemoteEbookRandomState(
+// ---- 随机阅读 feed 协议（desktop-app /library/ebook/feed/*） ----
+
+data class FeedResumeWire(
+    val path: String = "",
+    val chapter: Int = 0,
+    val block: Int = 0,
+    val char: Int = 0,
+)
+
+data class FeedBlockWire(
+    val text: String = "",
+    val level: Int = 0,
+)
+
+data class FeedChapterWire(
+    val title: String = "",
+    val blocks: List<FeedBlockWire> = emptyList(),
+)
+
+data class FeedBookWire(
+    val path: String = "",
+    val title: String = "",
+    val author: String = "",
+    val chapterCount: Int = 0,
+    val chapterTitles: List<String> = emptyList(),
+    val chapterIndex: Int = 0,
+    val chapterTitle: String = "",
+    val blockIndex: Int = 0,
+    val charOffset: Int = 0,
+    val chapter: FeedChapterWire = FeedChapterWire(),
+    val images: List<String> = emptyList(),
+)
+
+data class FeedSnapshotWire(
+    val sessionId: String = "",
+    val index: Int = 0,
+    val books: List<FeedBookWire> = emptyList(),
+)
+
+data class FeedChapterResponseWire(
+    val path: String = "",
+    val chapterIndex: Int = 0,
+    val chapter: FeedChapterWire = FeedChapterWire(),
+)
+
+/** 客户端为某个远程随机书库保存的当前随机结果；未点“重新随机”前保持不变。 */data class RemoteEbookRandomState(
     val deviceId: String = "",
     val rootKey: String = "",
     val paths: List<String> = emptyList(),

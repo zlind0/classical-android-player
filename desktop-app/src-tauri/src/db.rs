@@ -963,6 +963,31 @@ pub fn book_source(conn: &Connection, path: &str) -> Result<Option<(PathBuf, Str
     }))
 }
 
+/// Filters a client-supplied path list down to books that really belong to the
+/// given book root. The random feed never trusts paths blindly.
+pub fn root_book_paths(
+    conn: &Connection,
+    root_key: &str,
+    paths: &[String],
+) -> Result<Vec<String>> {
+    let Ok(root_id) = root_key.parse::<i64>() else {
+        return Ok(Vec::new());
+    };
+    let mut stmt = conn.prepare(
+        "SELECT 1 FROM books WHERE path = ?1 AND root_id = ?2 LIMIT 1",
+    )?;
+    let mut out = Vec::new();
+    for path in paths.iter().take(2000) {
+        let exists: Option<i64> = stmt
+            .query_row(params![path, root_id], |row| row.get(0))
+            .optional()?;
+        if exists.is_some() {
+            out.push(path.clone());
+        }
+    }
+    Ok(out)
+}
+
 /// Metadata and lazy-scan state for one book, used by the on-demand endpoint.
 pub struct BookScanInfo {
     pub path: PathBuf,

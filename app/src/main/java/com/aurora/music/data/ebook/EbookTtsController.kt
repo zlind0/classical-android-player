@@ -48,6 +48,11 @@ class EbookTtsController(context: Context) {
     var store: EbookStore? = null
     /** 当前书的绝对路径（与阅读页 bookPath 同一串，供上面落盘用）。 */
     @Volatile var bookPath: String = ""
+    /**
+     * 是否把朗读位置写进本地书库（[store]）。
+     * 随机阅读的书只有远程相对路径，本地没有对应条目，写入既无效也会污染“最近阅读”口径。
+     */
+    @Volatile var persistProgress: Boolean = true
     private var _player: EbookTtsPlayer? = null
     var player: EbookTtsPlayer?
         get() = _player
@@ -79,7 +84,7 @@ class EbookTtsController(context: Context) {
     val paraTiming: StateFlow<ParaTiming?> = _paraTiming.asStateFlow()
 
     private var bookMd5: String = ""
-    private var paras: List<Para> = emptyList()
+    @Volatile private var paras: List<Para> = emptyList()
     private var lastBook: ParsedEbook? = null
     private var unit: EbookTtsUnit = EbookTtsUnit.PARA
 
@@ -95,6 +100,23 @@ class EbookTtsController(context: Context) {
     /** 当前朗读位置所在的目录标题（目录页 currentEntry 同口径，供通知栏作者栏；无目录时为空，由调用方回退书名）。 */
     private val _sectionTitle = MutableStateFlow("")
     val sectionTitle: StateFlow<String> = _sectionTitle.asStateFlow()
+
+    /** 当前朗读书名（随机阅读不回写本地最近阅读，通知栏靠它显示正确的书名）。 */
+    private val _bookTitle = MutableStateFlow("")
+    val bookTitle: StateFlow<String> = _bookTitle.asStateFlow()
+
+    /**
+     * 随机阅读的上一本/下一本拦截：返回 true 表示已切书（本控制器不再做段/句跳转）。
+     * 耳机与通知栏的 ACTION_NEXT/PREV 走 [next]/[prev]，阅读页底栏走 [nextUnit]/[prevUnit]。
+     */
+    var onBookTurn: ((Int) -> Boolean)? = null
+
+    /**
+     * 随机阅读的跨章续读：当前章读到末尾时按下一章序号取正文（返回 null = 没有更多章）。
+     * 补到后把新章节目追加进朗读建表，同一播放流继续，不打断正在播的音频；
+     * 普通阅读不设置，整本已在 [paras] 里，读完自然结束。
+     */
+    var chapterTailLoader: (suspend (chapter: Int) -> List<EbookBlock>?)? = null
 
     private val _playing = MutableStateFlow(false)
     val playing: StateFlow<Boolean> = _playing.asStateFlow()
@@ -150,8 +172,8 @@ class EbookTtsController(context: Context) {
 
     // ---- 书 ----
 
-    fun setBook(md5: String, book: ParsedEbook, path: String = "") {
-        if (bookMd5 == md5 && paras.isNotEmpty()) {
+    fun setBook(md5: String, book: ParsedEbook, path: String = "", force: Boolean = false) {
+        if (!force && bookMd5 == md5 && paras.isNotEmpty()) {
             if (path.isNotBlank()) bookPath = path
             return
         }
@@ -159,6 +181,7 @@ class EbookTtsController(context: Context) {
         bookMd5 = md5
         if (path.isNotBlank()) bookPath = path
         lastBook = book
+        _bookTitle.value = book.title
         unit = runCatching { prefs.ttsUnit.value }.getOrDefault(EbookTtsUnit.PARA)
         paras = buildUnits(book, unit)
         _position.value = null
@@ -175,19 +198,51 @@ class EbookTtsController(context: Context) {
         positionIdx = -1
     }
 
+    /**
+     * 清空当前书目（随机阅读退出时用）：停播并丢掉建表/书名，
+     * 让通知栏回退到本地最近阅读，而不是继续挂着远程随机书。
+     */
+    fun resetBook() {
+        stop(savePos = false)
+        bookMd5 = ""
+        bookPath = ""
+        lastBook = null
+        paras = emptyList()
+        _bookTitle.value = ""
+        _sectionTitle.value = ""
+        positionIdx = -1
+    }
+
     private fun buildUnits(book: ParsedEbook, u: EbookTtsUnit): List<Para> =
-        book.chapters.flatMapIndexed { ci, c ->
-            c.blocks.flatMapIndexed { bi, b ->
-                if (b.text.isBlank()) emptyList()
-                else if (u == EbookTtsUnit.SENTENCE) {
-                    SentenceSplitter.split(b.text)
-                        .map { r -> Para(ci, bi, b.text, r.first, r.last + 1) }
-                        .ifEmpty { listOf(Para(ci, bi, b.text)) }
-                } else {
-                    listOf(Para(ci, bi, b.text))
-                }
+        book.chapters.flatMapIndexed { ci, c -> buildChapterUnits(ci, c.blocks, u) }
+
+    private fun buildChapterUnits(chapter: Int, blocks: List<EbookBlock>, u: EbookTtsUnit): List<Para> =
+        blocks.flatMapIndexed { bi, b ->
+            if (b.text.isBlank()) emptyList()
+            else if (u == EbookTtsUnit.SENTENCE) {
+                SentenceSplitter.split(b.text)
+                    .map { r -> Para(chapter, bi, b.text, r.first, r.last + 1) }
+                    .ifEmpty { listOf(Para(chapter, bi, b.text)) }
+            } else {
+                listOf(Para(chapter, bi, b.text))
             }
         }
+
+    /**
+     * 随机阅读专用：把下一章补进建表。返回 false 表示没有下一章/取失败，朗读就此收尾。
+     * 只在 [playLoop] 的 IO 线程调用；追加后 UI 上的上一句/下一句也能跨进新章。
+     */
+    private suspend fun appendNextChapter(): Boolean {
+        val loader = chapterTailLoader ?: return false
+        val lastChapter = paras.lastOrNull()?.chapter ?: return false
+        val next = lastChapter + 1
+        val blocks = runCatching { loader(next) }.getOrNull() ?: return false
+        if (blocks.isEmpty()) return false
+        val added = buildChapterUnits(next, blocks, unit)
+        if (added.isEmpty()) return false
+        paras = paras + added
+        return true
+    }
 
     fun paraIndexOf(chapter: Int, block: Int): Int =
         paras.indexOfFirst { it.chapter == chapter && it.block >= block }
@@ -233,7 +288,7 @@ class EbookTtsController(context: Context) {
         // 下次打开靠这里的 DB 行。
         val cur = _position.value
         val bp = bookPath
-        if (savePos && cur != null && bp.isNotBlank()) {
+        if (savePos && persistProgress && cur != null && bp.isNotBlank()) {
             // 停在哪就按它被推进的那一刻落盘：比这更新的位置（用户手动翻页/后台已推进）不会被这次停播洗掉
             val at = positionAt.takeIf { it > 0 } ?: System.currentTimeMillis()
             store?.saveTtsPos(bp, cur.chapter, cur.block, cur.startChar, at)
@@ -254,14 +309,28 @@ class EbookTtsController(context: Context) {
         positionIdx = -1
     }
 
+    /** 耳机/通知栏“上一首”：随机阅读中切上一本书，否则回退到上一段/句。 */
     fun prev() {
+        if (onBookTurn?.invoke(-1) == true) return
+        prevUnit()
+    }
+
+    /** 耳机/通知栏“下一首”：随机阅读中切下一本书，否则回退到下一段/句。 */
+    fun next() {
+        if (onBookTurn?.invoke(1) == true) return
+        nextUnit()
+    }
+
+    /** 阅读页底栏“上一句/上一首”：始终只在本段/本句内移动。 */
+    fun prevUnit() {
         val idx = currentIndex() ?: return
         val target = (idx - 1).coerceAtLeast(0)
         // 已经是第一段：重播本段
         startAt(if (target == idx) idx else target, true)
     }
 
-    fun next() {
+    /** 阅读页底栏“下一句/下一首”：始终只在本段/本句内移动。 */
+    fun nextUnit() {
         val idx = currentIndex() ?: return
         val target = (idx + 1).coerceAtMost(paras.size - 1)
         startAt(target, true)
@@ -318,7 +387,12 @@ class EbookTtsController(context: Context) {
     private suspend fun playLoop(startIndex: Int, movePage: Boolean, tp: UnifiedTtsPrefs) {
         var idx = startIndex
         var first = true
-        while (idx < paras.size) {
+        while (true) {
+            if (idx >= paras.size) {
+                // 随机阅读：本章读完，静默补下一章接着读（普通阅读没有 loader，直接收尾）
+                if (!appendNextChapter()) break
+                continue
+            }
             val base = paras[idx]
             // 只有起点单位可带字偏移（页顶是段中时）；后续单位按建表区间原样读，
             // 句子模式下句首必须保留，不能重置为 0（否则第 N 句会读成段首到第 N 句尾）
@@ -342,7 +416,7 @@ class EbookTtsController(context: Context) {
             _sectionTitle.value = sectionTitleFor(para.chapter, para.block)
             // 每推进一段/一句就直存章/块/字：锁屏后 UI 没了、pager 动不了时靠这行续命。
             // 带观测时间戳，比它更旧的快照（比如阅读页手里冻结的旧位置）落盘时会被 DB 丢弃。
-            store?.saveTtsPos(bookPath, para.chapter, para.block, para.startChar, seenAt)
+            store?.takeIf { persistProgress }?.saveTtsPos(bookPath, para.chapter, para.block, para.startChar, seenAt)
             if (first && movePage || !first) _turn.value = Triple(para.chapter, para.block, para.startChar)
             first = false
             // 每段现读一次设置：音量/语速等滑杆下一段即生效，不用停播重进

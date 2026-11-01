@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.rememberTextMeasurer
 import com.aurora.music.AuroraApplication
+import com.aurora.music.data.ebook.EbookBlock
 import com.aurora.music.data.ebook.EbookReadPrefs
 import com.aurora.music.data.ebook.ParsedEbook
 import kotlinx.coroutines.Dispatchers
@@ -34,7 +35,7 @@ const val PAGE_WINDOW_SIZE = PAGE_PRELOAD_RADIUS * 2 + 1
 const val PAGE_WINDOW_CENTER = PAGE_PRELOAD_RADIUS
 
 /** 每次落定后前后各预排多少章（按章序号盲取，不依赖页数，专治短章连续跨章）。 */
-private const val PREFETCH_CHAPTERS = 2
+internal const val PREFETCH_CHAPTERS = 2
 
 /** 全局坐标：唯一的页面位置表示。 */
 data class GlobalPage(val chapter: Int, val page: Int)
@@ -355,6 +356,17 @@ fun rememberPageWindow(
     initial: GlobalPage,
     anchorBlock: Int = 0,
     anchorChar: Int = 0,
+    /** Compose 记忆键：随机阅读同一远程路径会反复进入，但正文随书变化，用它隔离窗口。 */
+    bookKey: String = bookPath,
+    /**
+     * 按章取正文。null = 直接用 [book] 里已解析的块（本地书）。
+     * 随机阅读传服务端章节加载器：窗口翻到该章时才下载正文，再交给分页器。
+     */
+    chapterLoader: (suspend (Int) -> List<EbookBlock>?)? = null,
+    /** 随机阅读不写本地分页缓存/进度库，避免远程路径污染本地书架。 */
+    persistPages: Boolean = true,
+    /** 前后盲预排的章数；随机阅读传 0，只排当前章，翻到边界再按需取下一章。 */
+    prefetchChapters: Int = PREFETCH_CHAPTERS,
 ): PageWindow {
     val context = LocalContext.current
     val container = (context.applicationContext as AuroraApplication).container
@@ -362,7 +374,7 @@ fun rememberPageWindow(
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
 
-    val win = remember(bookPath) {
+    val win = remember(bookKey) {
         PageWindow(
             chapterCount = book.chapters.size,
             initial = initial.copy(
@@ -371,21 +383,29 @@ fun rememberPageWindow(
             ),
         )
     }
-    var cacheBase by remember(bookPath) { mutableStateOf<Map<Int, List<List<PageSlice>>>>(emptyMap()) }
-    var cacheKey by remember(bookPath) { mutableStateOf<String?>(null) }
-    var bookMd5 by remember(bookPath) { mutableStateOf("") }
-    var anchorApplied by remember(bookPath) { mutableStateOf(anchorBlock <= 0 && anchorChar <= 0) }
+    var cacheBase by remember(bookKey) { mutableStateOf<Map<Int, List<List<PageSlice>>>>(emptyMap()) }
+    var cacheKey by remember(bookKey) { mutableStateOf<String?>(null) }
+    var bookMd5 by remember(bookKey) { mutableStateOf("") }
+    var anchorApplied by remember(bookKey) { mutableStateOf(anchorBlock <= 0 && anchorChar <= 0) }
     // 落盘串行化：预排循环与跳转并发写全书 JSON 时不互相覆盖丢章
-    val saveMutex = remember(bookPath) { Mutex() }
+    val saveMutex = remember(bookKey) { Mutex() }
 
-    val key = remember(prefs.fontSizeSp, prefs.fontPath, widthPx, heightPx) {
-        if (heightPx > 100) store.pageCacheKey(prefs, widthPx, heightPx) else null
+    val key = remember(prefs.fontSizeSp, prefs.fontPath, widthPx, heightPx, persistPages) {
+        if (heightPx <= 100) null
+        else if (persistPages) store.pageCacheKey(prefs, widthPx, heightPx)
+        else "mem@${prefs.fontSizeSp.toInt()}x${prefs.fontPath.hashCode()}@${widthPx}x$heightPx"
     }
 
     // 磁盘缓存命中则整本直接可用（秒开）；字号/字体/屏宽变化时旧断点作废重排。
-    LaunchedEffect(bookPath, key) {
+    LaunchedEffect(bookKey, key) {
         if (key == null) return@LaunchedEffect
         cacheKey = key
+        if (!persistPages) {
+            cacheBase = emptyMap()
+            win.breaks.clear()
+            win.fullRewrite()
+            return@LaunchedEffect
+        }
         val md5 = store.md5Of(bookPath)
         bookMd5 = md5
         val cached = store.loadPageBreaks(md5, key)
@@ -406,16 +426,20 @@ fun rememberPageWindow(
         if (hasPages(win.breaks, ci)) return true
         val k = cacheKey ?: key ?: return false
         if (heightPx <= 100) return false
+        val blocks = chapterLoader?.invoke(ci) ?: book.chapters[ci].blocks
+        if (blocks.isEmpty()) return false
         val paginator = ChapterPaginator(measurer, density, widthPx, heightPx, prefs.fontSizeSp, fontFamily)
-        val nb = runCatching { paginator.paginate(book.chapters[ci].blocks) }.getOrDefault(emptyList())
+        val nb = runCatching { paginator.paginate(blocks) }.getOrDefault(emptyList())
         if (nb.isNotEmpty()) {
             win.breaks[ci] = nb
             win.fillGaps() // 边缘扩展 + 空槽填入，loader 立刻消失；落盘随后在 IO 慢慢写
-            // 全书 JSON 序列化 + 文件写挪到 IO：连续预排多章时主线程不卡手势
-            saveMutex.withLock {
-                val payload = pagesToCache(cacheBase + win.breaks)
-                val md5 = bookMd5.ifBlank { store.md5Of(bookPath).also { bookMd5 = it } }
-                withContext(Dispatchers.IO) { store.savePageBreaks(md5, k, payload) }
+            if (persistPages) {
+                // 全书 JSON 序列化 + 文件写挪到 IO：连续预排多章时主线程不卡手势
+                saveMutex.withLock {
+                    val payload = pagesToCache(cacheBase + win.breaks)
+                    val md5 = bookMd5.ifBlank { store.md5Of(bookPath).also { bookMd5 = it } }
+                    withContext(Dispatchers.IO) { store.savePageBreaks(md5, k, payload) }
+                }
             }
             return true
         }
@@ -433,14 +457,14 @@ fun rememberPageWindow(
         }
     }
     val center = win.center
-    LaunchedEffect(center, breaksSig, key, bookPath) {
+    LaunchedEffect(center, breaksSig, key, bookKey) {
         if (key == null || heightPx <= 100) return@LaunchedEffect
         val known = win.knownChapters()
         val firstCh = known.minOrNull() ?: center.chapter
         val lastCh = known.maxOrNull() ?: center.chapter
-        val ahead = (1..PREFETCH_CHAPTERS).map { lastCh + it }.filter { it < book.chapters.size }
-        val behind = (1..PREFETCH_CHAPTERS).map { firstCh - it }.filter { it >= 0 }
-        val near = ((center.chapter - PREFETCH_CHAPTERS)..(center.chapter + PREFETCH_CHAPTERS))
+        val ahead = (1..prefetchChapters).map { lastCh + it }.filter { it < book.chapters.size }
+        val behind = (1..prefetchChapters).map { firstCh - it }.filter { it >= 0 }
+        val near = ((center.chapter - prefetchChapters)..(center.chapter + prefetchChapters))
             .filter { it in book.chapters.indices }
         val need = (known + center.chapter + ahead + behind + near)
             .filter { it in book.chapters.indices && !hasPages(win.breaks, it) }

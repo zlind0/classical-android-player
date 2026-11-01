@@ -85,7 +85,12 @@ class RelayProxy(
         when (request.path) {
             "/library/version" -> serveVersion(output)
             "/library/all" -> serveLibrary(output)
-            "/library/ebook/scan" -> serveEbookScan(output, request)
+            "/library/ebook/scan" -> serveLiveJson(output, request)
+            "/library/ebook/feed/start",
+            "/library/ebook/feed/turn",
+            "/library/ebook/feed/chapter",
+            "/library/ebook/feed/close",
+            -> serveLiveJson(output, request)
             "/media/music" -> serveMedia(output, request, "music", request.query["id"].orEmpty())
             "/media/audiobook" -> serveMedia(output, request, "audiobook", request.query["path"].orEmpty())
             "/media/ebook" -> serveMedia(output, request, "ebook", request.query["path"].orEmpty())
@@ -211,7 +216,8 @@ class RelayProxy(
         sendBytes(output, 200, "OK", "application/json; charset=utf-8", snapshot.json.toByteArray())
     }
 
-    private suspend fun serveEbookScan(output: OutputStream, request: Request) {
+    /** Forwards a JSON request/response endpoint through the encrypted live channel. */
+    private suspend fun serveLiveJson(output: OutputStream, request: Request) {
         val master = config.current.masterKey
         if (master == null) {
             sendText(output, 503, "Service Unavailable", "media key missing")

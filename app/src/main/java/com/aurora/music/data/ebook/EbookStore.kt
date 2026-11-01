@@ -176,7 +176,7 @@ class EbookStore(context: Context, private val dao: EbookDao) {
     // ---- 打开 / 进度 ----
 
     /** 打开一本书：缓存命中直接读，否则解析后写缓存。IO 线程调用。 */
-    suspend fun openBook(path: String): ParsedEbook? = withContext(Dispatchers.IO) {
+    suspend fun openBook(path: String, registerIfMissing: Boolean = true): ParsedEbook? = withContext(Dispatchers.IO) {
         val file = File(path)
         if (!file.exists()) return@withContext null
         val row = dao.bookByPath(path)
@@ -192,8 +192,8 @@ class EbookStore(context: Context, private val dao: EbookDao) {
             EbookFormat.UNKNOWN -> null
         } ?: return@withContext null
         if (md5 != null) writeParsedCache(md5, parsed)
-        // 顺手补全 DB 元信息（文件夹浏览进来的书）
-        if (row == null) {
+        // 顺手补全 DB 元信息（文件夹浏览进来的书）；随机阅读的静默缓存不写库
+        if (row == null && registerIfMissing) {
             val cover = extractCover(file, md5 ?: "")
             dao.upsertBooks(
                 listOf(

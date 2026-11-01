@@ -697,6 +697,35 @@ class RemoteLibraryManager(
     fun ebookEntriesOf(deviceId: String): List<RemoteEbookEntry> =
         ebookEntries().filter { it.deviceId == deviceId }
 
+    /** 在线设备的 baseUrl；离线返回 null。随机阅读 feed 只走在线设备的 HTTP 端点。 */
+    fun onlineBaseUrl(deviceId: String): String? =
+        _libraries.value.firstOrNull { it.deviceId == deviceId && it.online }?.baseUrl
+
+    /**
+     * 随机阅读的候选池：与随机书库根目录展示的书一致（跳过默认书架）。
+     * 冷启动恢复阅读器时 UI 还没有列表，靠它重新拼出完整池子。
+     */
+    fun ebookPoolPaths(deviceId: String, rootKey: String): List<String> {
+        val libraries = _libraries.value.ifEmpty { cachedLibraries.value }
+        val lib = libraries.firstOrNull { it.deviceId == deviceId } ?: return emptyList()
+        val root = ebookRootsOf(lib).firstOrNull { it.key == rootKey } ?: return emptyList()
+        if (root.shelf || root.key == "all") return emptyList()
+        val base = root.rootPath.trimEnd('/')
+        return lib.ebooks.asSequence()
+            .filter { b ->
+                when {
+                    root.key == "all" -> true
+                    b.rootKey == root.key -> true
+                    b.rootKey.isBlank() && base.isNotBlank() ->
+                        b.path == base || b.path.startsWith("$base/")
+                    else -> false
+                }
+            }
+            .map { it.path }
+            .distinct()
+            .toList()
+    }
+
     fun ebookCoverUrl(lib: RemoteDeviceLibrary, path: String, hasCover: Boolean): String {
         downloads.ebookCover(lib.deviceId, path)?.let { return it }
         return if (!hasCover) "" else RemoteArtCache.cachedOrRemote(

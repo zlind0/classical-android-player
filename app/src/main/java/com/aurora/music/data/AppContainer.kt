@@ -146,6 +146,9 @@ class AppContainer(context: Context) {
         networkChanges = networkGeneration,
     )
 
+    /** 随机阅读：服务端保持 3 本随机书，客户端按章取正文（只读，不入本地书库）。 */
+    val randomFeed = com.aurora.music.data.cast.RandomFeedManager(appContext, remoteLibrary, ebookStore)
+
     val ebookCast = com.aurora.music.data.ebook.EbookCastController(
         appContext,
         ebookPrefs,

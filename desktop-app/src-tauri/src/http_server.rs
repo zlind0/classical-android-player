@@ -1,4 +1,5 @@
 use crate::db::{self, Db};
+use crate::ebook_feed::{FeedChapterView, FeedResume, FeedService};
 use crate::media;
 use crate::meta;
 use crate::models::{now_ms, ServerInfo};
@@ -25,6 +26,7 @@ pub struct HttpState {
     pub info: Arc<ServerInfo>,
     pub cache_dir: PathBuf,
     pub pairing: Arc<crate::relay_pairing::PairingState>,
+    pub feed: Arc<FeedService>,
 }
 
 pub fn build_router(state: HttpState) -> Router {
@@ -36,6 +38,10 @@ pub fn build_router(state: HttpState) -> Router {
             "/library/ebook/scan",
             get(library_ebook_scan).post(library_ebook_scan_batch),
         )
+        .route("/library/ebook/feed/start", post(library_ebook_feed_start))
+        .route("/library/ebook/feed/turn", post(library_ebook_feed_turn))
+        .route("/library/ebook/feed/chapter", get(library_ebook_feed_chapter))
+        .route("/library/ebook/feed/close", post(library_ebook_feed_close))
         .route("/media/music", get(media_music))
         .route("/media/audiobook", get(media_audiobook))
         .route("/media/ebook", get(media_ebook))
@@ -273,6 +279,148 @@ async fn library_ebook_scan_batch(
         }
     }
     json_response(json!({ "books": books }))
+}
+
+// ------------------------------------------------------------ random reading feed
+
+fn feed_error(status: StatusCode, message: impl Into<String>) -> Response {
+    let mut response = json_response(json!({ "error": message.into() }));
+    *response.status_mut() = status;
+    response
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedStartRequest {
+    #[serde(default)]
+    root_key: String,
+    #[serde(default)]
+    paths: Vec<String>,
+    #[serde(default)]
+    include_images: bool,
+    #[serde(default)]
+    resume: Option<FeedResume>,
+}
+
+async fn library_ebook_feed_start(
+    State(state): State<HttpState>,
+    Json(request): Json<FeedStartRequest>,
+) -> Response {
+    let _ = request.include_images;
+    if request.paths.is_empty() {
+        return feed_error(StatusCode::BAD_REQUEST, "random pool is empty");
+    }
+    let root_key = request.root_key.clone();
+    let wanted = request.paths.clone();
+    let valid = match run_db(&state, move |conn| {
+        db::root_book_paths(conn, &root_key, &wanted)
+    })
+    .await
+    {
+        Ok(paths) => paths,
+        Err(err) => return feed_error(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+    };
+    if valid.is_empty() {
+        return feed_error(
+            StatusCode::BAD_REQUEST,
+            "该随机书库暂无可解析的 EPUB",
+        );
+    }
+    let feed = state.feed.clone();
+    let root = request.root_key;
+    let resume = request.resume;
+    let result = tokio::task::spawn_blocking(move || feed.start(&root, &valid, resume)).await;
+    match result {
+        Ok(Ok(snapshot)) => json_response(json!(snapshot)),
+        Ok(Err(err)) => feed_error(StatusCode::UNPROCESSABLE_ENTITY, err.to_string()),
+        Err(err) => feed_error(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedTurnRequest {
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    direction: i32,
+}
+
+async fn library_ebook_feed_turn(
+    State(state): State<HttpState>,
+    Json(request): Json<FeedTurnRequest>,
+) -> Response {
+    if request.session_id.is_empty() {
+        return feed_error(StatusCode::BAD_REQUEST, "missing sessionId");
+    }
+    let feed = state.feed.clone();
+    let id = request.session_id;
+    let direction = request.direction;
+    let result = tokio::task::spawn_blocking(move || feed.turn(&id, direction)).await;
+    match result {
+        Ok(Ok(snapshot)) => json_response(json!(snapshot)),
+        Ok(Err(err)) => feed_error(StatusCode::GONE, err.to_string()),
+        Err(err) => feed_error(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+    }
+}
+
+async fn library_ebook_feed_chapter(
+    State(state): State<HttpState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let Some(session_id) = query.get("sessionId").cloned() else {
+        return feed_error(StatusCode::BAD_REQUEST, "missing sessionId");
+    };
+    let Some(path) = query.get("path").cloned() else {
+        return feed_error(StatusCode::BAD_REQUEST, "missing path");
+    };
+    let chapter = query
+        .get("chapter")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    let feed = state.feed.clone();
+    let result =
+        tokio::task::spawn_blocking(move || feed.chapter(&session_id, &path, chapter)).await;
+    match result {
+        Ok(Ok(view)) => json_response(json!(FeedChapterViewJson::from(view))),
+        Ok(Err(err)) => feed_error(StatusCode::GONE, err.to_string()),
+        Err(err) => feed_error(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedChapterViewJson {
+    path: String,
+    chapter_index: usize,
+    chapter: crate::ebook_parse::FeedChapter,
+}
+
+impl From<FeedChapterView> for FeedChapterViewJson {
+    fn from(value: FeedChapterView) -> Self {
+        FeedChapterViewJson {
+            path: value.path,
+            chapter_index: value.chapter_index,
+            chapter: value.chapter,
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedCloseRequest {
+    #[serde(default)]
+    session_id: String,
+}
+
+async fn library_ebook_feed_close(
+    State(state): State<HttpState>,
+    Json(request): Json<FeedCloseRequest>,
+) -> Response {
+    if !request.session_id.is_empty() {
+        state.feed.close(&request.session_id);
+    }
+    json_response(json!({ "closed": true }))
 }
 
 async fn library_all(State(state): State<HttpState>) -> Response {

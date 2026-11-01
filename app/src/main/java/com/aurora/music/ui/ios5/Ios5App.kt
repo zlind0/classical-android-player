@@ -121,13 +121,26 @@ fun Ios5App() {
     var readerPath by rememberSaveable { mutableStateOf<String?>(null) }
     // 关闭时 readerPath 立刻变 null，但淡出动画还要用最后一次的路径，故单独留一份。
     var lastReaderPath by rememberSaveable { mutableStateOf("") }
+    // 随机阅读也是全屏覆盖层：设备/书库固定，池子由服务端与本地缓存恢复。
+    var feedReaderOpen by rememberSaveable { mutableStateOf(false) }
+    var feedDeviceId by rememberSaveable { mutableStateOf("") }
+    var feedRootKey by rememberSaveable { mutableStateOf("") }
     fun openReader(path: String) {
         if (path.isBlank()) return
+        feedReaderOpen = false
         lastReaderPath = path
         readerPath = path
     }
+    fun openRandomReader(deviceId: String, rootKey: String) {
+        if (deviceId.isBlank() || rootKey.isBlank()) return
+        readerPath = null
+        feedDeviceId = deviceId
+        feedRootKey = rootKey
+        feedReaderOpen = true
+    }
     fun closeReader() {
         readerPath = null
+        feedReaderOpen = false
     }
     val playerVM: PlayerViewModel = viewModel()
     val browseVM: Ios5BrowseViewModel = viewModel()
@@ -316,7 +329,7 @@ fun Ios5App() {
     // 所以详情页用 currentTab（从返回栈推出来的），不能用只在 Tab 根页更新的 lastTab
     val tabHighlight = if (currentRoute in ios5TabRoutes) currentRoute else currentTab
     // 阅读器全屏独占：不带 tab/mini 条，不参与翻转动画
-    val isEbookReader = readerPath != null
+    val isEbookReader = readerPath != null || feedReaderOpen
     // 是否真的有要重放的返回栈（只有首页时不用盖加载圈）
     val hasNavToRestore = remember(initialNavRoutes) {
         initialNavRoutes.size > 1 || initialNavRoutes.firstOrNull()?.let { it != Ios5Routes.HOME } == true
@@ -346,14 +359,16 @@ fun Ios5App() {
                     runCatching { navController.navigate(route) { launchSingleTop = true } }
                 }
             }
-            legacyReaderPath?.let { openReader(it) }
-                ?: container.uiState.readerPath().takeIf { it.isNotBlank() }?.let { openReader(it) }
+            if (!feedReaderOpen) {
+                legacyReaderPath?.let { openReader(it) }
+                    ?: container.uiState.readerPath().takeIf { it.isNotBlank() }?.let { openReader(it) }
+            }
             navRestored = true
         }
     }
     // 阅读器不在 NavHost 返回栈里，单独把“上次读到哪本书”落盘，冷启动才能恢复。
     LaunchedEffect(readerPath, navRestored) {
-        if (navRestored) container.uiState.saveReaderPath(readerPath.orEmpty())
+        if (navRestored && !feedReaderOpen) container.uiState.saveReaderPath(readerPath.orEmpty())
     }
     // 每次导航都记下完整返回栈（含参数），下次冷启动原样重建
     LaunchedEffect(navController, navRestored) {
@@ -746,6 +761,7 @@ fun Ios5App() {
                                 },
                                 onOpenBook = { openRemoteBook(it) },
                                 onOpenRandomBook = { entry, rk -> openRandomBook(entry, rk) },
+                                onStartRandomReading = { d, r -> openRandomReader(d, r) },
                                 onMessage = { confirm(it) },
                             )
                         }
@@ -1543,7 +1559,16 @@ fun Ios5App() {
                         ) {},
                     )
                     val epath = readerPath ?: lastReaderPath
-                    if (epath.isNotBlank()) {
+                    if (feedReaderOpen) {
+                        Box(Modifier.fillMaxSize().background(Color.Black)) {
+                            com.aurora.music.ui.ebook.RandomReaderScreen(
+                                deviceId = feedDeviceId,
+                                rootKey = feedRootKey,
+                                poolPaths = emptyList(),
+                                onClose = { closeReader() },
+                            )
+                        }
+                    } else if (epath.isNotBlank()) {
                         Box(Modifier.fillMaxSize().background(Color.Black)) {
                             com.aurora.music.ui.ebook.EbookReaderScreen(
                                 bookPath = epath,

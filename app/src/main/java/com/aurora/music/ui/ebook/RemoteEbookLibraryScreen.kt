@@ -102,6 +102,8 @@ fun RemoteEbookLibraryScreen(
     onOpenBook: (RemoteEbookEntry) -> Unit,
     /** 随机书库内阅读：只记随机书库自己的最近阅读。 */
     onOpenRandomBook: (RemoteEbookEntry, rootKey: String) -> Unit = { entry, _ -> onOpenBook(entry) },
+    /** 随机阅读：服务端预取三本，客户端按章阅读。 */
+    onStartRandomReading: (deviceId: String, rootKey: String) -> Unit = { _, _ -> },
     /** 随机书库保存/删除本地副本后的提示。 */
     onMessage: (String) -> Unit = {},
 ) {
@@ -297,6 +299,7 @@ fun RemoteEbookLibraryScreen(
                 randomMode = true,
                 count = count,
                 searching = query.isNotBlank(),
+                online = online,
                 searchCount = searchResults.size,
                 searchTruncated = searchTruncated,
                 searchExpanded = searchExpanded,
@@ -307,6 +310,7 @@ fun RemoteEbookLibraryScreen(
                     clearRandomSession(deviceId, rootKey)
                     container.remoteLibrary.rerollEbookRandom(deviceId, rootKey, poolPaths)
                 },
+                onStartReading = { onStartRandomReading(deviceId, rootKey) },
                 onSearchReroll = { searchSeed += 1 },
                 onToggleExpand = { searchExpanded = !searchExpanded },
             )
@@ -469,11 +473,13 @@ private fun RandomControls(
     randomMode: Boolean,
     count: Int,
     searching: Boolean,
+    online: Boolean,
     searchCount: Int,
     searchTruncated: Boolean,
     searchExpanded: Boolean,
     onCountChange: (Int) -> Unit,
     onReroll: () -> Unit,
+    onStartReading: () -> Unit,
     onSearchReroll: () -> Unit,
     onToggleExpand: () -> Unit,
 ) {
@@ -519,12 +525,25 @@ private fun RandomControls(
                 }
             }
         } else {
-            // 右侧剩余宽度全部给“重新随机”
-            Ios5GlossButton(
-                text = "重新随机",
-                onClick = onReroll,
-                modifier = Modifier.weight(1f),
-            )
+            // 右侧剩余宽度：重新随机 + 开始随机阅读
+            Row(
+                Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Ios5GlossButton(
+                    text = "重新随机",
+                    onClick = onReroll,
+                    modifier = Modifier.weight(1f),
+                )
+                if (online) {
+                    Ios5GlossButton(
+                        text = "开始阅读",
+                        onClick = onStartReading,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
         }
     }
 }

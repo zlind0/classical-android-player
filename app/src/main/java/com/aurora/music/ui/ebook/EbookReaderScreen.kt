@@ -10,7 +10,9 @@ import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -40,6 +42,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Airplay
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MusicNote
@@ -91,6 +94,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
@@ -100,6 +104,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.ebook.EbookAnchorCode
+import com.aurora.music.data.ebook.EbookBlock
 import com.aurora.music.data.ebook.EbookCastAnchor
 import com.aurora.music.data.ebook.EbookCastMode
 import com.aurora.music.data.ebook.EbookReadPrefs
@@ -152,7 +157,7 @@ import kotlinx.coroutines.launch
 // 顶部灰字状态（本章剩余页数/全书进度/时间/电量）、底部 6 键（目录/选项可用，其余占位）。
 // 系统状态栏隐藏，下方安卓导航键保留。解析与分页断点落盘，大书二次秒开。
 
-private data class ReaderTheme(val bg: Color, val ink: Color, val barBrush: Brush, val barInk: Color)
+internal data class ReaderTheme(val bg: Color, val ink: Color, val barBrush: Brush, val barInk: Color)
 
 // 底条与安卓导航键连成一条：白色/深色用播放界面同款黑渐变，sepia 用深棕渐变
 private val readerBarBlack = Brush.verticalGradient(
@@ -164,11 +169,26 @@ private val readerBarBrown = Brush.verticalGradient(
     1f to Color(0xFF54432F),
 )
 
-private fun themeOf(t: EbookTheme): ReaderTheme = when (t) {
+internal fun themeOf(t: EbookTheme): ReaderTheme = when (t) {
     EbookTheme.WHITE -> ReaderTheme(Color(0xFFFFFFFF), Color(0xFF1A1A1A), readerBarBlack, Color.White)
     EbookTheme.SEPIA -> ReaderTheme(Color(0xFFF4ECD8), Color(0xFF5B4636), readerBarBrown, Color(0xFFF5EBD5))
     EbookTheme.DARK -> ReaderTheme(Color(0xFF1C1C1E), Color(0xFFE8E8E8), readerBarBlack, Color.White)
 }
+
+/**
+ * 随机阅读对阅读器的注入：不写本地书库，顶栏显示书名/章节，底栏“目录”换成“入库”，
+ * 章节边界通知外层静默缓存整本，播放时由外层重建 TTS 书目。
+ */
+internal data class FeedReaderUi(
+    val bookTitle: String,
+    val onSaveToShelf: () -> Unit,
+    val onChapterEdge: (chapter: Int) -> Unit,
+    val onPositionChanged: (chapter: Int, block: Int, char: Int) -> Unit,
+    val onPlayFrom: (chapter: Int, block: Int, char: Int) -> Unit,
+    /** 信息流里底栏“上一章/下一章”：随机跳到本书另一个章节。 */
+    val onPrevChapter: () -> Unit,
+    val onNextChapter: () -> Unit,
+)
 
 @Composable
 fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
@@ -475,7 +495,7 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
 }
 
 @Composable
-private fun ReaderBody(
+internal fun ReaderBody(
     bookPath: String,
     book: ParsedEbook,
     initial: GlobalPage,
@@ -491,6 +511,15 @@ private fun ReaderBody(
     onOpenMusic: () -> Unit,
     onOpenCast: () -> Unit,
     castActive: Boolean,
+    /** 窗口/分页缓存的隔离键；随机阅读用“远程路径+初始位置”。 */
+    bookKey: String = bookPath,
+    /** 随机阅读：按章向服务端取正文；null = 直接用 book 里的本地正文。 */
+    chapterLoader: (suspend (Int) -> List<EbookBlock>?)? = null,
+    /** false = 不写本地分页缓存/进度库（随机阅读）。 */
+    persistPages: Boolean = true,
+    /** 前后盲预排章数；随机阅读传 0，只排当前章。 */
+    prefetchChapters: Int = PREFETCH_CHAPTERS,
+    feed: FeedReaderUi? = null,
 ) {
     val context = LocalContext.current
     val container = (context.applicationContext as AuroraApplication).container
@@ -529,21 +558,30 @@ private fun ReaderBody(
             initial = initial,
             anchorBlock = initBlock,
             anchorChar = initChar,
+            bookKey = bookKey,
+            chapterLoader = chapterLoader,
+            persistPages = persistPages,
+            prefetchChapters = prefetchChapters,
         )
         val breaks: Map<Int, List<List<PageSlice>>> = win.breaks
 
         // 投屏用整本正文；开投前把阅读页当前页首的“章:段:字”报给遥控器作为初始定位。
         // 用 bookPath 做 key，避免拿整本书（大章节列表）做 Compose key 的深比较。
-        LaunchedEffect(bookPath) { container.ebookCast.setBook(book) }
-        DisposableEffect(bookPath) { onDispose { container.ebookCast.setBook(null) } }
+        // 随机阅读只有按章取到的片段，不参与投屏。
+        if (feed == null) {
+            LaunchedEffect(bookPath) { container.ebookCast.setBook(book) }
+            DisposableEffect(bookPath) { onDispose { container.ebookCast.setBook(null) } }
+        }
 
         val castPageSlot = win.slotAt(PAGE_WINDOW_CENTER)
-        LaunchedEffect(win.center, castPageSlot) {
-            val gp = win.center
-            val first = castPageSlot?.slices?.firstOrNull() ?: return@LaunchedEffect
-            container.ebookCast.setReaderAnchor(
-                EbookCastAnchor(gp.chapter, first.block.coerceAtLeast(0), first.start.coerceAtLeast(0)),
-            )
+        if (feed == null) {
+            LaunchedEffect(win.center, castPageSlot) {
+                val gp = win.center
+                val first = castPageSlot?.slices?.firstOrNull() ?: return@LaunchedEffect
+                container.ebookCast.setReaderAnchor(
+                    EbookCastAnchor(gp.chapter, first.block.coerceAtLeast(0), first.start.coerceAtLeast(0)),
+                )
+            }
         }
 
         // 章节字符统计（进度用，不依赖分页）
@@ -555,7 +593,7 @@ private fun ReaderBody(
 
         // “眼睛”最后一次真正移动的时刻：锁屏/切后台期间 activity 到 STOPPED，
         // win.center 冻在旧页不动，这个时间戳也冻着——落盘时据此判定它是旧快照。
-        var eyeAt by remember(bookPath) { mutableLongStateOf(0L) }
+        var eyeAt by remember(bookKey) { mutableLongStateOf(0L) }
         LaunchedEffect(win.center) { eyeAt = System.currentTimeMillis() }
 
         // 每翻一页立刻存档（无防抖）：进设置、进程被杀都不丢。
@@ -563,9 +601,28 @@ private fun ReaderBody(
         // 不能覆盖控制器推进的耳朵进度；反过来用户手动翻页后，耳朵的旧锚点也不能把眼睛拽回去。
         // 窗口落定只存一次（旧双通道 currentPage + settledPage 已合并）。
         fun persist(gp: GlobalPage) {
+            if (!persistPages) return
             val ear = tts.position.value?.takeIf { tts.bookPath == bookPath }
             val t = persistTargetOf(book, breaks, chapterChars, totalChars, gp, ear, tts.positionAt, eyeAt)
             store.saveReadingPos(bookPath, t.spine, t.page, t.block, t.char, t.pct, t.at)
+        }
+
+        // 随机阅读：把眼睛当前位置（章 + 页首块/字）回给外层，切书/退出时作为恢复点。
+        if (feed != null) {
+            LaunchedEffect(win.center, win.slotAt(PAGE_WINDOW_CENTER)) {
+                val gp = win.center
+                val sl = win.slotAt(PAGE_WINDOW_CENTER)?.slices?.firstOrNull()
+                if (sl != null) feed.onPositionChanged(gp.chapter, sl.block.coerceAtLeast(0), sl.start.coerceAtLeast(0))
+            }
+            // 章节首/末页：静默缓存整本，后续章节不再逐章下载。
+            LaunchedEffect(win.center, win.slotAt(PAGE_WINDOW_CENTER)) {
+                val gp = win.center
+                val rendered = win.slotAt(PAGE_WINDOW_CENTER) ?: return@LaunchedEffect
+                val count = breaks[gp.chapter]?.filter { it.isNotEmpty() }?.size ?: return@LaunchedEffect
+                if (gp.page == 0 || gp.page == count - 1) {
+                    feed.onChapterEdge(gp.chapter)
+                }
+            }
         }
 
         /**
@@ -574,6 +631,7 @@ private fun ReaderBody(
          * 返回是否真的跳了（调用方可决定要不要回正 pager）。
          */
         suspend fun pullForwardFromDb(): Boolean {
+            if (!persistPages) return false
             val row = store.bookByPath(bookPath) ?: return false
             val cur = win.center
             val curSl = breaks[cur.chapter]?.filter { it.isNotEmpty() }?.getOrNull(cur.page)?.firstOrNull()
@@ -623,10 +681,14 @@ private fun ReaderBody(
             val chTotal = chapterChars.getOrNull(curGP.chapter)?.coerceAtLeast(0) ?: 0
             val chRead = charsOfPage(book, curGP.chapter, curPages, curGP.page)
             val chPct = if (chTotal <= 0) 0 else ((chRead.toFloat() / chTotal) * 100).toInt().coerceIn(0, 100)
-            ReaderStatusBar(
+            ReaderTitleOrStatus(
+                feed = feed,
+                bookTitle = book.title.ifBlank { feed?.bookTitle.orEmpty() },
+                chapterTitle = book.chapters.getOrNull(curGP.chapter)?.title.orEmpty(),
                 left = if (win.slotAt(PAGE_WINDOW_CENTER) == null) "" else "${EbookAnchorCode.encode(curGP.chapter, topBlock)} 本章余${remain}页${chPct}%",
                 right = "${rememberTimeText()} · ${rememberBatteryPct()}%",
-                color = meta,
+                meta = meta,
+                theme = prefs.theme,
             )
 
             // ---- 正文 ----
@@ -637,7 +699,7 @@ private fun ReaderBody(
             ) {
                 // pager 只在换书时重建（固定 7 页、center 恒为 3，不跟分页回写走）；
                 // TOC/设置返回是页内覆盖，不重建
-                val pager = key(bookPath) { rememberPagerState(initialPage = PAGE_WINDOW_CENTER) { PAGE_WINDOW_SIZE } }
+                val pager = key(bookKey) { rememberPagerState(initialPage = PAGE_WINDOW_CENTER) { PAGE_WINDOW_SIZE } }
 
                 /** 超链接点击：e:url = 外部浏览器；i:章:块 = 站内跳转（先落盘块锚点，窗口内 ensure 再定位）。 */
                 fun handleLink(tag: String) {
@@ -658,7 +720,7 @@ private fun ReaderBody(
                         val bi = parts.getOrNull(1)?.toIntOrNull() ?: 0
                         if (ci in book.chapters.indices) {
                             // 站内跳转不等分页，直接把块锚点落盘
-                            store.saveTtsPos(bookPath, ci, bi, 0)
+                            if (persistPages) store.saveTtsPos(bookPath, ci, bi, 0)
                             scope.launch {
                                 win.jumpToBlock(ci, bi)
                                 runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
@@ -681,6 +743,7 @@ private fun ReaderBody(
                 // 大屏翻页后回报“章:段:字”：手机跳到该字所在页，并按同一锚点落盘。
                 // 这是两边进度同步的唯一通道；投屏期间手机页面不反向驱动大屏。
                 LaunchedEffect(Unit) {
+                    if (feed != null) return@LaunchedEffect
                     container.ebookCast.remoteAnchors.collect { a ->
                         if (container.ebookCast.state.value.mode == EbookCastMode.OFF) return@collect
                         if (a.chapter !in book.chapters.indices) return@collect
@@ -761,6 +824,7 @@ private fun ReaderBody(
                         // 两道守卫：别书的残留位置不写；前台用户手动翻到别的章节时
                         // 耳朵不覆盖眼睛（后台/锁屏时 TTS 继续落盘，靠它续命）。
                         LaunchedEffect(ttsPos) {
+                            if (!persistPages) return@LaunchedEffect
                             val pos = ttsPos ?: return@LaunchedEffect
                             if (tts.bookPath != bookPath) return@LaunchedEffect
                             if (pos.chapter != win.center.chapter &&
@@ -787,7 +851,7 @@ private fun ReaderBody(
                         // turn 按书隔离（stop/setBook 清零，同一值只导航一次），
                         // 否则旧书残留会把新书拽到别的章节，且每次手势结束的重跑都会拽回过期位置。
                         val turnReq by tts.turnRequest.collectAsStateWithLifecycle()
-                        var handledTurn by remember(bookPath) { mutableStateOf<Triple<Int, Int, Int>?>(null) }
+                        var handledTurn by remember(bookKey) { mutableStateOf<Triple<Int, Int, Int>?>(null) }
                         LaunchedEffect(turnReq, pager.isScrollInProgress) {
                             if (pager.isScrollInProgress) return@LaunchedEffect
                             val t = turnReq ?: return@LaunchedEffect
@@ -804,7 +868,7 @@ private fun ReaderBody(
                             val cps = breaks[c]?.filter { it.isNotEmpty() }.orEmpty()
                             if (cps.isEmpty()) {
                                 // 该章没排好：先把锚点落盘，再 ensure 后精确定位
-                                store.saveTtsPos(bookPath, c, b, ch, at)
+                                if (persistPages) store.saveTtsPos(bookPath, c, b, ch, at)
                                 win.jumpToChar(c, b, ch)
                                 runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
                                 persist(win.center)
@@ -813,11 +877,13 @@ private fun ReaderBody(
                                 val p = cps.indexOfFirst { page ->
                                     page.any { s -> s.block == b && s.end > ch }
                                 }.takeIf { it >= 0 } ?: pageForBlock(cps, b)
-                                val chars = charsBeforeChapter(c) + charsOfPage(book, c, cps, p)
-                                store.saveReadingPos(
-                                    bookPath, c, p, b, ch,
-                                    (chars.toFloat() / totalChars).coerceIn(0f, 1f), at,
-                                )
+                                if (persistPages) {
+                                    val chars = charsBeforeChapter(c) + charsOfPage(book, c, cps, p)
+                                    store.saveReadingPos(
+                                        bookPath, c, p, b, ch,
+                                        (chars.toFloat() / totalChars).coerceIn(0f, 1f), at,
+                                    )
+                                }
                                 goToPage(GlobalPage(c, p))
                             }
                         }
@@ -864,7 +930,7 @@ private fun ReaderBody(
                         HorizontalPager(
                             state = pager,
                             modifier = Modifier.fillMaxSize()
-                                .pointerInput(bookPath) {
+                                .pointerInput(bookKey) {
                                     detectTapGestures { offset ->
                                         val w = size.width
                                         // 点击翻页：相对当前槽 ±1，有坐标才动（书首/书末点不动）
@@ -917,26 +983,40 @@ private fun ReaderBody(
                 barBrush = th.barBrush,
                 barInk = th.barInk,
                 isTtsPlaying = ttsPlaying,
-                sentenceMode = ttsUnit == EbookTtsUnit.SENTENCE,
-                onTtsPrev = { tts.prev() },
+                sentenceMode = feed == null && ttsUnit == EbookTtsUnit.SENTENCE,
+                // 随机阅读里“上一句/下一句”改成随机切章节。
+                prevLabel = if (feed != null) "上一章" else null,
+                nextLabel = if (feed != null) "下一章" else null,
+                onTtsPrev = { if (feed != null) feed.onPrevChapter() else tts.prevUnit() },
                 onTtsToggle = {
                     if (ttsPlaying) {
                         // 用户亲手停朗读：音乐一起暂停（服务侧快照，之后播放键可双恢复）
-                        tts.stop(userInitiated = true)
+                        tts.stop(userInitiated = true, savePos = persistPages)
                     } else {
                         // 每次点播放都从当前页最顶上第一个字开始读
                         // （页顶可能是段落中间，带上块内字偏移）
                         val (c, p) = win.center
                         val sl = breaks[c]?.filter { it.isNotEmpty() }?.getOrNull(p)?.firstOrNull()
-                        if (sl != null) tts.playFrom(c, sl.block, sl.start)
+                        if (sl != null) {
+                            if (feed != null) feed.onPlayFrom(c, sl.block, sl.start)
+                            else tts.playFrom(c, sl.block, sl.start)
+                        }
                     }
                 },
-                onTtsNext = { tts.next() },
+                onTtsNext = { if (feed != null) feed.onNextChapter() else tts.nextUnit() },
                 onToc = {
-                    val (c, p) = win.center
-                    val blk = breaks[c]?.filter { it.isNotEmpty() }?.getOrNull(p)?.firstOrNull()?.block ?: 0
-                    onOpenToc(c, blk)
+                    if (feed != null) {
+                        feed.onSaveToShelf()
+                    } else {
+                        val (c, p) = win.center
+                        val blk = breaks[c]?.filter { it.isNotEmpty() }?.getOrNull(p)?.firstOrNull()?.block ?: 0
+                        onOpenToc(c, blk)
+                    }
                 },
+                tocLabel = if (feed != null) "入库" else "目录",
+                tocIcon = if (feed != null) Icons.Filled.Download else Icons.AutoMirrored.Filled.List,
+                showMusic = feed == null,
+                showCast = feed == null,
                 onOptions = onOpenOptions,
                 onMusic = onOpenMusic,
                 onCast = onOpenCast,
@@ -1175,16 +1255,68 @@ private fun ReaderStatusBar(left: String, right: String, color: Color) {
     }
 }
 
+/**
+ * 顶栏：本地书保持原来的“编码 + 本章余页数”，随机阅读换成“书名 · 章节名”。
+ * 随机模式字号略大、正文黑色；过长时慢速 marquee（`basicMarquee` 只在溢出时滚动）。
+ */
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun ReaderTitleOrStatus(
+    feed: FeedReaderUi?,
+    bookTitle: String,
+    chapterTitle: String,
+    left: String,
+    right: String,
+    meta: Color,
+    theme: EbookTheme,
+) {
+    if (feed == null) {
+        ReaderStatusBar(left = left, right = right, color = meta)
+        return
+    }
+    val ink = if (theme == EbookTheme.DARK) Color(0xFFEDEDED) else Color.Black
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "${bookTitle.ifBlank { "随机阅读" }} · ${chapterTitle.ifBlank { "正文" }}",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            color = ink,
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
+            modifier = Modifier
+                .weight(1f)
+                .basicMarquee(
+                    iterations = Int.MAX_VALUE,
+                    initialDelayMillis = 1400,
+                    repeatDelayMillis = 1200,
+                    velocity = 22.dp,
+                ),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(right, fontSize = 12.sp, color = meta, maxLines = 1)
+    }
+}
+
 @Composable
 private fun ReaderBottomBar(
     barBrush: Brush,
     barInk: Color,
     isTtsPlaying: Boolean,
     sentenceMode: Boolean = false,
+    /** 覆盖默认的“上一句/上一首”文案（随机阅读用“上一章”）。 */
+    prevLabel: String? = null,
+    nextLabel: String? = null,
     onTtsPrev: () -> Unit,
     onTtsToggle: () -> Unit,
     onTtsNext: () -> Unit,
     onToc: () -> Unit,
+    tocLabel: String = "目录",
+    tocIcon: ImageVector = Icons.AutoMirrored.Filled.List,
+    showMusic: Boolean = true,
+    showCast: Boolean = true,
     onOptions: () -> Unit,
     onMusic: () -> Unit,
     onCast: () -> Unit,
@@ -1199,16 +1331,23 @@ private fun ReaderBottomBar(
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ReaderButton("目录", Icons.AutoMirrored.Filled.List, barInk, 1f, onToc)
-            ReaderButton("音乐", Icons.Filled.MusicNote, barInk, 1f, onMusic)
-            ReaderButton(if (castActive) "投屏中" else "投屏", Icons.Filled.Airplay, barInk, 1f, onCast)
-            ReaderButton(if (sentenceMode) "上一句" else "上一首", Icons.Filled.SkipPrevious, barInk, 1f, onTtsPrev)
+            ReaderButton(tocLabel, tocIcon, barInk, 1f, onToc)
+            // 随机阅读没有站内音乐面板（阅读页的音乐气泡是私有页面），别摆一个点了没反应的键。
+            if (showMusic) ReaderButton("音乐", Icons.Filled.MusicNote, barInk, 1f, onMusic)
+            if (showCast) ReaderButton(if (castActive) "投屏中" else "投屏", Icons.Filled.Airplay, barInk, 1f, onCast)
+            ReaderButton(
+                prevLabel ?: if (sentenceMode) "上一句" else "上一首",
+                Icons.Filled.SkipPrevious, barInk, 1f, onTtsPrev,
+            )
             ReaderButton(
                 if (isTtsPlaying) "停止" else "播放",
                 if (isTtsPlaying) Icons.Filled.Stop else Icons.Filled.PlayArrow,
                 barInk, 1f, onTtsToggle,
             )
-            ReaderButton(if (sentenceMode) "下一句" else "下一首", Icons.Filled.SkipNext, barInk, 1f, onTtsNext)
+            ReaderButton(
+                nextLabel ?: if (sentenceMode) "下一句" else "下一首",
+                Icons.Filled.SkipNext, barInk, 1f, onTtsNext,
+            )
             ReaderButton("选项", Icons.Filled.Settings, barInk, 1f, onOptions)
         }
     }
@@ -1416,12 +1555,16 @@ private fun EbookTocPage(
 // ---- 阅读设置页：风格 / 字体 / 字号（复用 Ios5 设置组件） ----
 
 @Composable
-private fun EbookOptionsPage(
+internal fun EbookOptionsPage(
     onBack: () -> Unit,
     bookPath: String,
     book: ParsedEbook,
     onToast: (String) -> Unit,
     onJumpAnchor: (chapter: Int, block: Int) -> Unit,
+    /** 随机阅读：隐藏本地进度/历史，改显示“加载插图”实验开关。 */
+    feedMode: Boolean = false,
+    feedImages: Boolean = false,
+    onSetFeedImages: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val container = (context.applicationContext as AuroraApplication).container
@@ -1544,6 +1687,7 @@ private fun EbookOptionsPage(
                     },
                 )
             }
+            if (!feedMode) {
             ios5Section("进度跳转") {
                 var draft by remember(bookPath) { mutableStateOf("") }
                 fun doJump() {
@@ -1611,6 +1755,17 @@ private fun EbookOptionsPage(
                             onClick = { expanded = !expanded },
                         )
                     }
+                }
+            }
+            }
+            if (feedMode) {
+                ios5Section("插图") {
+                    Ios5SwitchRow(
+                        title = "加载插图（实验）",
+                        subtitle = "服务端 v1 暂不返回图片；开关会随请求一起发送",
+                        checked = feedImages,
+                        onCheckedChange = onSetFeedImages,
+                    )
                 }
             }
             ios5Section("页面风格") {

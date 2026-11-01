@@ -177,11 +177,26 @@ class UnifiedPlayer(
                 invalidateState()
             }
         }
+        // 随机阅读不写本地最近阅读，通知栏书名必须优先信朗读控制器；
+        // 控制器清空书目后回退到本地最近阅读，并丢掉无法续播的远程断点。
+        scope.launch {
+            tts.bookTitle.collect { t ->
+                if (t.isBlank()) {
+                    lastPara = null
+                    lastSection = ""
+                    lastParaBookPath = null
+                    bookTitle = container.ebookStore.recents.value.firstOrNull()?.displayTitle.orEmpty()
+                } else {
+                    bookTitle = t
+                }
+                invalidateState()
+            }
+        }
         scope.launch {
             container.ebookStore.recents.collect { recents ->
                 val top = recents.firstOrNull()
                 topPath = top?.path
-                bookTitle = top?.displayTitle.orEmpty()
+                if (tts.bookTitle.value.isBlank()) bookTitle = top?.displayTitle.orEmpty()
                 bookCover = top?.coverPath.orEmpty()
                 // 切书：丢掉上一本书的断点，避免按播放读错书。
                 if (lastPara != null) {

@@ -28,6 +28,16 @@ const val MAX_RECENT_FONTS = 10
 const val MIN_RECENT_BOOKS = 5
 const val MAX_RECENT_BOOKS = 20
 
+/** 随机阅读上次停下的位置（用于下次“开始阅读”恢复；书已不在随机池时由服务端重新随机）。 */
+data class EbookFeedResume(
+    val deviceId: String = "",
+    val rootKey: String = "",
+    val path: String = "",
+    val chapter: Int = 0,
+    val block: Int = 0,
+    val char: Int = 0,
+)
+
 // 阅读设置：页面风格 / 字体 / 字号。复用 DataStore 模式，与音乐设置互相独立。
 class EbookPrefs(context: Context) {
     private val appContext = context.applicationContext
@@ -65,6 +75,10 @@ class EbookPrefs(context: Context) {
         val HDMI_CAST_SHOW_MUSIC = booleanPreferencesKey("hdmi_cast_show_music")
         val HDMI_CAST_TURN_UNIT = stringPreferencesKey("hdmi_cast_turn_unit")
         val HDMI_CAST_MUSIC_ON_CAST = booleanPreferencesKey("hdmi_cast_music_on_cast")
+        /** 随机阅读是否请求插图（服务端 v1 暂不返回，开关先留口子）。 */
+        val FEED_IMAGES = booleanPreferencesKey("feed_images")
+        /** 随机阅读上次位置（JSON）。 */
+        val FEED_RESUME = stringPreferencesKey("feed_resume")
     }
 
     private val gson = Gson()
@@ -86,6 +100,14 @@ class EbookPrefs(context: Context) {
     /** 投屏画面设置：底色共用，字号/栏宽网页端与 HDMI 各存一份，遥控端改完即落盘。 */
     private val _castPrefs = MutableStateFlow(EbookCastDisplayPrefs())
     val castPrefs: StateFlow<EbookCastDisplayPrefs> = _castPrefs.asStateFlow()
+
+    /** 随机阅读：是否请求插图（实验开关）。 */
+    private val _feedImages = MutableStateFlow(false)
+    val feedImages: StateFlow<Boolean> = _feedImages.asStateFlow()
+
+    /** 随机阅读上次位置；空/书已不在池时由调用方重新随机。 */
+    private val _feedResume = MutableStateFlow(EbookFeedResume())
+    val feedResume: StateFlow<EbookFeedResume> = _feedResume.asStateFlow()
 
     init {
         scope.launch {
@@ -142,6 +164,18 @@ class EbookPrefs(context: Context) {
                     hdmiMusicOnCast = p[Keys.HDMI_CAST_MUSIC_ON_CAST] ?: false,
                 )
             }.collect { _castPrefs.value = it }
+        }
+        scope.launch {
+            appContext.ebookReadDataStore.data.map { p ->
+                p[Keys.FEED_IMAGES] ?: false
+            }.collect { _feedImages.value = it }
+        }
+        scope.launch {
+            appContext.ebookReadDataStore.data.map { p ->
+                p[Keys.FEED_RESUME]?.takeIf { it.isNotBlank() }?.let { json ->
+                    runCatching { gson.fromJson(json, EbookFeedResume::class.java) }.getOrNull()
+                } ?: EbookFeedResume()
+            }.collect { _feedResume.value = it }
         }
     }
 
@@ -231,6 +265,20 @@ class EbookPrefs(context: Context) {
     fun setCastTheme(t: EbookTheme) {
         scope.launch { appContext.ebookReadDataStore.edit { it[Keys.CAST_THEME] = t.name } }
     }
+
+    /** 随机阅读“加载插图（实验）”开关；协议字段已传，服务端 v1 暂不返回图片。 */
+    fun setFeedImages(enabled: Boolean) {
+        scope.launch { appContext.ebookReadDataStore.edit { it[Keys.FEED_IMAGES] = enabled } }
+    }
+
+    /** 记住随机阅读最后停下的位置，下次进入优先恢复。 */
+    fun saveFeedResume(resume: EbookFeedResume) {
+        scope.launch {
+            appContext.ebookReadDataStore.edit { it[Keys.FEED_RESUME] = gson.toJson(resume) }
+        }
+    }
+
+    suspend fun initialFeedResume(): EbookFeedResume = feedResume.first()
 
     /** 改投屏字号；web = true 存网页投屏的一份，false 存 HDMI 的一份。 */
     fun setCastFontSize(web: Boolean, px: Int) {

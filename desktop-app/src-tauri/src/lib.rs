@@ -1,6 +1,8 @@
 mod commands;
 mod db;
 mod discovery;
+mod ebook_feed;
+mod ebook_parse;
 mod http_server;
 mod media;
 mod meta;
@@ -63,11 +65,14 @@ pub fn run() {
             let (pair_tx, mut pair_rx) = tokio::sync::mpsc::unbounded_channel();
             let pairing = Arc::new(relay_pairing::PairingState::new(pair_tx));
 
+            let feed = Arc::new(ebook_feed::FeedService::new(cache_dir.clone()));
+
             let http_state = http_server::HttpState {
                 db: database.clone(),
                 info: info.clone(),
                 cache_dir: cache_dir.clone(),
                 pairing: pairing.clone(),
+                feed,
             };
 
             let relay = relay_host::RelayManager::load(
