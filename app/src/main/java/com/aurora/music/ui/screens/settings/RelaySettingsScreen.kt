@@ -6,7 +6,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -14,6 +16,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -52,6 +55,7 @@ fun RelaySettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     var keyPem by remember { mutableStateOf(stored.value.keyPem) }
     var mediaKey by remember { mutableStateOf(stored.value.mediaKey) }
     var message by remember { mutableStateOf<String?>(null) }
+    var confirmDelete by remember { mutableStateOf(false) }
 
     fun saveManual() {
         service.saveSettings(
@@ -128,13 +132,19 @@ fun RelaySettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
         ios5Section("状态") {
             Column(Modifier.fillMaxWidth().padding(12.dp)) {
                 val statusText = when {
+                    state.authFailed -> "认证失败"
                     !state.enabled -> "未启用"
                     !state.configured -> "配置不完整"
                     state.connected && state.hostOnline -> "已连接 · 源设备在线"
                     state.connected -> "已连接 · 源设备离线"
                     else -> "未连接"
                 }
-                Text(statusText, color = Ios5Colors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    statusText,
+                    color = if (state.authFailed) Color(0xFFD63A3A) else Ios5Colors.TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                )
                 Spacer(Modifier.height(4.dp))
                 val detail = buildString {
                     if (state.deviceName.isNotBlank()) append(state.deviceName).append(" · ")
@@ -144,9 +154,23 @@ fun RelaySettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                 Text(detail, color = Ios5Colors.TextSecondary, fontSize = 13.sp)
                 state.lastError?.let {
                     Spacer(Modifier.height(4.dp))
-                    Text(it, color = Ios5Colors.TextSecondary, fontSize = 12.sp)
+                    Text(
+                        it,
+                        color = if (state.authFailed) Color(0xFFD63A3A) else Ios5Colors.TextSecondary,
+                        fontSize = 12.sp,
+                    )
+                }
+                if (state.authFailed) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "这台手机的中继配置已失效。删除配置后，在电脑端重新生成配对码并扫码加入。",
+                        color = Color(0xFFD63A3A),
+                        fontSize = 12.sp,
+                    )
                 }
             }
+            // 无论认证成功与否都保留删除入口，避免旧配置把手机卡死。
+            Ios5ActionRow("删除中继配置", danger = true) { confirmDelete = true }
         }
 
         ios5Section("高级") {
@@ -180,6 +204,39 @@ fun RelaySettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
                     singleLine = false,
                 ) { mediaKey = it }
                 Ios5ActionRow("保存手动配置") { saveManual() }
+            }
+        }
+
+        item {
+            if (confirmDelete) {
+                AlertDialog(
+                    onDismissRequest = { confirmDelete = false },
+                    title = { Text("删除中继配置？") },
+                    text = {
+                        Text("将清除本机保存的证书、密钥和快照。删除后需要在电脑端重新生成配对码并扫码加入。")
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                confirmDelete = false
+                                service.clearConfig()
+                                enabled = false
+                                addr = ""
+                                fingerprint = ""
+                                certPem = ""
+                                keyPem = ""
+                                mediaKey = ""
+                                pairText = ""
+                                message = "已删除中继配置"
+                            },
+                        ) {
+                            Text("删除", color = Color(0xFFD63A3A))
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { confirmDelete = false }) { Text("取消") }
+                    },
+                )
             }
         }
     }

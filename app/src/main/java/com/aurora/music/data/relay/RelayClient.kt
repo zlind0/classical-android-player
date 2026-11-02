@@ -26,6 +26,9 @@ import kotlinx.coroutines.withTimeoutOrNull
  * 到中继服务器的长连接：req 多路复用、断线重连、PING 保活、请求超时。
  * 所有写操作都走同一条 Channel，避免并发写把帧切碎。
  */
+/** 中继明确拒绝认证（设备被撤销/未授权），重试也不会成功。 */
+class RelayAuthException(val code: Int, message: String) : IllegalStateException(message)
+
 class RelayClient(private val config: RelayConfig) {
 
     private companion object {
@@ -33,6 +36,9 @@ class RelayClient(private val config: RelayConfig) {
         const val HEARTBEAT_MS = 15_000L
         const val MIN_BACKOFF_MS = 500L
         const val MAX_BACKOFF_MS = 8_000L
+        /** 首次 + 两次重试；仍然认证失败就停止，避免无限重连。 */
+        const val MAX_AUTH_ATTEMPTS = 3
+        val AUTH_ERROR_CODES = setOf(3, 12) // unauthorized / device_revoked
     }
 
     data class Status(
@@ -44,6 +50,7 @@ class RelayClient(private val config: RelayConfig) {
         val sessionId: Long = 0,
         val keyId: Long = 0,
         val lastError: String? = null,
+        val authFailed: Boolean = false,
     )
 
     private val _status = MutableStateFlow(Status())
@@ -64,6 +71,7 @@ class RelayClient(private val config: RelayConfig) {
     fun start(scope: CoroutineScope) {
         if (job?.isActive == true) return
         running = true
+        _status.value = _status.value.copy(authFailed = false, lastError = null)
         job = scope.launch(Dispatchers.IO) { runLoop() }
     }
 
@@ -106,17 +114,37 @@ class RelayClient(private val config: RelayConfig) {
 
     private suspend fun runLoop() {
         var backoff = 1_000L
+        var authAttempts = 0
         while (running) {
             try {
                 session()
+                authAttempts = 0
                 backoff = 1_000L
             } catch (error: Throwable) {
                 if (!running) break
                 connected = false
-                _status.value = _status.value.copy(
-                    connected = false,
-                    lastError = error.message ?: error.javaClass.simpleName,
-                )
+                if (error is RelayAuthException) {
+                    authAttempts++
+                    if (authAttempts >= MAX_AUTH_ATTEMPTS) {
+                        _status.value = _status.value.copy(
+                            connected = false,
+                            authFailed = true,
+                            lastError = "认证失败：设备已被撤销或未授权，请删除配置后重新配对",
+                        )
+                        running = false
+                        break
+                    }
+                    _status.value = _status.value.copy(
+                        connected = false,
+                        authFailed = false,
+                        lastError = "认证失败，正在重试（$authAttempts/$MAX_AUTH_ATTEMPTS）…",
+                    )
+                } else {
+                    _status.value = _status.value.copy(
+                        connected = false,
+                        lastError = error.message ?: error.javaClass.simpleName,
+                    )
+                }
             }
             pending.values.forEach { it.cancel() }
             pending.clear()
@@ -167,7 +195,12 @@ class RelayClient(private val config: RelayConfig) {
                     keyId = settings.keyId,
                 )
             }
-            is RelayMsg.ErrorMsg -> throw IllegalStateException("relay error ${hello.code}: ${hello.text}")
+            is RelayMsg.ErrorMsg -> {
+                if (hello.code in AUTH_ERROR_CODES) {
+                    throw RelayAuthException(hello.code, hello.text)
+                }
+                throw IllegalStateException("relay error ${hello.code}: ${hello.text}")
+            }
             else -> throw IllegalStateException("unexpected handshake reply")
         }
 
@@ -226,6 +259,11 @@ class RelayClient(private val config: RelayConfig) {
                 continue
             }
             val message = runCatching { RelayMsg.decode(frame) }.getOrNull() ?: continue
+            if (message is RelayMsg.ErrorMsg && message.code in AUTH_ERROR_CODES) {
+                // 已建立的会话被撤销时 relay 会先发 ERROR 再断开；必须把它当成
+                // 认证失败，而不是普通断线，否则会无限重连。
+                throw RelayAuthException(message.code, message.text)
+            }
             if (frame.req != 0) {
                 pending.remove(frame.req)?.complete(message)
             }

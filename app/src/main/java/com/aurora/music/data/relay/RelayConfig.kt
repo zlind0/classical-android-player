@@ -45,6 +45,11 @@ class RelayConfig(context: Context) {
         proxyPort = prefs.getInt("proxyPort", 47001),
     )
 
+    fun clear() {
+        prefs.edit().clear().apply()
+        _settings.value = RelaySettings()
+    }
+
     fun save(settings: RelaySettings) {
         prefs.edit()
             .putBoolean("enabled", settings.enabled)

@@ -43,6 +43,8 @@ class RelayService(
         val storeCap: Long = 0,
         val keyId: Long = 0,
         val lastError: String? = null,
+        /** 中继明确拒绝认证，重试已停止；UI 应显示红色错误和删除入口。 */
+        val authFailed: Boolean = false,
     )
 
     sealed class PairState {
@@ -110,6 +112,7 @@ class RelayService(
             proxyPort = proxy.port,
             keyId = settings.keyId,
             lastError = null,
+            authFailed = false,
         )
         identityJob?.cancel()
         identityJob = scope.launch {
@@ -128,6 +131,7 @@ class RelayService(
                 connected = false,
                 hostOnline = false,
                 lastError = status.lastError,
+                authFailed = status.authFailed,
             )
             return
         }
@@ -146,6 +150,7 @@ class RelayService(
             storeCap = latest.storeCap,
             keyId = config.current.keyId,
             lastError = error ?: latest.lastError,
+            authFailed = latest.authFailed,
         )
     }
 
@@ -241,6 +246,15 @@ class RelayService(
         config.save(settings)
         store.clearSnapshot()
         restart()
+    }
+
+    /** 删除本机保存的中继配置、证书、密钥和快照。 */
+    fun clearConfig() {
+        stop()
+        config.clear()
+        store.clearSnapshot()
+        _state.value = State()
+        _pairState.value = PairState.Idle
     }
 
     /** 供 RemoteLibraryManager 使用的设备端点。 */
