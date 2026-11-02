@@ -792,7 +792,10 @@ internal fun ReaderBody(
                 // 目录按块跳：与 TTS/链接同一调用，跨章也是它
                 LaunchedEffect(pendingJump) {
                     val pj = pendingJump ?: return@LaunchedEffect
-                    win.jumpToBlock(pj.chapter, pj.block)
+                    // 带字偏移的跳转（投屏大屏回报的锚点）要落到同一段里的同一个字，
+                    // 否则退出投屏后手机页面会退回段首。
+                    if (pj.char > 0) win.jumpToChar(pj.chapter, pj.block, pj.char)
+                    else win.jumpToBlock(pj.chapter, pj.block)
                     runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
                     persist(win.center)
                     onConsumeJump()

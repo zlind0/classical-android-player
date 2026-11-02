@@ -42,13 +42,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.CastConnected
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Stop
@@ -264,6 +267,12 @@ fun EbookCastPage(
     /** 随机阅读投屏：翻页键区域上下滑动切上一本/下一本。null = 普通阅读，不响应。 */
     onPrevBook: (() -> Unit)? = null,
     onNextBook: (() -> Unit)? = null,
+    /** 随机阅读：投屏页底部的目录 / 入库 / 随机章节 / 朗读。 */
+    onToc: (() -> Unit)? = null,
+    onSaveToShelf: (() -> Unit)? = null,
+    onRandomChapter: (() -> Unit)? = null,
+    ttsPlaying: Boolean = false,
+    onToggleTts: (() -> Unit)? = null,
     onTogglePlay: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
@@ -317,6 +326,11 @@ fun EbookCastPage(
                 onNextPage = onNextPage,
                 onPrevBook = onPrevBook,
                 onNextBook = onNextBook,
+                onToc = onToc,
+                onSaveToShelf = onSaveToShelf,
+                onRandomChapter = onRandomChapter,
+                ttsPlaying = ttsPlaying,
+                onToggleTts = onToggleTts,
                 onTogglePlay = onTogglePlay,
                 onPrevious = onPrevious,
                 onNext = onNext,
@@ -483,6 +497,11 @@ private fun CastRemotePage(
     onNextPage: () -> Unit,
     onPrevBook: (() -> Unit)?,
     onNextBook: (() -> Unit)?,
+    onToc: (() -> Unit)?,
+    onSaveToShelf: (() -> Unit)?,
+    onRandomChapter: (() -> Unit)?,
+    ttsPlaying: Boolean,
+    onToggleTts: (() -> Unit)?,
     onTogglePlay: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
@@ -522,6 +541,10 @@ private fun CastRemotePage(
         val barTopPad = if (tight) 4.dp else 6.dp
         val transportH = if (tight) 54.dp else 64.dp
         val basePageH = if (tight) 76.dp else 92.dp
+        // 列表收起时最下方多一行「目录 / 入库 / 随机章节 / 朗读」
+        val extraRowH = if (tight) 46.dp else 52.dp
+        val hasExtraRow = onToc != null || onSaveToShelf != null ||
+            onRandomChapter != null || onToggleTts != null
         // 实测：顶栏、设置卡片、音乐面板头部 —— 列表收起时翻页键能长到多大由它们决定
         var topBarH by remember { mutableStateOf(0.dp) }
         var settingsH by remember { mutableStateOf(0.dp) }
@@ -529,8 +552,9 @@ private fun CastRemotePage(
         val expandedPageH = if (listOpen || headerH <= 0.dp) {
             basePageH
         } else {
-            // 剩余高度 = 屏幕 - 顶栏 - 设置 - 面板头部 - 固定间距 - 走带行 - 导航键，留 6dp 余量
-            val used = topBarH + settingsH + headerH + 26.dp + transportH + barTopPad + 1.dp + navInset
+            // 剩余高度 = 屏幕 - 顶栏 - 设置 - 面板头部 - 固定间距 - 走带行 - 底部按钮行 - 导航键，留 6dp 余量
+            val used = topBarH + settingsH + headerH + 26.dp + transportH + barTopPad + 1.dp + navInset +
+                (if (hasExtraRow) extraRowH else 0.dp)
             (maxHeight - used - 6.dp).coerceAtLeast(basePageH)
         }
         // 展开/收起列表时，翻页键行高用动画过渡（同一段动画里列表也在收起）
@@ -598,6 +622,11 @@ private fun CastRemotePage(
                 onNextPage = onNextPage,
                 onPrevBook = onPrevBook,
                 onNextBook = onNextBook,
+                onToc = onToc,
+                onSaveToShelf = onSaveToShelf,
+                onRandomChapter = onRandomChapter,
+                ttsPlaying = ttsPlaying,
+                onToggleTts = onToggleTts,
                 onTogglePlay = onTogglePlay,
                 onPrevious = onPrevious,
                 onNext = onNext,
@@ -723,6 +752,11 @@ private fun CastControlBar(
     onNextPage: () -> Unit,
     onPrevBook: (() -> Unit)?,
     onNextBook: (() -> Unit)?,
+    onToc: (() -> Unit)?,
+    onSaveToShelf: (() -> Unit)?,
+    onRandomChapter: (() -> Unit)?,
+    ttsPlaying: Boolean,
+    onToggleTts: (() -> Unit)?,
     onTogglePlay: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
@@ -824,6 +858,77 @@ private fun CastControlBar(
                 onClick = onNextPage,
             )
         }
+        // 列表收起时最下方补一行阅读操作：目录 / 入库 / 随机章节 / 朗读。
+        // 列表展开时空间留给曲目列表，这一行不显示；普通阅读没有这些回调，也不占位。
+        val hasExtraRow = onToc != null || onSaveToShelf != null ||
+            onRandomChapter != null || onToggleTts != null
+        if (!listOpen && hasExtraRow) {
+            Row(
+                Modifier.fillMaxWidth().height(if (compact) 46.dp else 52.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (onToc != null) {
+                    CastActionKey(
+                        icon = Icons.AutoMirrored.Filled.List,
+                        label = "目录",
+                        modifier = Modifier.weight(1f),
+                        onClick = onToc,
+                    )
+                }
+                if (onSaveToShelf != null) {
+                    CastActionKey(
+                        icon = Icons.Filled.Download,
+                        label = "入库",
+                        modifier = Modifier.weight(1f),
+                        onClick = onSaveToShelf,
+                    )
+                }
+                if (onRandomChapter != null) {
+                    CastActionKey(
+                        icon = Icons.Filled.Shuffle,
+                        label = "随机章节",
+                        modifier = Modifier.weight(1f),
+                        onClick = onRandomChapter,
+                    )
+                }
+                if (onToggleTts != null) {
+                    CastActionKey(
+                        icon = if (ttsPlaying) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                        label = if (ttsPlaying) "停止" else "朗读",
+                        modifier = Modifier.weight(1f),
+                        onClick = onToggleTts,
+                    )
+                }
+            }
+        }
+    }
+}
+
+// 投屏页底部的阅读操作键：图标 + 小号文字，和阅读页底栏同款。
+@Composable
+private fun CastActionKey(
+    icon: ImageVector,
+    label: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(icon, label, tint = Color.White, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.height(2.dp))
+        Text(
+            label,
+            color = Color.White,
+            fontSize = 10.sp,
+            maxLines = 1,
+            style = TextStyle(shadow = Shadow(Color.Black.copy(alpha = 0.6f), Offset(0f, 1f))),
+        )
     }
 }
 

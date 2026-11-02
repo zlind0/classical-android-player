@@ -149,10 +149,13 @@ fun RandomReaderScreen(
      */
     fun currentPosition(b: RandomFeedBook): Triple<Int, Int, Int> {
         val eye = manager.positionFor(b.path)
+        // 遥控页打开时大屏是唯一真相：手机阅读页可能还在追大屏的锚点，
+        // 退出投屏/入库/朗读都必须用大屏最后停下的位置，而不是手机上的旧页。
+        val castAnchor = cast.state.value.anchor.takeIf { cast.state.value.remote }
         val ear = tts.position.value?.takeIf { tts.bookPath == b.path }
-        var chapter = eye?.chapter ?: b.chapterIndex
-        var block = eye?.block ?: b.blockIndex
-        var char = eye?.char ?: b.charOffset
+        var chapter = castAnchor?.chapter ?: eye?.chapter ?: b.chapterIndex
+        var block = castAnchor?.block ?: eye?.block ?: b.blockIndex
+        var char = castAnchor?.char ?: eye?.char ?: b.charOffset
         if (ear != null) {
             val later = when {
                 ear.chapter != chapter -> ear.chapter > chapter
@@ -410,6 +413,10 @@ fun RandomReaderScreen(
             val block = if (blockCount > 0) kotlin.random.Random.nextInt(blockCount) else 0
             manager.rememberPosition(book.path, target, block, 0)
             persistResume()
+            // 投屏中：大屏也要跟着跳到随机章节，否则只有手机页面动了。
+            if (cast.state.value.mode != EbookCastMode.OFF) {
+                cast.setReaderAnchor(EbookCastAnchor(target, block, 0), force = true)
+            }
             jumpGen += 1
             pendingJump = BlockJump(target, block, 0, jumpGen)
             if (!wasPlaying) return@launch
@@ -419,6 +426,15 @@ fun RandomReaderScreen(
             val parsed = feedParsed(book, target, ch)
             tts.setBook("feed:${book.path}", parsed, book.path, force = true)
             tts.playFrom(target, block, 0)
+        }
+    }
+
+    /** 投屏页底部的「朗读」：从大屏/手机当前停下的位置开始或停止朗读。 */
+    fun toggleTts() {
+        if (tts.playing.value) {
+            tts.stop(userInitiated = true, savePos = false)
+        } else {
+            scope.launch { readCurrentBook() }
         }
     }
 
@@ -432,6 +448,10 @@ fun RandomReaderScreen(
         if (tts.playing.value) tts.stop(savePos = false)
         manager.rememberPosition(book.path, chapter, block, 0)
         persistResume()
+        // 投屏中：目录跳转同时把大屏带过去。
+        if (cast.state.value.mode != EbookCastMode.OFF) {
+            cast.setReaderAnchor(EbookCastAnchor(chapter, block, 0), force = true)
+        }
         jumpGen += 1
         pendingJump = BlockJump(chapter, block, 0, jumpGen)
         tocOpen = false
@@ -647,6 +667,36 @@ fun RandomReaderScreen(
         cast.setReaderAnchor(EbookCastAnchor(c, b, ch))
     }
 
+    // 大屏最后停下的锚点：投屏被外部结束（设备断开 / HDMI 拔线）时 state 会先清空，
+    // 这里留一份，退出投屏时把手机阅读进度和恢复点补到同一位置。
+    var lastCastAnchor by remember { mutableStateOf<EbookCastAnchor?>(null) }
+    LaunchedEffect(castState.anchor) {
+        castState.anchor?.let { lastCastAnchor = it }
+    }
+    // 遥控端翻页：大屏把左上角锚点报回来，手机阅读页跟着跳，并立刻记成恢复点。
+    // 随机阅读没有本地进度库，必须自己把位置写进 feed resume，否则退出投屏会回到旧位置。
+    LaunchedEffect(Unit) {
+        cast.remoteAnchors.collect { a ->
+            if (cast.state.value.mode == EbookCastMode.OFF) return@collect
+            val b = manager.state.value.current ?: return@collect
+            manager.rememberPosition(b.path, a.chapter, a.block, a.char)
+            persistResume()
+            jumpGen += 1
+            pendingJump = BlockJump(a.chapter, a.block, a.char, jumpGen)
+        }
+    }
+    // 投屏结束（包括设备断开 / HDMI 拔线）：把最后的大屏位置补进手机进度。
+    LaunchedEffect(castActive) {
+        if (castActive) return@LaunchedEffect
+        val a = lastCastAnchor ?: return@LaunchedEffect
+        val b = manager.state.value.current
+        if (b != null) {
+            manager.rememberPosition(b.path, a.chapter, a.block, a.char)
+            persistResume()
+        }
+        lastCastAnchor = null
+    }
+
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // 每一页都比屏幕高出一个“上一本书名”的高度：翻页时这一条先露出，
         // 落定后正好藏到屏幕上沿之外，页面看到的始终是阅读器最终布局。
@@ -757,17 +807,6 @@ fun RandomReaderScreen(
             )
         }
 
-        if (tocOpen) {
-            val (c, b, _) = currentPosition(currentBook)
-            EbookTocPage(
-                book = displayBook,
-                currentSpine = c,
-                currentBlock = b,
-                onBack = { tocOpen = false },
-                onJump = { spine, block -> jumpToChapter(spine, block) },
-            )
-        }
-
         if (castOpen) {
             EbookCastPage(
                 state = castState,
@@ -799,6 +838,11 @@ fun RandomReaderScreen(
                 // 翻页键仍翻页；在这一行上下滑则切上一本/下一本，和阅读页手势一致。
                 onPrevBook = { switchBook(-1, autoRead = tts.playing.value) },
                 onNextBook = { switchBook(1, autoRead = tts.playing.value) },
+                onToc = { tocOpen = true },
+                onSaveToShelf = if (currentFeed.showSaveToShelf) currentFeed.onSaveToShelf else null,
+                onRandomChapter = ::switchChapter,
+                ttsPlaying = ttsPlaying,
+                onToggleTts = ::toggleTts,
                 onTogglePlay = { playerVM.togglePlay() },
                 onPrevious = { playerVM.previous() },
                 onNext = { playerVM.next() },
@@ -823,6 +867,18 @@ fun RandomReaderScreen(
                     container.ebookPrefs.setCastColumnWidth(castState.mode != EbookCastMode.PRESENTATION, it)
                 },
                 onSetFontPath = { container.ebookPrefs.setFontPath(it) },
+            )
+        }
+
+        // 目录叠在投屏页之上：从投屏页点「目录」时，投屏页仍然保持打开（遥控方向不变）。
+        if (tocOpen) {
+            val (c, b, _) = currentPosition(currentBook)
+            EbookTocPage(
+                book = displayBook,
+                currentSpine = c,
+                currentBlock = b,
+                onBack = { tocOpen = false },
+                onJump = { spine, block -> jumpToChapter(spine, block) },
             )
         }
 
