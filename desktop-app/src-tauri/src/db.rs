@@ -925,6 +925,77 @@ pub fn wire_snapshot(
     })
 }
 
+/// Compact file-id index for the relay agent.
+///
+/// Unlike [`wire_snapshot`], this includes books from fast-scan roots. Those
+/// roots are deliberately left out of `/library/all` (they can hold 100k+
+/// books), but the relay still has to map their `/media/ebook?path=…` file ids
+/// back to a root so folder ACLs can authorize downloads.
+pub fn wire_index(conn: &Connection) -> Result<serde_json::Value> {
+    let mut music_stmt = conn.prepare("SELECT id, root_id FROM tracks")?;
+    let music: Vec<serde_json::Value> = music_stmt
+        .query_map([], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, i64>(0)?.to_string(),
+                "rootKey": row.get::<_, i64>(1)?.to_string(),
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut ebook_stmt = conn.prepare("SELECT path, root_id FROM books")?;
+    let ebooks: Vec<serde_json::Value> = ebook_stmt
+        .query_map([], |row| {
+            Ok(serde_json::json!({
+                "path": row.get::<_, String>(0)?,
+                "rootKey": row.get::<_, i64>(1)?.to_string(),
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut audiobook_stmt = conn.prepare(
+        "SELECT a.id, a.root_id, c.path
+         FROM audiobooks a
+         LEFT JOIN audiobook_chapters c ON c.book_id = a.id
+         ORDER BY a.id, c.track_no, c.path",
+    )?;
+    let mut audiobooks: Vec<serde_json::Value> = Vec::new();
+    let mut current_id = String::new();
+    let mut current_root = String::new();
+    let mut current_chapters: Vec<serde_json::Value> = Vec::new();
+    let mut rows = audiobook_stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        if id != current_id {
+            if !current_id.is_empty() {
+                audiobooks.push(serde_json::json!({
+                    "id": current_id,
+                    "rootKey": current_root,
+                    "chapters": current_chapters,
+                }));
+            }
+            current_id = id;
+            current_root = row.get::<_, i64>(1)?.to_string();
+            current_chapters = Vec::new();
+        }
+        if let Some(path) = row.get::<_, Option<String>>(2)? {
+            current_chapters.push(serde_json::json!({ "path": path }));
+        }
+    }
+    if !current_id.is_empty() {
+        audiobooks.push(serde_json::json!({
+            "id": current_id,
+            "rootKey": current_root,
+            "chapters": current_chapters,
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "music": music,
+        "ebooks": ebooks,
+        "audiobooks": audiobooks,
+    }))
+}
+
 // ------------------------------------------------------------- media lookups
 
 #[derive(Debug, Clone)]
@@ -1300,5 +1371,17 @@ mod tests {
         let random = root_ebooks_random(&conn, "1", 10).unwrap();
         assert_eq!(random.len(), 1);
         assert!(root_ebooks_search(&conn, "1", "nomatch", 10).unwrap().is_empty());
+
+        // The relay index must still contain fast-scan books so their file ids
+        // can be authorized for download through the relay.
+        let index = wire_index(&conn).unwrap();
+        let ebooks = index.get("ebooks").unwrap().as_array().unwrap();
+        assert_eq!(ebooks.len(), 2);
+        assert!(ebooks
+            .iter()
+            .any(|b| b["path"] == "/fast/a.epub" && b["rootKey"] == "1"));
+        assert!(ebooks
+            .iter()
+            .any(|b| b["path"] == "/normal/b.epub" && b["rootKey"] == "2"));
     }
 }

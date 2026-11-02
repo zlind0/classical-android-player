@@ -29,6 +29,13 @@ pub struct LiveResponse {
 pub trait LibraryBackend: Send + Sync {
     async fn library_version(&self) -> Result<i64>;
     async fn snapshot_json(&self) -> Result<Vec<u8>>;
+    /// Compact `{music, ebooks, audiobooks}` list used only to build the relay's
+    /// file-id index and folder ACL map. Hosts that keep large lazy-scanned
+    /// ebook roots out of `/library/all` must override this so those books can
+    /// still be downloaded through the relay. Defaults to the full snapshot.
+    async fn index_json(&self) -> Result<Vec<u8>> {
+        self.snapshot_json().await
+    }
     async fn stat(&self, path: &str) -> Result<Stat>;
     async fn fetch_range(&self, path: &str, start: u64, end: u64) -> Result<Vec<u8>>;
     async fn live(&self, req: LiveRequest) -> Result<LiveResponse>;

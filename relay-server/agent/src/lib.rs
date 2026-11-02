@@ -305,7 +305,10 @@ async fn session(
     let mut link = HostLink::connect(&config, key_id).await?;
     let mut version = backend.library_version().await?;
     let mut json = backend.snapshot_json().await?;
-    let mut index = Index::build(&json)?;
+    // The index is built from a separate compact list: hosts may keep huge
+    // lazy-scanned ebook roots out of the client snapshot, but the relay still
+    // needs their file ids to authorize downloads.
+    let mut index = Index::build(&backend.index_json().await?)?;
 
     let push = PushState::new(
         backend.clone(),
@@ -361,7 +364,7 @@ async fn session(
                 if latest != version {
                     version = latest;
                     json = backend.snapshot_json().await?;
-                    index = Index::build(&json)?;
+                    index = Index::build(&backend.index_json().await?)?;
                     push.set_index(index.clone());
                     pushed.clear();
                     root_map_version = i64::MIN;

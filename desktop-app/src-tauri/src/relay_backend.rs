@@ -92,6 +92,16 @@ impl LibraryBackend for HostBackend {
         .await?
     }
 
+    async fn index_json(&self) -> Result<Vec<u8>> {
+        let db = self.state.db.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let conn = db.lock();
+            let index = db::wire_index(&conn)?;
+            serde_json::to_vec(&index).context("serialize relay index")
+        })
+        .await?
+    }
+
     async fn stat(&self, path: &str) -> Result<Stat> {
         let (status, headers, body) = self
             .request("GET", path, Some("bytes=0-0".to_string()), Vec::new())
