@@ -1,6 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+// Injected by `vite.config.ts` at build time.
+declare global {
+  const __APP_VERSION__: string;
+  const __GIT_COMMIT__: string;
+}
+
 export type RootKind = "music" | "audiobook" | "book";
 export type MusicMode = "tag" | "folder";
 export type Tab = "music" | "audiobooks" | "books";

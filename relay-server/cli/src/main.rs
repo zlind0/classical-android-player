@@ -51,11 +51,28 @@ fn positional(args: &[String]) -> Option<String> {
         .cloned()
 }
 
+fn git_commit() -> String {
+    // `build.rs` injects the hash when the source tree is a git checkout. Keep
+    // the binary buildable from an exported tarball where that script is absent,
+    // and fall back to asking git at startup when running from a checkout.
+    if let Some(commit) = option_env!("POD_GIT_COMMIT") {
+        return commit.to_string();
+    }
+    std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 fn main() {
     println!(
         "[pod-relay] relay-server v{} commit {}",
         env!("CARGO_PKG_VERSION"),
-        env!("POD_GIT_COMMIT")
+        git_commit()
     );
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
