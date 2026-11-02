@@ -167,6 +167,13 @@ class PageWindow(val chapterCount: Int, initial: GlobalPage) {
     /** 随机阅读按章取到的正文：分页与渲染都以它为准，避免父级 book 还没重组时出现空白页。 */
     val chapterBlocks = mutableStateMapOf<Int, List<EbookBlock>>()
 
+    /**
+     * 恢复锚点（块/字）还没换算成页之前，先不渲染任何页内容。
+     * 否则会先显示“本章第 0 页”，等分页完成再跳到锚点页，肉眼就是一次无意义的跳页。
+     */
+    var anchorPending by mutableStateOf(false)
+        internal set
+
     fun blocksFor(chapter: Int): List<EbookBlock>? = chapterBlocks[chapter]
 
     /** Host 注入：按需排一章（主线程，TextMeasurer 要求），返回该章是否有可用页。 */
@@ -181,7 +188,8 @@ class PageWindow(val chapterCount: Int, initial: GlobalPage) {
 
     /** 逻辑槽内容（Compose 可观察：订阅 offset + 对应物理格）。 */
     fun slotAt(logical: Int): RenderedPage? =
-        if (logical in 0 until PAGE_WINDOW_SIZE) slotItems[phys(logical)] else null
+        if (anchorPending) null
+        else if (logical in 0 until PAGE_WINDOW_SIZE) slotItems[phys(logical)] else null
 
     fun coordAt(logical: Int): GlobalPage? =
         if (logical in 0 until PAGE_WINDOW_SIZE) coordItems[phys(logical)] else null
@@ -416,6 +424,8 @@ fun rememberPageWindow(
                 page = initial.page.coerceAtLeast(0),
             ),
         ).also { w ->
+            // 有块/字锚点时，先别渲染第 0 页，等锚点换算成页后再显示，避免“先跳章首再跳回”。
+            w.anchorPending = anchorBlock > 0 || anchorChar > 0
             // 随机阅读：相邻页已经按同一布局排过一遍，换成当前页时直接复用，
             // 避免翻页落定的那一帧闪一下 loader。
             if (!persistPages && key != null) {
@@ -429,6 +439,7 @@ fun rememberPageWindow(
                             w.jumpTo(GlobalPage(w.center.chapter, pageForChar(pages, anchorBlock, anchorChar)))
                         }
                     }
+                    w.anchorPending = false
                 }
             }
         }
@@ -530,6 +541,14 @@ fun rememberPageWindow(
                 val p = pageForChar(pages, anchorBlock, anchorChar)
                     .coerceIn(0, (pages.size - 1).coerceAtLeast(0))
                 if (p != center.page) win.jumpTo(GlobalPage(center.chapter, p))
+                // 锚点已换算成页：解除“先不渲染”，一次性把 41 槽按新 center 重排。
+                win.anchorPending = false
+                win.fullRewrite()
+            } else if (!hasPages(win.breaks, center.chapter)) {
+                // 本章确实排不出页（空章/解析失败）：别让 loader 永远转，退回第 0 页。
+                anchorApplied = true
+                win.anchorPending = false
+                win.fullRewrite()
             }
         }
     }

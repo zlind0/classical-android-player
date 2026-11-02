@@ -1243,6 +1243,7 @@ private fun PageView(
             if (b.level in 1..6) Spacer(Modifier.height((prefs.fontSizeSp * 0.4f).dp))
             Text(
                 annotated,
+                modifier = Modifier.fillMaxWidth(),
                 style = TextStyle(
                     fontSize = (prefs.fontSizeSp * mult).sp,
                     lineHeight = (prefs.fontSizeSp * mult * 1.55f).sp,
@@ -1251,7 +1252,10 @@ private fun PageView(
                     color = ink,
                 ),
                 maxLines = Int.MAX_VALUE,
-                overflow = TextOverflow.Visible,
+                // 不要用 TextOverflow.Visible：它在 API 29 上会走 TextAndroidCanvas 的
+                // “无限高 clip” 分支，配合 pager 的 RenderNode 层会出现整页文字不绘制
+                // （滑动/高亮强制重绘时才出现）。分页已保证文字放得下，Clip 足够。
+                overflow = TextOverflow.Clip,
             )
             Spacer(Modifier.height((prefs.fontSizeSp * (if (b.level in 1..6) 0.3f else 0.45f)).dp))
         }

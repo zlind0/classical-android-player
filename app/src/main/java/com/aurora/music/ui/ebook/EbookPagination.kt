@@ -73,7 +73,9 @@ class ChapterPaginator(
             text = AnnotatedString(text),
             style = style,
             constraints = Constraints(maxWidth = widthPx),
-            overflow = TextOverflow.Visible,
+            // 与 PageView 保持一致：Visible 在 API 29 上会触发整页文字不绘制的问题。
+            // 这里 maxHeight 无界，Clip 不会截断，仍能测出完整高度。
+            overflow = TextOverflow.Clip,
             maxLines = Int.MAX_VALUE,
         )
         return r.size.height
