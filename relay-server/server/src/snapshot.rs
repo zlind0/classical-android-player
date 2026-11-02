@@ -29,12 +29,16 @@ impl SnapshotStore {
         })
     }
 
-    fn version_dir(&self, version: i64) -> PathBuf {
-        self.root.join(version.to_string())
+    fn scope_dir(&self, scope: u64) -> PathBuf {
+        self.root.join(format!("{scope:016x}"))
     }
 
-    pub fn put(&self, header: &SnapshotHeader, chunks: &[Vec<u8>]) -> Result<()> {
-        let dir = self.version_dir(header.version);
+    fn version_dir(&self, scope: u64, version: i64) -> PathBuf {
+        self.scope_dir(scope).join(version.to_string())
+    }
+
+    pub fn put(&self, scope: u64, header: &SnapshotHeader, chunks: &[Vec<u8>]) -> Result<()> {
+        let dir = self.version_dir(scope, header.version);
         fs::create_dir_all(&dir)?;
         let meta = SnapshotMeta {
             version: header.version,
@@ -48,24 +52,44 @@ impl SnapshotStore {
             fs::write(dir.join(format!("{:06}.bin", index)), ct)?;
         }
         fs::write(dir.join("meta.json"), serde_json::to_vec(&meta)?)?;
-        self.prune(header.version);
+        self.prune(scope, header.version);
         Ok(())
     }
 
-    pub fn latest(&self) -> Option<SnapshotHeader> {
-        let mut versions: Vec<i64> = fs::read_dir(&self.root)
+    pub fn latest(&self, scope: u64) -> Option<SnapshotHeader> {
+        let mut versions: Vec<i64> = fs::read_dir(self.scope_dir(scope))
             .ok()?
             .flatten()
             .filter_map(|entry| entry.file_name().to_string_lossy().parse::<i64>().ok())
             .collect();
         versions.sort_unstable();
         let version = *versions.last()?;
-        self.header(version)
+        self.header(scope, version)
     }
 
-    pub fn header(&self, version: i64) -> Option<SnapshotHeader> {
+    /// Highest version across all scopes. Only used for informational fields
+    /// such as `HELLO_OK.host_lib_version`.
+    pub fn max_version(&self) -> i64 {
+        let Ok(scopes) = fs::read_dir(&self.root) else {
+            return 0;
+        };
+        let mut max = 0;
+        for scope in scopes.flatten() {
+            let Ok(versions) = fs::read_dir(scope.path()) else {
+                continue;
+            };
+            for version in versions.flatten() {
+                if let Some(value) = version.file_name().to_string_lossy().parse::<i64>().ok() {
+                    max = max.max(value);
+                }
+            }
+        }
+        max
+    }
+
+    pub fn header(&self, scope: u64, version: i64) -> Option<SnapshotHeader> {
         let meta: SnapshotMeta =
-            serde_json::from_slice(&fs::read(self.version_dir(version).join("meta.json")).ok()?)
+            serde_json::from_slice(&fs::read(self.version_dir(scope, version).join("meta.json")).ok()?)
                 .ok()?;
         Some(SnapshotHeader {
             version: meta.version,
@@ -77,21 +101,22 @@ impl SnapshotStore {
         })
     }
 
-    pub fn chunk(&self, version: i64, index: u32) -> Option<Vec<u8>> {
-        fs::read(self.version_dir(version).join(format!("{index:06}.bin"))).ok()
+    pub fn chunk(&self, scope: u64, version: i64, index: u32) -> Option<Vec<u8>> {
+        fs::read(self.version_dir(scope, version).join(format!("{index:06}.bin"))).ok()
     }
 
-    pub fn all_chunks(&self, version: i64) -> Option<Vec<Vec<u8>>> {
-        let header = self.header(version)?;
+    pub fn all_chunks(&self, scope: u64, version: i64) -> Option<Vec<Vec<u8>>> {
+        let header = self.header(scope, version)?;
         let mut out = Vec::with_capacity(header.chunks as usize);
         for index in 0..header.chunks {
-            out.push(self.chunk(version, index)?);
+            out.push(self.chunk(scope, version, index)?);
         }
         Some(out)
     }
 
-    fn prune(&self, keep: i64) {
-        let Ok(entries) = fs::read_dir(&self.root) else {
+    fn prune(&self, scope: u64, keep: i64) {
+        let root = self.scope_dir(scope);
+        let Ok(entries) = fs::read_dir(&root) else {
             return;
         };
         let mut versions: Vec<i64> = entries
@@ -105,7 +130,7 @@ impl SnapshotStore {
             .map(|pos| pos.saturating_sub(1))
             .unwrap_or(0);
         for version in versions.iter().take(keep_from) {
-            let _ = fs::remove_dir_all(self.version_dir(*version));
+            let _ = fs::remove_dir_all(self.version_dir(scope, *version));
         }
     }
 

@@ -197,6 +197,8 @@ pub struct WireTrack {
     pub has_art: bool,
     pub merge_titles: bool,
     pub path: String,
+    /// Library root that owns this track. Used by relay folder ACLs.
+    pub root_key: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -240,6 +242,8 @@ pub struct WireAudiobook {
     pub title: String,
     pub has_cover: bool,
     pub chapters: Vec<WireChapter>,
+    /// Library root that owns this audiobook. Used by relay folder ACLs.
+    pub root_key: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -12,6 +12,8 @@ pub struct LiveRequest {
     pub method: String,
     pub path: String,
     pub body: Vec<u8>,
+    /// Device that asked for this live request. `None` only for local callers.
+    pub client_id: Option<[u8; 16]>,
 }
 
 #[derive(Debug, Clone)]

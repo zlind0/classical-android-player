@@ -1,14 +1,18 @@
 //! Relay settings, identity material, device registry and agent lifecycle.
 
+use crate::db;
 use crate::discovery;
 use crate::http_server;
+use crate::relay_access::{DeviceGrants, SharedGrants};
 use crate::relay_backend::HostBackend;
 use crate::relay_pairing::{PairContext, PairingState};
 use anyhow::{anyhow, Result};
 use pod_relay_agent::config::{MediaConfig, PushConfig, RelayEndpoint, SnapshotConfig};
 use pod_relay_agent::{generate_media_key, AgentConfig, AgentHandle};
+use pod_relay_protocol::access::{AuthorizedDevice, Scope};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -67,12 +71,25 @@ impl RelaySettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DeviceGrant {
+    pub root_id: i64,
+    /// Stored alongside the id so a reused sqlite id can never silently widen
+    /// access to a different folder.
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeviceRecord {
     pub id: String,
     pub label: String,
     pub fingerprint: String,
     #[serde(default)]
     pub created_at: i64,
+    /// Folders this device may read through the relay. Empty is the default
+    /// for a freshly paired phone.
+    #[serde(default)]
+    pub grants: Vec<DeviceGrant>,
 }
 
 fn now_ms() -> i64 {
@@ -88,6 +105,7 @@ pub struct RelayManager {
     settings: Mutex<RelaySettings>,
     handle: Mutex<Option<AgentHandle>>,
     devices: Mutex<Vec<DeviceRecord>>,
+    grants: SharedGrants,
     pairing: Arc<PairingState>,
 }
 
@@ -105,14 +123,17 @@ impl RelayManager {
             .ok()
             .and_then(|text| serde_json::from_str::<Vec<DeviceRecord>>(&text).ok())
             .unwrap_or_default();
-        Arc::new(RelayManager {
+        let manager = Arc::new(RelayManager {
             data_dir,
             http_state,
             settings: Mutex::new(settings),
             handle: Mutex::new(None),
             devices: Mutex::new(devices),
+            grants: DeviceGrants::new(),
             pairing,
-        })
+        });
+        manager.refresh_grants();
+        manager
     }
 
     fn relay_dir(&self) -> PathBuf {
@@ -228,11 +249,107 @@ impl RelayManager {
         }
     }
 
+    fn local_roots(&self) -> Vec<crate::models::RootInfo> {
+        let conn = self.http_state.db.lock();
+        db::list_roots(&conn).unwrap_or_default()
+    }
+
+    /// Computes the effective grants for every paired device. A device whose
+    /// selected folders cover every configured root gets `all=true`; anything
+    /// else is an explicit root list so removing a folder later also removes
+    /// access automatically.
+    fn access_plan(&self) -> (Vec<AuthorizedDevice>, Vec<Scope>) {
+        let roots = self.local_roots();
+        let known: BTreeSet<i64> = roots.iter().map(|root| root.id).collect();
+        let devices = self.devices();
+        let mut authorized = Vec::with_capacity(devices.len());
+        let mut scopes = Vec::new();
+        let mut seen = HashSet::new();
+        for device in devices {
+            let granted: BTreeSet<i64> = device
+                .grants
+                .iter()
+                .map(|grant| grant.root_id)
+                .filter(|id| known.contains(id))
+                .collect();
+            let all = !known.is_empty() && granted == known;
+            let roots: Vec<i64> = if all {
+                known.iter().copied().collect()
+            } else {
+                granted.into_iter().collect()
+            };
+            let scope = Scope::new(roots.clone(), all);
+            if scope.id == 0 {
+                continue;
+            }
+            if seen.insert(scope.id) {
+                scopes.push(scope);
+            }
+            authorized.push(AuthorizedDevice {
+                id: parse_hex(&device.id),
+                label: device.label,
+                fingerprint: device.fingerprint,
+                roots,
+                all,
+            });
+        }
+        (authorized, scopes)
+    }
+
+    fn refresh_grants(&self) {
+        let (devices, _) = self.access_plan();
+        self.grants.replace(
+            devices
+                .iter()
+                .map(|device| (device.id, device.roots.clone(), device.all)),
+        );
+    }
+
+    /// Pushes the current grants to the running agent (if any). Called after
+    /// pairing, revoking and every folder toggle.
+    fn sync_access(&self) {
+        self.refresh_grants();
+        let (devices, scopes) = self.access_plan();
+        if let Ok(slot) = self.handle.lock() {
+            if let Some(handle) = slot.as_ref() {
+                handle.set_devices(devices);
+                handle.set_scopes(scopes);
+            }
+        }
+    }
+
+    /// Replaces the folder grants of one paired device. Unknown root ids are
+    /// ignored and stale paths are dropped.
+    pub fn set_device_roots(&self, id_hex: &str, root_ids: Vec<i64>) -> Result<()> {
+        let roots = self.local_roots();
+        let selected: BTreeSet<i64> = root_ids.into_iter().collect();
+        let grants: Vec<DeviceGrant> = roots
+            .iter()
+            .filter(|root| selected.contains(&root.id))
+            .map(|root| DeviceGrant {
+                root_id: root.id,
+                path: root.path.clone(),
+            })
+            .collect();
+        {
+            let mut devices = self.devices.lock().unwrap();
+            let Some(device) = devices.iter_mut().find(|device| device.id == id_hex) else {
+                return Err(anyhow!("unknown device {id_hex}"));
+            };
+            device.grants = grants;
+        }
+        self.save_devices()?;
+        self.sync_access();
+        Ok(())
+    }
+
     pub fn start(&self) -> Result<()> {
         let settings = self.settings();
         settings.validate()?;
         let (key_b64, key_id) = self.media_key()?;
         let (cert, key) = self.ensure_identity()?;
+        self.refresh_grants();
+        let (devices, scopes) = self.access_plan();
         let agent_config = AgentConfig {
             relay: RelayEndpoint {
                 addr: settings.addr.clone(),
@@ -249,6 +366,8 @@ impl RelayManager {
             snapshot: SnapshotConfig {
                 poll_sec: settings.snapshot_poll_sec.max(10),
             },
+            devices,
+            scopes,
         };
 
         self.pairing.set_context(PairContext {
@@ -262,7 +381,7 @@ impl RelayManager {
             lan_port: self.http_state.info.port,
         });
 
-        let backend = HostBackend::new(self.http_state.clone());
+        let backend = HostBackend::new(self.http_state.clone(), self.grants.clone());
         let handle = spawn_agent(agent_config, backend)?;
         if let Ok(mut slot) = self.handle.lock() {
             *slot = Some(handle);
@@ -288,12 +407,25 @@ impl RelayManager {
             .and_then(|slot| slot.as_ref().map(|handle| handle.status()))
             .map(|status| serde_json::to_value(status).unwrap_or(Value::Null));
         let devices = self.devices.lock().map(|d| d.clone()).unwrap_or_default();
+        let roots: Vec<Value> = self
+            .local_roots()
+            .into_iter()
+            .map(|root| {
+                json!({
+                    "id": root.id,
+                    "path": root.path,
+                    "displayName": root.display_name,
+                    "kind": root.kind,
+                })
+            })
+            .collect();
         json!({
             "settings": settings,
             "mediaKey": key_b64,
             "keyId": key_id,
             "agent": agent,
             "devices": devices,
+            "roots": roots,
             "pairing": {
                 "lanHost": discovery::local_ipv4(),
                 "lanPort": self.http_state.info.port,
@@ -331,14 +463,13 @@ impl RelayManager {
                 label: outcome.label.clone(),
                 fingerprint: outcome.fingerprint.clone(),
                 created_at: now_ms(),
+                grants: Vec::new(),
             });
         }
         let _ = self.save_devices();
-        if let Ok(slot) = self.handle.lock() {
-            if let Some(handle) = slot.as_ref() {
-                handle.authorize_client(outcome.client_id, &outcome.label, &outcome.fingerprint);
-            }
-        }
+        // A new pairing starts with no folder access. The user picks folders in
+        // the relay panel; the device sees an empty library until then.
+        self.sync_access();
     }
 
     pub fn revoke_device(&self, id_hex: &str) -> Result<()> {
@@ -353,11 +484,13 @@ impl RelayManager {
             devices.retain(|device| device.id != id_hex);
         }
         self.save_devices()?;
+        self.grants.remove(&client_id);
         if let Ok(slot) = self.handle.lock() {
             if let Some(handle) = slot.as_ref() {
                 handle.revoke_client(client_id);
             }
         }
+        self.sync_access();
         Ok(())
     }
 
@@ -383,6 +516,7 @@ impl RelayManager {
         if let Ok(mut devices) = self.devices.lock() {
             devices.clear();
         }
+        self.grants.clear();
         self.save_devices()?;
         if self.settings().enabled {
             self.start()?;
@@ -416,6 +550,16 @@ fn hex(id: &[u8; 16]) -> String {
     let mut out = String::with_capacity(32);
     for byte in id {
         out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+fn parse_hex(text: &str) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    if text.len() == 32 {
+        for index in 0..16 {
+            out[index] = u8::from_str_radix(&text[index * 2..index * 2 + 2], 16).unwrap_or(0);
+        }
     }
     out
 }
@@ -456,9 +600,31 @@ fn spawn_agent(config: AgentConfig, backend: Arc<HostBackend>) -> Result<AgentHa
     let status = Arc::new(std::sync::RwLock::new(pod_relay_agent::AgentStatus::default()));
     let task_status = status.clone();
     let (control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
+    let devices = Arc::new(std::sync::RwLock::new(config.devices.clone()));
+    let scopes = Arc::new(std::sync::RwLock::new(config.scopes.clone()));
+    let (access_tx, access_rx) = tokio::sync::watch::channel(0u64);
+    let task_devices = devices.clone();
+    let task_scopes = scopes.clone();
     let join = tauri::async_runtime::spawn(async move {
-        pod_relay_agent::run_with_control(backend, config, stop_rx, task_status, control_rx).await;
+        pod_relay_agent::run_with_control(
+            backend,
+            config,
+            stop_rx,
+            task_status,
+            control_rx,
+            task_devices,
+            task_scopes,
+            access_rx,
+        )
+        .await;
     });
     drop(join);
-    Ok(AgentHandle::from_parts(stop_tx, status, control_tx))
+    Ok(AgentHandle::from_parts(
+        stop_tx,
+        status,
+        control_tx,
+        devices,
+        scopes,
+        access_tx,
+    ))
 }

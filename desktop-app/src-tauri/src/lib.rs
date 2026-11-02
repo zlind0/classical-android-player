@@ -7,6 +7,7 @@ mod http_server;
 mod media;
 mod meta;
 mod models;
+mod relay_access;
 mod relay_backend;
 mod relay_host;
 mod relay_pairing;
@@ -126,6 +127,7 @@ pub fn run() {
             commands::relay_start_remote_pairing,
             commands::relay_cancel_pairing,
             commands::relay_revoke_device,
+            commands::relay_set_device_roots,
             commands::relay_reset_identity,
             commands::relay_reset_encryption,
         ])

@@ -1675,19 +1675,56 @@ input[type="range"]::-webkit-slider-thumb {
 
 .relay-device {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  gap: 6px;
   padding: 8px 10px;
   border-radius: 10px;
   background: #f7f9ff;
 }
 
-.relay-device > div {
+.relay-device-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.relay-device-head > div:first-child {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+.relay-folder-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid rgba(120, 140, 180, 0.18);
+}
+
+.relay-folder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.relay-folder-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.relay-folder-name {
+  margin-left: auto;
+  color: var(--muted);
+  flex: 0 0 auto;
 }
 
 .relay-actions.spread {

@@ -1,11 +1,12 @@
 //! Relay server: TLS accept loop, session handling, fragment dispatch.
 
-use crate::auth::AuthStore;
+use crate::auth::{AuthStore, ClientAccess};
 use crate::config::Config;
 use crate::snapshot::SnapshotStore;
 use crate::store::{FragmentStore, StatInfo};
 use crate::tls;
 use anyhow::{anyhow, Context, Result};
+use pod_relay_protocol::access::scope_id;
 use pod_relay_protocol::frame::{encode, FrameDecoder};
 use pod_relay_protocol::msg::{err, FileId, Msg, ROLE_CLIENT, ROLE_HOST};
 use pod_relay_protocol::snapshot::SnapshotHeader;
@@ -37,6 +38,12 @@ struct PendingLive {
     at: i64,
     client: Outbox,
     client_req: u32,
+    client_seq: u32,
+}
+
+struct RootMap {
+    version: i64,
+    roots: HashMap<FileId, i64>,
 }
 
 pub struct Shared {
@@ -45,6 +52,7 @@ pub struct Shared {
     pub snapshots: Arc<SnapshotStore>,
     pub auth: Arc<AuthStore>,
     nas: Mutex<Option<NasLink>>,
+    root_map: Mutex<Option<RootMap>>,
     failures: Mutex<HashMap<IpAddr, (u32, i64)>>,
     pending_stats: Mutex<HashMap<u32, PendingStat>>,
     pending_live: Mutex<HashMap<u32, PendingLive>>,
@@ -70,7 +78,24 @@ impl Shared {
     }
 
     fn host_lib_version(&self) -> i64 {
-        self.snapshots.latest().map(|h| h.version).unwrap_or(0)
+        self.snapshots.max_version()
+    }
+
+    fn file_allowed(&self, access: &ClientAccess, file_id: &FileId) -> bool {
+        if access.all {
+            return true;
+        }
+        let map = match self.root_map.lock() {
+            Ok(map) => map,
+            Err(_) => return false,
+        };
+        let Some(map) = map.as_ref() else {
+            return false;
+        };
+        map.roots
+            .get(file_id)
+            .map(|root| access.roots.contains(root))
+            .unwrap_or(false)
     }
 
     fn pressure(&self) -> u8 {
@@ -207,6 +232,7 @@ impl Relay {
                 snapshots,
                 auth,
                 nas: Mutex::new(None),
+                root_map: Mutex::new(None),
                 failures: Mutex::new(HashMap::new()),
                 pending_stats: Mutex::new(HashMap::new()),
                 pending_live: Mutex::new(HashMap::new()),
@@ -321,12 +347,20 @@ async fn session(
             auth,
             ..
         } => {
-            if ver != pod_relay_protocol::msg::PROTOCOL_VERSION {
+            let version_ok = match role {
+                ROLE_HOST => ver == pod_relay_protocol::msg::PROTOCOL_VERSION,
+                ROLE_CLIENT => {
+                    ver >= pod_relay_protocol::msg::MIN_CLIENT_VERSION
+                        && ver <= pod_relay_protocol::msg::PROTOCOL_VERSION
+                }
+                _ => false,
+            };
+            if !version_ok {
                 let _ = tx.send((
                     0,
                     Msg::Error {
                         code: err::UNSUPPORTED_VERSION,
-                        msg: format!("unsupported protocol version {ver}"),
+                        msg: format!("unsupported protocol version {ver} for role {role}"),
                     },
                 ));
                 drop(guard);
@@ -457,7 +491,8 @@ async fn session(
         return Err(anyhow!("unknown role"));
     }
 
-    let mut pending_snapshot: Option<(SnapshotHeader, Vec<Vec<u8>>)> = None;
+    let mut pending_snapshot: Option<(u64, SnapshotHeader, Vec<Vec<u8>>)> = None;
+    let mut pending_root_map: Option<(i64, u32, Vec<u8>)> = None;
     loop {
         let read = tokio::time::timeout(idle, read_msg(&mut reader, &mut decoder, &mut buf)).await;
         let (req, msg) = match read {
@@ -480,8 +515,30 @@ async fn session(
             (_, Msg::Ping { nonce }) => {
                 let _ = tx.send((0, Msg::Pong { nonce }));
             }
-            (ROLE_CLIENT, msg) => handle_client(&shared, &tx, req, msg),
-            (ROLE_HOST, msg) => handle_host(&shared, &tx, req, msg, &mut pending_snapshot),
+            (ROLE_CLIENT, msg) => {
+                let Some(access) = shared.auth.client_access(&peer_fingerprint) else {
+                    let _ = tx.send((
+                        0,
+                        Msg::Error {
+                            code: err::DEVICE_REVOKED,
+                            msg: "device is not authorized".to_string(),
+                        },
+                    ));
+                    drop(guard);
+                    drop(tx);
+                    let _ = writer_task.await;
+                    return Ok(());
+                };
+                handle_client(&shared, &tx, req, msg, &access);
+            }
+            (ROLE_HOST, msg) => handle_host(
+                &shared,
+                &tx,
+                req,
+                msg,
+                &mut pending_snapshot,
+                &mut pending_root_map,
+            ),
             _ => {}
         }
     }
@@ -495,10 +552,11 @@ fn send_cache_status(shared: &Shared) {
     });
 }
 
-fn handle_client(shared: &Shared, tx: &Outbox, req: u32, msg: Msg) {
+fn handle_client(shared: &Shared, tx: &Outbox, req: u32, msg: Msg, access: &ClientAccess) {
+    let scope = scope_id(&access.roots);
     match msg {
         Msg::LibVersionReq => {
-            let client_payload = match shared.snapshots.latest() {
+            let client_payload = match shared.snapshots.latest(scope) {
                 Some(header) => Msg::LibVersionOk {
                     version: header.version,
                     key_id: header.key_id,
@@ -524,10 +582,10 @@ fn handle_client(shared: &Shared, tx: &Outbox, req: u32, msg: Msg) {
             version,
             chunk_index,
         } => {
-            if let Some(data) = shared.snapshots.chunk(version, chunk_index) {
+            if let Some(data) = shared.snapshots.chunk(scope, version, chunk_index) {
                 let total = shared
                     .snapshots
-                    .header(version)
+                    .header(scope, version)
                     .map(|h| h.gz_len)
                     .unwrap_or(0);
                 let _ = tx.send((
@@ -550,6 +608,16 @@ fn handle_client(shared: &Shared, tx: &Outbox, req: u32, msg: Msg) {
             }
         }
         Msg::StatReq { file_id } => {
+            if !shared.file_allowed(access, &file_id) {
+                let _ = tx.send((
+                    req,
+                    Msg::StatErr {
+                        file_id,
+                        code: err::NOT_FOUND,
+                    },
+                ));
+                return;
+            }
             if let Some(stat) = shared.store.stat(&file_id) {
                 let _ = tx.send((req, stat_ok(file_id, &stat)));
                 return;
@@ -577,6 +645,16 @@ fn handle_client(shared: &Shared, tx: &Outbox, req: u32, msg: Msg) {
             let _ = nas.send((seq, Msg::StatReq { file_id }));
         }
         Msg::FragReq { file_id, index } => {
+            if !shared.file_allowed(access, &file_id) {
+                let _ = tx.send((
+                    req,
+                    Msg::StatErr {
+                        file_id,
+                        code: err::NOT_FOUND,
+                    },
+                ));
+                return;
+            }
             if let Some(data) = shared.store.read_fragment(&file_id, index) {
                 let nonce = nonce_for(shared, &file_id, index);
                 let _ = tx.send((
@@ -611,6 +689,9 @@ fn handle_client(shared: &Shared, tx: &Outbox, req: u32, msg: Msg) {
             from,
             count,
         } => {
+            if !shared.file_allowed(access, &file_id) {
+                return;
+            }
             let limit = count.min(64);
             for index in from..from.saturating_add(limit as u32) {
                 shared.send_to_host(Msg::Want {
@@ -621,7 +702,9 @@ fn handle_client(shared: &Shared, tx: &Outbox, req: u32, msg: Msg) {
             }
         }
         Msg::Pin { file_id, ttl_sec } => {
-            shared.store.pin(&file_id, ttl_sec);
+            if shared.file_allowed(access, &file_id) {
+                shared.store.pin(&file_id, ttl_sec);
+            }
         }
         Msg::LiveReq { seq, ct } => {
             let Some(nas) = shared.host_tx() else {
@@ -635,15 +718,27 @@ fn handle_client(shared: &Shared, tx: &Outbox, req: u32, msg: Msg) {
                 ));
                 return;
             };
+            // Allocate a relay-side sequence so two clients can never collide
+            // or steal each other's pending live reply.
+            let relay_seq = shared.seq.fetch_add(1, Ordering::Relaxed);
             shared.pending_live.lock().unwrap().insert(
-                seq,
+                relay_seq,
                 PendingLive {
                     at: now_secs(),
                     client: tx.clone(),
                     client_req: req,
+                    client_seq: seq,
                 },
             );
-            let _ = nas.send((seq, Msg::LiveFwd { seq, ct }));
+            let _ = nas.send((
+                relay_seq,
+                Msg::LiveFwd {
+                    seq: relay_seq,
+                    client_seq: seq,
+                    client_id: access.id,
+                    ct,
+                },
+            ));
         }
         Msg::AdminStatsReq => {
             let _ = tx.send((
@@ -669,7 +764,8 @@ fn handle_host(
     tx: &Outbox,
     req: u32,
     msg: Msg,
-    pending_snapshot: &mut Option<(SnapshotHeader, Vec<Vec<u8>>)>,
+    pending_snapshot: &mut Option<(u64, SnapshotHeader, Vec<Vec<u8>>)>,
+    pending_root_map: &mut Option<(i64, u32, Vec<u8>)>,
 ) {
     match msg {
         Msg::StatOk {
@@ -751,6 +847,7 @@ fn handle_host(
             }
         }
         Msg::SnapshotBegin {
+            scope,
             version,
             key_id,
             plain_len,
@@ -759,6 +856,7 @@ fn handle_host(
             salt,
         } => {
             *pending_snapshot = Some((
+                scope,
                 SnapshotHeader {
                     version,
                     key_id,
@@ -775,20 +873,64 @@ fn handle_host(
             chunk_index,
             data,
         } => {
-            if let Some((header, chunks)) = pending_snapshot.as_mut() {
+            if let Some((_, header, chunks)) = pending_snapshot.as_mut() {
                 if header.version == version && chunks.len() == chunk_index as usize {
                     chunks.push(data);
                 }
             }
         }
         Msg::SnapshotEnd { version, ok } => {
-            if let Some((header, chunks)) = pending_snapshot.take() {
+            if let Some((scope, header, chunks)) = pending_snapshot.take() {
                 if ok && header.version == version && chunks.len() == header.chunks as usize {
-                    if let Err(err) = shared.snapshots.put(&header, &chunks) {
+                    if let Err(err) = shared.snapshots.put(scope, &header, &chunks) {
                         eprintln!("[pod-relay] store snapshot failed: {err}");
                     } else {
-                        eprintln!("[pod-relay] snapshot version {version} stored");
+                        eprintln!(
+                            "[pod-relay] snapshot scope {scope:016x} version {version} stored"
+                        );
                     }
+                }
+            }
+        }
+        Msg::RootMapBegin { version, count } => {
+            *pending_root_map = Some((version, count, Vec::new()));
+        }
+        Msg::RootMapChunk {
+            version,
+            index,
+            data,
+        } => {
+            if let Some((map_version, count, bytes)) = pending_root_map.as_mut() {
+                let expected = index as usize * pod_relay_protocol::msg::ROOT_MAP_CHUNK_ITEMS * 24;
+                if *map_version == version
+                    && expected == bytes.len()
+                    && bytes.len() + data.len() <= *count as usize * 24
+                {
+                    bytes.extend_from_slice(&data);
+                }
+            }
+        }
+        Msg::RootMapEnd { version, ok } => {
+            if let Some((map_version, count, bytes)) = pending_root_map.take() {
+                if ok
+                    && map_version == version
+                    && bytes.len() == count as usize * 24
+                {
+                    let mut roots = HashMap::with_capacity(count as usize);
+                    for chunk in bytes.chunks_exact(24) {
+                        let mut id = [0u8; 16];
+                        id.copy_from_slice(&chunk[..16]);
+                        let mut root_bytes = [0u8; 8];
+                        root_bytes.copy_from_slice(&chunk[16..]);
+                        roots.insert(id, i64::from_be_bytes(root_bytes));
+                    }
+                    let entries = roots.len();
+                    if let Ok(mut slot) = shared.root_map.lock() {
+                        *slot = Some(RootMap { version, roots });
+                    }
+                    eprintln!(
+                        "[pod-relay] root map version {version} stored ({entries} files)"
+                    );
                 }
             }
         }
@@ -796,13 +938,35 @@ fn handle_host(
             client_id,
             label,
             fingerprint,
+            roots,
+            all,
         } => {
-            let ok = shared.auth.authorize(client_id, &label, &fingerprint).is_ok();
+            let root_count = roots.len();
+            let ok = shared
+                .auth
+                .authorize(client_id, &label, &fingerprint, roots, all)
+                .is_ok();
             if ok {
                 eprintln!(
-                    "[pod-relay] authorized device {} ({})",
+                    "[pod-relay] authorized device {} ({}, {} roots)",
                     crate::auth::hex(&client_id),
-                    label
+                    label,
+                    root_count
+                );
+            }
+            let _ = tx.send((req, Msg::Ack { ok }));
+        }
+        Msg::SetClientAccess {
+            client_id,
+            roots,
+            all,
+        } => {
+            let ok = shared.auth.set_access(&client_id, roots, all).is_ok();
+            if ok {
+                eprintln!(
+                    "[pod-relay] access updated for {} (all={})",
+                    crate::auth::hex(&client_id),
+                    all
                 );
             }
             let _ = tx.send((req, Msg::Ack { ok }));
@@ -823,9 +987,14 @@ fn handle_host(
         Msg::LiveReply { seq, status, ct } => {
             let pending = shared.pending_live.lock().unwrap().remove(&seq);
             if let Some(pending) = pending {
-                let _ = pending
-                    .client
-                    .send((pending.client_req, Msg::LiveResp { seq, status, ct }));
+                let _ = pending.client.send((
+                    pending.client_req,
+                    Msg::LiveResp {
+                        seq: pending.client_seq,
+                        status,
+                        ct,
+                    },
+                ));
             }
         }
         _ => {}
@@ -872,7 +1041,8 @@ impl Drop for SessionGuard {
             pending.retain(|_, item| now - item.at < 60);
         }
         if let Ok(mut pending) = self.shared.pending_live.lock() {
-            pending.retain(|_seq, item| now_secs() - now_secs() < 60 && now_secs() > 0 && item.client_req != u32::MAX);
+            let now = now_secs();
+            pending.retain(|_seq, item| now - item.at < 60);
         }
     }
 }

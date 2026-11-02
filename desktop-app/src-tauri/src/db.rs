@@ -853,6 +853,7 @@ pub fn wire_snapshot(
             has_art: t.has_art,
             merge_titles: t.merge_titles,
             path: t.path,
+            root_key: t.root_id.to_string(),
         })
         .collect();
 
@@ -907,6 +908,7 @@ pub fn wire_snapshot(
                     size: c.size,
                 })
                 .collect(),
+            root_key: b.root_id.to_string(),
         })
         .collect();
 
@@ -1077,6 +1079,17 @@ fn wire_ebook_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WireEbook> {
 /// Filters a client-supplied path list down to books that really belong to the
 /// given book root. Only used as a compatibility fallback for older clients or
 /// roots the host cannot resolve; the random feed never trusts paths blindly.
+/// Root that owns one book path. Relay live requests use this to enforce the
+/// device's folder grant for `/library/ebook/scan`.
+pub fn book_root_id(conn: &Connection, path: &str) -> Result<Option<i64>> {
+    let mut stmt = conn.prepare("SELECT root_id FROM books WHERE path = ?1 LIMIT 1")?;
+    let mut rows = stmt.query(params![path])?;
+    match rows.next()? {
+        Some(row) => Ok(Some(row.get(0)?)),
+        None => Ok(None),
+    }
+}
+
 pub fn root_book_paths(conn: &Connection, root_key: &str, paths: &[String]) -> Result<Vec<String>> {
     let Ok(root_id) = root_key.parse::<i64>() else {
         return Ok(Vec::new());

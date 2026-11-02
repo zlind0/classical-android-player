@@ -7,12 +7,19 @@ use pod_relay_protocol::crypto::meta_key;
 use pod_relay_protocol::msg::Msg;
 use pod_relay_protocol::snapshot::pack;
 
-pub async fn push(link: &HostLink, config: &AgentConfig, version: i64, json: &[u8]) -> Result<()> {
+pub async fn push(
+    link: &HostLink,
+    config: &AgentConfig,
+    scope: u64,
+    version: i64,
+    json: &[u8],
+) -> Result<()> {
     let master = config.media_key()?;
     let key = meta_key(&master);
     let key_id = pod_relay_protocol::crypto::key_id(&master);
     let (header, chunks) = pack(&key, version, key_id, json)?;
     link.send(Msg::SnapshotBegin {
+        scope,
         version: header.version,
         key_id: header.key_id,
         plain_len: header.plain_len,
@@ -35,7 +42,7 @@ pub async fn push(link: &HostLink, config: &AgentConfig, version: i64, json: &[u
     })
     .await?;
     eprintln!(
-        "[pod-relay] pushed snapshot version {version} ({} chunks)",
+        "[pod-relay] pushed snapshot scope {scope:016x} version {version} ({} chunks)",
         header.chunks
     );
     Ok(())

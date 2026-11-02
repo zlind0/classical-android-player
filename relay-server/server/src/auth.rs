@@ -21,6 +21,32 @@ pub struct ClientRecord {
     pub created_at: i64,
     #[serde(default)]
     pub last_seen_at: i64,
+    /// Library root ids this device may access through the relay. Empty means
+    /// no access at all (the default for newly paired devices).
+    #[serde(default)]
+    pub roots: Vec<i64>,
+    /// True only when the NAS says this set covers every configured root.
+    #[serde(default)]
+    pub all: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClientAccess {
+    pub id: [u8; 16],
+    pub label: String,
+    pub roots: Vec<i64>,
+    pub all: bool,
+}
+
+impl ClientRecord {
+    fn access(&self) -> ClientAccess {
+        ClientAccess {
+            id: parse_hex(&self.id),
+            label: self.label.clone(),
+            roots: self.roots.clone(),
+            all: self.all,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -138,12 +164,43 @@ impl AuthStore {
         }
     }
 
-    pub fn authorize(&self, id: [u8; 16], label: &str, fingerprint: &str) -> Result<()> {
+    /// Read-only lookup used on every request path. `None` means the device was
+    /// revoked or never authorized.
+    pub fn client_access(&self, fingerprint: &str) -> Option<ClientAccess> {
+        let file = self.inner.lock().ok()?;
+        file.clients
+            .iter()
+            .find(|client| client.fingerprint == fingerprint)
+            .map(|client| client.access())
+    }
+
+    pub fn set_access(&self, id: &[u8; 16], roots: Vec<i64>, all: bool) -> Result<()> {
+        let id = hex(id);
+        let mut file = self.inner.lock().unwrap();
+        let Some(client) = file.clients.iter_mut().find(|client| client.id == id) else {
+            return Err(anyhow::anyhow!("unknown client {id}"));
+        };
+        client.roots = pod_relay_protocol::access::normalize_roots(roots);
+        client.all = all;
+        self.save_locked(&file)
+    }
+
+    pub fn authorize(
+        &self,
+        id: [u8; 16],
+        label: &str,
+        fingerprint: &str,
+        roots: Vec<i64>,
+        all: bool,
+    ) -> Result<()> {
         let id = hex(&id);
+        let roots = pod_relay_protocol::access::normalize_roots(roots);
         let mut file = self.inner.lock().unwrap();
         if let Some(existing) = file.clients.iter_mut().find(|client| client.id == id) {
             existing.label = label.to_string();
             existing.fingerprint = fingerprint.to_string();
+            existing.roots = roots;
+            existing.all = all;
         } else {
             file.clients.retain(|client| client.fingerprint != fingerprint);
             file.clients.push(ClientRecord {
@@ -152,6 +209,8 @@ impl AuthStore {
                 fingerprint: fingerprint.to_string(),
                 created_at: now_secs(),
                 last_seen_at: 0,
+                roots,
+                all,
             });
         }
         self.save_locked(&file)
@@ -185,6 +244,17 @@ pub fn hex(id: &[u8; 16]) -> String {
     let mut out = String::with_capacity(32);
     for byte in id {
         out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+pub fn parse_hex(text: &str) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    if text.len() == 32 {
+        for index in 0..16 {
+            out[index] =
+                u8::from_str_radix(&text[index * 2..index * 2 + 2], 16).unwrap_or(0);
+        }
     }
     out
 }

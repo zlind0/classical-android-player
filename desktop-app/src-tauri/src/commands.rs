@@ -241,6 +241,19 @@ pub fn relay_revoke_device(
 }
 
 #[tauri::command]
+pub fn relay_set_device_roots(
+    state: State<'_, AppState>,
+    id: String,
+    roots: Vec<i64>,
+) -> CmdResult<serde_json::Value> {
+    state
+        .relay
+        .set_device_roots(&id, roots)
+        .map_err(|err| err.to_string())?;
+    Ok(state.relay.status())
+}
+
+#[tauri::command]
 pub fn relay_reset_identity(state: State<'_, AppState>) -> CmdResult<serde_json::Value> {
     state
         .relay

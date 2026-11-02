@@ -2,6 +2,7 @@
 //! library snapshot format. Shared by the relay server, the NAS agent and the
 //! test client.
 
+pub mod access;
 pub mod crypto;
 pub mod error;
 pub mod file_id;

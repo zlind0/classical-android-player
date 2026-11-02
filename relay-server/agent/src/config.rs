@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use base64::Engine;
+use pod_relay_protocol::access::{AuthorizedDevice, Scope};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -73,6 +74,12 @@ pub struct AgentConfig {
     pub push: PushConfig,
     #[serde(default)]
     pub snapshot: SnapshotConfig,
+    /// Device authorizations as of the last NAS change.
+    #[serde(default)]
+    pub devices: Vec<AuthorizedDevice>,
+    /// One snapshot per distinct root set. Always contains the empty scope.
+    #[serde(default)]
+    pub scopes: Vec<Scope>,
 }
 
 impl AgentConfig {

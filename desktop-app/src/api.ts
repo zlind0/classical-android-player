@@ -123,11 +123,24 @@ export interface RelaySettings {
   snapshotPollSec: number;
 }
 
+export interface RelayGrant {
+  rootId: number;
+  path: string;
+}
+
 export interface RelayDevice {
   id: string;
   label: string;
   fingerprint: string;
   createdAt: number;
+  grants: RelayGrant[];
+}
+
+export interface RelayRoot {
+  id: number;
+  path: string;
+  displayName: string;
+  kind: string;
 }
 
 export interface RelayPairStart {
@@ -161,6 +174,7 @@ export interface RelayStatus {
   keyId: number;
   agent: RelayAgentStatus | null;
   devices: RelayDevice[];
+  roots: RelayRoot[];
   pairing: { lanHost: string; lanPort: number };
 }
 
@@ -218,6 +232,8 @@ export const api = {
   relayCancelPairing: () => invoke<void>("relay_cancel_pairing"),
   relayRevokeDevice: (id: string) =>
     invoke<RelayStatus>("relay_revoke_device", { id }),
+  relaySetDeviceRoots: (id: string, roots: number[]) =>
+    invoke<RelayStatus>("relay_set_device_roots", { id, roots }),
   relayResetIdentity: () => invoke<RelayStatus>("relay_reset_identity"),
   relayResetEncryption: () => invoke<RelayStatus>("relay_reset_encryption"),
 };

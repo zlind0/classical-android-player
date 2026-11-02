@@ -8,7 +8,10 @@ pub type FileId = [u8; 16];
 
 pub const ROLE_HOST: u8 = 1;
 pub const ROLE_CLIENT: u8 = 2;
-pub const PROTOCOL_VERSION: u16 = 2;
+/// Bumped when host-side messages changed. Android clients still send v2 and
+/// are accepted by the relay; the NAS host must speak v3.
+pub const PROTOCOL_VERSION: u16 = 3;
+pub const MIN_CLIENT_VERSION: u16 = 2;
 
 pub const HELLO: u8 = 0x01;
 pub const HELLO_OK: u8 = 0x02;
@@ -50,8 +53,14 @@ pub const ADMIN_STATS_REQ: u8 = 0x50;
 pub const ADMIN_STATS_OK: u8 = 0x51;
 pub const AUTHORIZE_CLIENT: u8 = 0x52;
 pub const REVOKE_CLIENT: u8 = 0x53;
+pub const SET_CLIENT_ACCESS: u8 = 0x54;
 pub const RESET_CLIENTS: u8 = 0x56;
 pub const ACK: u8 = 0x57;
+pub const ROOT_MAP_BEGIN: u8 = 0x58;
+pub const ROOT_MAP_CHUNK: u8 = 0x59;
+pub const ROOT_MAP_END: u8 = 0x5a;
+/// Number of `(file_id, root_id)` entries sent in one `ROOT_MAP_CHUNK`.
+pub const ROOT_MAP_CHUNK_ITEMS: usize = 4096;
 
 pub mod err {
     pub const BAD_FRAME: u16 = 1;
@@ -119,6 +128,7 @@ pub enum Msg {
         data: Vec<u8>,
     },
     SnapshotBegin {
+        scope: u64,
         version: i64,
         key_id: u64,
         plain_len: u64,
@@ -217,6 +227,8 @@ pub enum Msg {
     },
     LiveFwd {
         seq: u32,
+        client_seq: u32,
+        client_id: [u8; 16],
         ct: Vec<u8>,
     },
     LiveReply {
@@ -239,11 +251,31 @@ pub enum Msg {
         client_id: [u8; 16],
         label: String,
         fingerprint: String,
+        roots: Vec<i64>,
+        all: bool,
+    },
+    SetClientAccess {
+        client_id: [u8; 16],
+        roots: Vec<i64>,
+        all: bool,
     },
     RevokeClient {
         client_id: [u8; 16],
     },
     ResetClients,
+    RootMapBegin {
+        version: i64,
+        count: u32,
+    },
+    RootMapChunk {
+        version: i64,
+        index: u32,
+        data: Vec<u8>,
+    },
+    RootMapEnd {
+        version: i64,
+        ok: bool,
+    },
     Ack {
         ok: bool,
     },
@@ -429,6 +461,7 @@ impl Msg {
                 LIB_SNAPSHOT_CHUNK
             }
             Msg::SnapshotBegin {
+                scope,
                 version,
                 key_id,
                 plain_len,
@@ -436,6 +469,7 @@ impl Msg {
                 chunks,
                 salt,
             } => {
+                w.u64(*scope);
                 w.i64(*version);
                 w.u64(*key_id);
                 w.u64(*plain_len);
@@ -592,8 +626,15 @@ impl Msg {
                 w.bytes(ct);
                 LIVE_RESP
             }
-            Msg::LiveFwd { seq, ct } => {
+            Msg::LiveFwd {
+                seq,
+                client_seq,
+                client_id,
+                ct,
+            } => {
                 w.u32(*seq);
+                w.u32(*client_seq);
+                w.raw(client_id);
                 w.bytes(ct);
                 LIVE_FWD
             }
@@ -628,17 +669,57 @@ impl Msg {
                 client_id,
                 label,
                 fingerprint,
+                roots,
+                all,
             } => {
                 w.raw(client_id);
                 w.string(label);
                 w.string(fingerprint);
+                w.u32(roots.len() as u32);
+                for root in roots {
+                    w.i64(*root);
+                }
+                w.bool(*all);
                 AUTHORIZE_CLIENT
+            }
+            Msg::SetClientAccess {
+                client_id,
+                roots,
+                all,
+            } => {
+                w.raw(client_id);
+                w.u32(roots.len() as u32);
+                for root in roots {
+                    w.i64(*root);
+                }
+                w.bool(*all);
+                SET_CLIENT_ACCESS
             }
             Msg::RevokeClient { client_id } => {
                 w.raw(client_id);
                 REVOKE_CLIENT
             }
             Msg::ResetClients => RESET_CLIENTS,
+            Msg::RootMapBegin { version, count } => {
+                w.i64(*version);
+                w.u32(*count);
+                ROOT_MAP_BEGIN
+            }
+            Msg::RootMapChunk {
+                version,
+                index,
+                data,
+            } => {
+                w.i64(*version);
+                w.u32(*index);
+                w.bytes(data);
+                ROOT_MAP_CHUNK
+            }
+            Msg::RootMapEnd { version, ok } => {
+                w.i64(*version);
+                w.bool(*ok);
+                ROOT_MAP_END
+            }
             Msg::Ack { ok } => {
                 w.bool(*ok);
                 ACK
@@ -693,6 +774,7 @@ impl Msg {
                 data: r.bytes()?,
             },
             SNAPSHOT_BEGIN => Msg::SnapshotBegin {
+                scope: r.u64()?,
                 version: r.i64()?,
                 key_id: r.u64()?,
                 plain_len: r.u64()?,
@@ -791,6 +873,8 @@ impl Msg {
             },
             LIVE_FWD => Msg::LiveFwd {
                 seq: r.u32()?,
+                client_seq: r.u32()?,
+                client_id: r.array::<16>()?,
                 ct: r.bytes()?,
             },
             LIVE_REPLY => Msg::LiveReply {
@@ -809,15 +893,55 @@ impl Msg {
                 evicted: r.u64()?,
                 lib_version: r.i64()?,
             },
-            AUTHORIZE_CLIENT => Msg::AuthorizeClient {
-                client_id: r.array::<16>()?,
-                label: r.string()?,
-                fingerprint: r.string()?,
-            },
+            AUTHORIZE_CLIENT => {
+                let client_id = r.array::<16>()?;
+                let label = r.string()?;
+                let fingerprint = r.string()?;
+                let count = r.u32()? as usize;
+                let mut roots = Vec::with_capacity(count.min(4096));
+                for _ in 0..count {
+                    roots.push(r.i64()?);
+                }
+                let all = r.bool()?;
+                Msg::AuthorizeClient {
+                    client_id,
+                    label,
+                    fingerprint,
+                    roots,
+                    all,
+                }
+            }
+            SET_CLIENT_ACCESS => {
+                let client_id = r.array::<16>()?;
+                let count = r.u32()? as usize;
+                let mut roots = Vec::with_capacity(count.min(4096));
+                for _ in 0..count {
+                    roots.push(r.i64()?);
+                }
+                let all = r.bool()?;
+                Msg::SetClientAccess {
+                    client_id,
+                    roots,
+                    all,
+                }
+            }
             REVOKE_CLIENT => Msg::RevokeClient {
                 client_id: r.array::<16>()?,
             },
             RESET_CLIENTS => Msg::ResetClients,
+            ROOT_MAP_BEGIN => Msg::RootMapBegin {
+                version: r.i64()?,
+                count: r.u32()?,
+            },
+            ROOT_MAP_CHUNK => Msg::RootMapChunk {
+                version: r.i64()?,
+                index: r.u32()?,
+                data: r.bytes()?,
+            },
+            ROOT_MAP_END => Msg::RootMapEnd {
+                version: r.i64()?,
+                ok: r.bool()?,
+            },
             ACK => Msg::Ack { ok: r.bool()? },
             other => {
                 return Err(Error::Protocol(format!("unknown message type {other:#04x}")))
@@ -858,6 +982,26 @@ mod tests {
             client_id: [1u8; 16],
             label: "phone".into(),
             fingerprint: "sha256/x".into(),
+            roots: vec![1, 3],
+            all: false,
+        });
+        round(Msg::SetClientAccess {
+            client_id: [1u8; 16],
+            roots: vec![2],
+            all: true,
+        });
+        round(Msg::RootMapBegin {
+            version: 7,
+            count: 2,
+        });
+        round(Msg::RootMapChunk {
+            version: 7,
+            index: 0,
+            data: vec![1, 2, 3],
+        });
+        round(Msg::RootMapEnd {
+            version: 7,
+            ok: true,
         });
         round(Msg::Ack { ok: true });
         round(Msg::LibVersionOk {
@@ -889,6 +1033,12 @@ mod tests {
             seq: 1,
             status: 200,
             ct: vec![9, 9],
+        });
+        round(Msg::LiveFwd {
+            seq: 1,
+            client_seq: 9,
+            client_id: [4u8; 16],
+            ct: vec![8, 8],
         });
     }
 }

@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use pod_relay_agent::config::{MediaConfig, RelayEndpoint, AgentConfig, PushConfig, SnapshotConfig};
 use pod_relay_agent::{LibraryBackend, LiveRequest, LiveResponse, Stat};
+use pod_relay_protocol::access::{scope_id, scope_version, AuthorizedDevice};
 use pod_relay_protocol::crypto::{decrypt_fragment, key_id, media_key, meta_key};
 use pod_relay_protocol::file_id::file_id;
 use pod_relay_protocol::msg::{Msg, PROTOCOL_VERSION};
@@ -60,7 +61,7 @@ fn fingerprint(path: &PathBuf) -> Result<String> {
     pod_relay_server::cert::fingerprint_file(path)
 }
 
-async fn wait_snapshot(client: &mut ClientLink) -> Result<SnapshotHeader> {
+async fn wait_snapshot(client: &mut ClientLink, expected: i64) -> Result<SnapshotHeader> {
     for _ in 0..100 {
         match client.call(Msg::LibVersionReq).await? {
             Msg::LibVersionOk {
@@ -71,7 +72,7 @@ async fn wait_snapshot(client: &mut ClientLink) -> Result<SnapshotHeader> {
                 chunks,
                 salt,
                 ..
-            } if version > 0 => {
+            } if version == expected => {
                 return Ok(SnapshotHeader {
                     version,
                     key_id,
@@ -84,7 +85,7 @@ async fn wait_snapshot(client: &mut ClientLink) -> Result<SnapshotHeader> {
             _ => tokio::time::sleep(Duration::from_millis(150)).await,
         }
     }
-    Err(anyhow!("snapshot never arrived"))
+    Err(anyhow!("snapshot version {expected} never arrived"))
 }
 
 pub async fn run() -> Result<()> {
@@ -152,7 +153,8 @@ pub async fn run() -> Result<()> {
         "music": [{
             "id": "7",
             "title": "Selftest",
-            "path": "/music/7.flac"
+            "path": "/music/7.flac",
+            "rootKey": "1"
         }],
         "ebookRoots": [],
         "ebooks": [],
@@ -178,6 +180,8 @@ pub async fn run() -> Result<()> {
         media: MediaConfig { key_b64: key_b64.clone() },
         push: PushConfig::default(),
         snapshot: SnapshotConfig { poll_sec: 60 },
+        devices: Vec::new(),
+        scopes: Vec::new(),
     };
     let client_config = AgentConfig {
         relay: RelayEndpoint {
@@ -192,6 +196,8 @@ pub async fn run() -> Result<()> {
         },
         push: PushConfig::default(),
         snapshot: SnapshotConfig { poll_sec: 60 },
+        devices: Vec::new(),
+        scopes: Vec::new(),
     };
     let agent = pod_relay_agent::spawn(backend, agent_config);
     for _ in 0..50 {
@@ -211,9 +217,24 @@ pub async fn run() -> Result<()> {
         }
     };
 
-    let header = wait_snapshot(&mut client).await?;
+    let id = file_id("music", "7");
+    // Newly paired devices start with no folder access: the relay must refuse
+    // media lookups even though the device certificate itself is authorized.
+    match client.call(Msg::StatReq { file_id: id }).await? {
+        Msg::StatErr { .. } => println!("[selftest] default deny ok"),
+        other => return Err(anyhow!("new device was not denied: {other:?}")),
+    }
+
+    let expected_version = scope_version(1, scope_id(&[1]));
+    agent.set_devices(vec![AuthorizedDevice {
+        id: [9u8; 16],
+        label: "selftest-phone".to_string(),
+        fingerprint: phone_fp.clone(),
+        roots: vec![1],
+        all: false,
+    }]);
+    let header = wait_snapshot(&mut client, expected_version).await?;
     let version = header.version;
-    assert_eq!(version, 1);
     let mut chunk_data = Vec::new();
     for index in 0..header.chunks {
         match client
@@ -230,10 +251,18 @@ pub async fn run() -> Result<()> {
     let meta = meta_key(&master);
     assert_eq!(header.key_id, key_id(&master));
     let decrypted = unpack(&meta, &header, &chunk_data)?;
-    assert_eq!(decrypted, snapshot, "snapshot mismatch");
-    println!("[selftest] snapshot roundtrip ok ({} bytes)", decrypted.len());
+    let filtered: serde_json::Value = serde_json::from_slice(&decrypted)?;
+    assert_eq!(
+        filtered.get("libraryUpdatedAt").and_then(|v| v.as_i64()),
+        Some(version),
+        "scoped snapshot must carry its scoped version"
+    );
+    assert_eq!(
+        filtered.pointer("/music/0/rootKey").and_then(|v| v.as_str()),
+        Some("1")
+    );
+    println!("[selftest] scoped snapshot ok ({} bytes)", decrypted.len());
 
-    let id = file_id("music", "7");
     let stat = match client.call(Msg::StatReq { file_id: id }).await? {
         Msg::StatOk {
             total, count, salt, ..

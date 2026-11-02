@@ -4,7 +4,7 @@
 `desktop-app/`）、Android 客户端接入方式、部署与测试。实施完成后本文件即作为协议文档使用。
 
 - 产品名：**PodRelay**
-- 协议版本：`relay/v2`（认证模型变更自 v1；`pod-relay/v1/*` 是密钥派生域分隔符，保持不变以兼容旧密钥）
+- 协议版本：`relay/v3`（v3 增加按设备、按文件夹的访问控制；relay 仍接受 v2 的 Android 客户端，NAS host 必须使用 v3。`pod-relay/v1/*` 是密钥派生域分隔符，保持不变以兼容旧密钥）
 - 传输：`TLS 1.3`（`rustls`）承载自定义二进制帧，**不是 HTTP/HTTPS 应用层协议**
 - 中继服务器端口：单个高位 TCP 端口，默认 `21443`（服务器 80/443 在防火墙保持屏蔽）
 - 使用规模：单人、单 NAS、少量客户端设备
@@ -175,7 +175,7 @@ pod-relay-agent, pod-relay-protocol, tower = { features = ["util"] }   # oneshot
 
 ---
 
-## 5. 协议规范 relay/v2
+## 5. 协议规范 relay/v3
 
 ### 5.1 帧
 
@@ -193,7 +193,7 @@ pod-relay-agent, pod-relay-protocol, tower = { features = ["util"] }   # oneshot
 
 | 类型 | 方向 | 载荷 |
 |---|---|---|
-| `0x01 HELLO` | 两端 → 中继 | `role:u8`（1=NAS，2=CLIENT），`ver:u16=2`，`key_id:u64`，`caps:u32`，`auth_len:u8`，`auth`（NAS 首次绑定时是 host token，之后为空；客户端为空） |
+| `0x01 HELLO` | 两端 → 中继 | `role:u8`（1=NAS，2=CLIENT），`ver:u16`（NAS 必须为 3；客户端接受 2–3），`key_id:u64`，`caps:u32`，`auth_len:u8`，`auth`（NAS 首次绑定时是 host token，之后为空；客户端为空） |
 | `0x02 HELLO_OK` | 中继 → 两端 | `ver:u16`，`session_id:u64`，`relay_ms:i64`，`host_online:u8`，`host_lib_version:i64`，`store_used:u64`，`store_cap:u64` |
 | `0x03 PING` / `0x04 PONG` | 双向 | `nonce:u64` |
 | `0x7F ERROR` | 双向 | `code:u16`，`msg:utf8` |
@@ -216,13 +216,16 @@ pod-relay-agent, pod-relay-protocol, tower = { features = ["util"] }   # oneshot
 | `0x11 LIB_VERSION_OK` | R→C | `version:i64`，`key_id:u64`，`plain_len:u64`，`gz_len:u64`，`chunks:u32`，`salt[8]`，`host_online:u8` |
 | `0x12 LIB_SNAPSHOT_REQ` | C→R | `version:i64`，`chunk_index:u32` |
 | `0x13 LIB_SNAPSHOT_CHUNK` | R→C | `version:i64`，`chunk_index:u32`，`total:u64`，`data` |
-| `0x14 SNAPSHOT_BEGIN` | N→R | `version:i64`，`key_id:u64`，`plain_len:u64`，`gz_len:u64`，`chunks:u32`，`salt[8]` |
+| `0x14 SNAPSHOT_BEGIN` | N→R | `scope:u64`，`version:i64`，`key_id:u64`，`plain_len:u64`，`gz_len:u64`，`chunks:u32`，`salt[8]` |
 | `0x15 SNAPSHOT_CHUNK` | N→R | `version:i64`，`chunk_index:u32`，`data` |
 | `0x16 SNAPSHOT_END` | N→R | `version:i64`，`ok:u8` |
 
 - 快照内容 = `/library/all` 的 JSON → gzip → 按 512 KiB 分块独立加密。
-- 中继只解析 `SNAPSHOT_BEGIN` 里的明文头（版本、长度、块数）；块内容原样落盘。
-- 中继保留「当前版本 + 上一版本」，收到新版本后删除更早的版本目录，避免客户端跨版本读到半套数据。
+- 中继只解析 `SNAPSHOT_BEGIN` 里的明文头（scope、版本、长度、块数）；块内容原样落盘。
+- 快照按 `scope` 分目录存储：`snap/{scope:016x}/{version}`。`scope = stableHash(sorted(rootIds))`，空授权固定为 `0`。
+- 每个 scope 保留「当前版本 + 上一版本」，收到新版本后删除更早的版本目录，避免客户端跨版本读到半套数据。
+- 全目录授权（`all=true`）继续使用全局 `libraryVersion`；受限 scope 使用 `scopeVersion(libraryVersion, scopeId)`，并覆盖快照 JSON 内的 `libraryUpdatedAt`，保证客户端缓存判断一致。
+- 空授权也必须推送一份空快照，否则客户端会一直报「relay has no library snapshot yet」。
 
 ### 5.4 媒体分片
 
@@ -257,11 +260,13 @@ pod-relay-agent, pod-relay-protocol, tower = { features = ["util"] }   # oneshot
 |---|---|---|
 | `0x40 LIVE_REQ` | C→R | `seq:u32`，`ct` |
 | `0x41 LIVE_RESP` | R→C | `seq:u32`，`status:u16`，`ct` |
-| `0x42 LIVE_FWD` | R→N | `seq:u32`，`ct` |
-| `0x43 LIVE_REPLY` | N→R | `seq:u32`，`status:u16`，`ct` |
+| `0x42 LIVE_FWD` | R→N | `seq:u32`（relay 分配），`client_seq:u32`（客户端原始 seq），`client_id[16]`，`ct` |
+| `0x43 LIVE_REPLY` | N→R | `seq:u32`（relay 分配的 seq），`status:u16`，`ct` |
 
 - `ct` 为加密后的 JSON：`{"method":"POST","path":"/library/ebook/scan","body":"<base64>"}`。
-- 白名单仅 `GET/POST /library/ebook/scan`；响应正文上限 1 MiB；超时 20 秒。
+- 白名单：`GET/POST /library/ebook/scan`、`GET /library/ebook/random`、`GET /library/ebook/search`、`POST /library/ebook/feed/start|turn|close`、`GET /library/ebook/feed/chapter`；响应正文上限 1 MiB；超时 20 秒。
+- 中继用自己分配的 `seq` 关联 `LIVE_REPLY`，避免两个客户端使用相同 seq 时串包；回给客户端时再换回 `client_seq`。
+- NAS 收到 `LIVE_FWD` 后按 `client_id` 重新校验文件夹权限：`rootKey` 必须在授权列表内，`/library/ebook/scan` 按路径查数据库得到 root，feed 会话只能由创建它的设备继续操作。
 - 中继服务器看不到路径与正文，只能看到密文长度。
 
 ### 5.6 管理
@@ -270,15 +275,21 @@ pod-relay-agent, pod-relay-protocol, tower = { features = ["util"] }   # oneshot
 |---|---|---|
 | `0x50 ADMIN_STATS_REQ` | C→R | 空 |
 | `0x51 ADMIN_STATS_OK` | R→C | `sessions:u32`，`host_online:u8`，`store_used:u64`，`store_cap:u64`，`hit:u64`，`miss:u64`，`evicted:u64`，`lib_version:i64` |
-| `0x52 AUTHORIZE_CLIENT` | N→R | `client_id[16]`，`label:utf8`，`fingerprint:utf8` |
+| `0x52 AUTHORIZE_CLIENT` | N→R | `client_id[16]`，`label:utf8`，`fingerprint:utf8`，`roots:u32` + `i64[]`，`all:u8` |
 | `0x53 REVOKE_CLIENT` | N→R | `client_id[16]` |
+| `0x54 SET_CLIENT_ACCESS` | N→R | `client_id[16]`，`roots:u32` + `i64[]`，`all:u8` |
 | `0x56 RESET_CLIENTS` | N→R | 空 |
 | `0x57 ACK` | R→N | `req`（回帧的 req_id），`ok:u8` |
+| `0x58 ROOT_MAP_BEGIN` | N→R | `version:i64`，`count:u32` |
+| `0x59 ROOT_MAP_CHUNK` | N→R | `version:i64`，`index:u32`，`data`（每项 16B file_id + 8B root_id，每块 4096 项） |
+| `0x5A ROOT_MAP_END` | N→R | `version:i64`，`ok:u8` |
 
-- `AUTHORIZE_CLIENT` 只接受 host 会话；relay 持久化到 `auth.json`，客户端在下一次连接时即可通过授权。
+- `AUTHORIZE_CLIENT` 只接受 host 会话；relay 持久化到 `auth.json`，客户端在下一次连接时即可通过授权。新设备默认 `roots=[]`、`all=false`，即看不到任何内容。
+- `SET_CLIENT_ACCESS` 用于只更新文件夹授权而不改设备名/指纹；NAS 当前实现直接重发 `AUTHORIZE_CLIENT`，两者等价。
 - 设备列表以 NAS 本地 `devices.json` 为准；relay 端只负责授权/撤销，不提供列表查询。
 - `REVOKE_CLIENT` 让该指纹立即失效（已建立的会话在下一次心跳/请求时断开）。
-- `RESET_CLIENTS` 清空所有客户端授权，不影响 host。
+- `RESET_CLIENTS` 清空所有客户端授权，不影响 host。NAS 每次 host 重连先发 `RESET_CLIENTS` 再重发当前设备列表，避免离线期间撤销的设备复活。
+- `ROOT_MAP_*` 把 `file_id → root_id` 映射推给 relay。relay 不接触路径，只按当前设备的 `roots` 判断 `STAT_REQ`、`FRAG_REQ`、`WANT_AHEAD`、`PIN` 是否放行；映射未就绪或未知 `file_id` 时失败关闭。
 - 管理类消息只允许 host 会话；`ADMIN_STATS_REQ` 允许任何已授权会话（`relay-server status` 使用）。不开放其他管理端口。
 
 ### 5.7 一次播放的时序
@@ -299,6 +310,17 @@ relay   命中 → FRAG_DATA
 client  WANT_AHEAD(f, 0, 32)
 relay   按 p=2 排入队列，NAS 顺序补推
 ```
+
+### 5.8 设备-文件夹权限
+
+- 权限粒度是用户在 NAS 上实际添加的每个 `roots` 目录，不抽象成「公开/私人音乐库」之类的分组。
+- `devices.json` 中每台设备保存 `grants: [{ rootId, path }]`；新配对设备 `grants` 为空，默认全关。
+- 保存 `path` 是为了在 sqlite root id 被复用时自动丢弃过期授权；NAS 每次计算权限都会用当前 `roots` 表过滤。
+- 当设备勾选的文件夹覆盖当前全部 roots 时，NAS 发送 `all=true`；否则发送明确的 root id 列表。这样以后新增文件夹不会自动扩大旧设备的权限。
+- relay 端只保存 root id 列表，不保存路径；媒体请求按 `ROOT_MAP` 查 root 后判断是否在设备授权内。
+- 局域网 HTTP 访问完全信任，不做文件夹限制；只有公网 relay 路径受 ACL 约束。
+- 授权修改实时生效：NAS 更新 `devices.json` 后通过 `AUTHORIZE_CLIENT` 重发设备列表，并推送新 scope 的快照；已建立的客户端会话在下一次请求时读取新权限。
+- 面板直接列出每台设备对应的真实文件夹复选列表，显示「已授权 N/M 个文件夹」，提供全选/清空；展开状态保存在本地，重新打开面板不需要重新设置。
 
 ---
 
@@ -657,7 +679,7 @@ loop {
 relay.json            # 中继配置（地址/指纹/host token/开关）
 relay/media.key       # 32 字节，Base64 文本，首次启用自动生成
 relay/nas.crt|.key    # NAS 的 mTLS 证书，首次启用自动生成
-relay/devices.json    # 本机记录的已配对设备（client_id/label/指纹/时间）
+relay/devices.json    # 本机记录的已配对设备（client_id/label/指纹/时间/文件夹授权）
 ```
 
 `relay.json`：
@@ -691,6 +713,7 @@ relay/devices.json    # 本机记录的已配对设备（client_id/label/指纹/
 | `relay_start_remote_pairing` | 生成 gzip+Base64 远程配对字符串，可指定有效期（分钟） |
 | `relay_cancel_pairing` | 作废当前配对码/隐藏远程配对码 |
 | `relay_revoke_device` | 撤销单台设备（同步 `REVOKE_CLIENT` 到 relay） |
+| `relay_set_device_roots` | 设置单台设备可访问的文件夹（root id 列表），立即同步 relay 与快照 |
 | `relay_reset_identity` | 重新生成 NAS 证书并用 host token 重新绑定（不影响已配对设备） |
 | `relay_reset_encryption` | 换 `media_key` 并撤销全部设备（强警告：全部缓存作废） |
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api,
   formatBytes,
+  type RelayDevice,
   type RelayPairStart,
   type RelayRemotePairStart,
   type RelayStatus,
@@ -22,6 +23,14 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
   const [now, setNow] = useState(Date.now());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("relay.expandedDevices") || "[]");
+      return new Set(Array.isArray(saved) ? saved.filter((id) => typeof id === "string") : []);
+    } catch {
+      return new Set();
+    }
+  });
 
   const load = useCallback(async () => {
     try {
@@ -131,6 +140,36 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
     } catch (err) {
       setError(String(err));
     }
+  };
+
+  const toggleExpanded = (id: string) => {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      try {
+        localStorage.setItem("relay.expandedDevices", JSON.stringify([...next]));
+      } catch {
+        // Storage can be unavailable; the expanded state just won't persist.
+      }
+      return next;
+    });
+  };
+
+  const setRoots = async (device: RelayDevice, rootIds: number[]) => {
+    try {
+      const next = await api.relaySetDeviceRoots(device.id, rootIds);
+      setStatus(next);
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const toggleRoot = (device: RelayDevice, rootId: number) => {
+    const current = new Set(device.grants.map((grant) => grant.rootId));
+    if (current.has(rootId)) current.delete(rootId);
+    else current.add(rootId);
+    setRoots(device, [...current]);
   };
 
   const resetIdentity = async () => {
@@ -318,19 +357,70 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
 
             <section className="relay-section">
               <h3>已配对设备</h3>
+              <p className="relay-hint">
+                这里只限制公网中继的访问，局域网直连不受影响。新设备默认不共享任何文件夹。
+              </p>
               {deviceCount === 0 && <p className="relay-hint">还没有设备。</p>}
               <div className="relay-devices">
-                {status?.devices.map((device) => (
-                  <div className="relay-device" key={device.id}>
-                    <div>
-                      <strong>{device.label}</strong>
-                      <span className="relay-hint">{device.fingerprint.slice(0, 22)}…</span>
+                {status?.devices.map((device) => {
+                  const roots = status.roots;
+                  const rootIds = new Set(roots.map((root) => root.id));
+                  const granted = new Set(
+                    device.grants
+                      .map((grant) => grant.rootId)
+                      .filter((rootId) => rootIds.has(rootId)),
+                  );
+                  const open = expanded.has(device.id);
+                  return (
+                    <div className="relay-device" key={device.id}>
+                      <div className="relay-device-head">
+                        <div>
+                          <strong>{device.label}</strong>
+                          <span className="relay-hint">{device.fingerprint.slice(0, 22)}…</span>
+                        </div>
+                        <div className="relay-actions">
+                          <button className="btn ghost small" onClick={() => toggleExpanded(device.id)}>
+                            {open ? "收起" : "文件夹"}
+                          </button>
+                          <button className="btn ghost small" onClick={() => revoke(device.id)}>
+                            撤销
+                          </button>
+                        </div>
+                      </div>
+                      <div className="relay-hint">
+                        已授权 {granted.size}/{roots.length} 个文件夹
+                        {granted.size === 0 ? " · 当前看不到任何内容" : ""}
+                      </div>
+                      {open && (
+                        <div className="relay-folder-list">
+                          <div className="relay-actions">
+                            <button
+                              className="btn ghost small"
+                              onClick={() => setRoots(device, roots.map((root) => root.id))}
+                            >
+                              全选
+                            </button>
+                            <button className="btn ghost small" onClick={() => setRoots(device, [])}>
+                              清空
+                            </button>
+                          </div>
+                          {roots.length === 0 && <span className="relay-hint">还没有添加任何文件夹。</span>}
+                          {roots.map((root) => (
+                            <label className="relay-folder" key={root.id}>
+                              <input
+                                type="checkbox"
+                                checked={granted.has(root.id)}
+                                onChange={() => toggleRoot(device, root.id)}
+                              />
+                              <span className="relay-folder-path">{root.path}</span>
+                              <span className="relay-folder-name">{root.displayName}</span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    <button className="btn ghost small" onClick={() => revoke(device.id)}>
-                      撤销
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
 

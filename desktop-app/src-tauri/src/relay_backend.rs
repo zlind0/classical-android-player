@@ -4,6 +4,7 @@
 //! `build_router()` in-process, so paths, Range semantics, video audio
 //! extraction and ebook lazy parsing are all identical to the LAN protocol.
 
+use crate::relay_access::{self, SharedGrants};
 use crate::{db, http_server};
 use anyhow::{anyhow, Context, Result};
 use axum::body::{to_bytes, Body};
@@ -18,12 +19,17 @@ const MAX_BODY: usize = 32 * 1024 * 1024;
 pub struct HostBackend {
     router: Router,
     state: http_server::HttpState,
+    grants: SharedGrants,
 }
 
 impl HostBackend {
-    pub fn new(state: http_server::HttpState) -> Arc<HostBackend> {
+    pub fn new(state: http_server::HttpState, grants: SharedGrants) -> Arc<HostBackend> {
         let router = http_server::build_router(state.clone());
-        Arc::new(HostBackend { router, state })
+        Arc::new(HostBackend {
+            router,
+            state,
+            grants,
+        })
     }
 
     async fn request(
@@ -143,7 +149,35 @@ impl LibraryBackend for HostBackend {
     }
 
     async fn live(&self, req: LiveRequest) -> Result<LiveResponse> {
+        let decision = match relay_access::check(
+            &self.state,
+            &self.grants,
+            req.client_id,
+            &req.method,
+            &req.path,
+            &req.body,
+        )
+        .await
+        {
+            Ok(decision) => decision,
+            Err(denied) => {
+                let body = serde_json::json!({ "error": denied.message });
+                return Ok(LiveResponse {
+                    status: denied.status,
+                    body: serde_json::to_vec(&body).unwrap_or_default(),
+                });
+            }
+        };
+        let is_feed_start = req.path.starts_with("/library/ebook/feed/start");
         let (status, _headers, body) = self.request(&req.method, &req.path, None, req.body).await?;
+        if status.is_success() {
+            if is_feed_start {
+                relay_access::claim_from_response(&self.grants, req.client_id, &body);
+            }
+            if let Some(session) = decision.release_feed.as_deref() {
+                relay_access::release_session(&self.grants, session);
+            }
+        }
         Ok(LiveResponse {
             status: status.as_u16(),
             body,
