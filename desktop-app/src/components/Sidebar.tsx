@@ -173,6 +173,12 @@ export function Sidebar({
             <span className="mono">{stats.libraryVersion}</span>
           </div>
         )}
+        <div className="server-line muted" title={__GIT_COMMIT__}>
+          <span>版本</span>
+          <span className="mono">
+            v{__APP_VERSION__} · {__GIT_COMMIT__.slice(0, 12)}
+          </span>
+        </div>
       </div>
     </aside>
   );

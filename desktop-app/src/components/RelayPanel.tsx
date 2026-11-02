@@ -23,9 +23,11 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
   const [now, setNow] = useState(Date.now());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<Set<string>>(() => {
+  // Devices are expanded by default so the real folder list is visible without
+  // an extra click; only explicit collapses are remembered.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
     try {
-      const saved = JSON.parse(localStorage.getItem("relay.expandedDevices") || "[]");
+      const saved = JSON.parse(localStorage.getItem("relay.collapsedDevices") || "[]");
       return new Set(Array.isArray(saved) ? saved.filter((id) => typeof id === "string") : []);
     } catch {
       return new Set();
@@ -143,14 +145,14 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
   };
 
   const toggleExpanded = (id: string) => {
-    setExpanded((current) => {
+    setCollapsed((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       try {
-        localStorage.setItem("relay.expandedDevices", JSON.stringify([...next]));
+        localStorage.setItem("relay.collapsedDevices", JSON.stringify([...next]));
       } catch {
-        // Storage can be unavailable; the expanded state just won't persist.
+        // Storage can be unavailable; the collapsed state just won't persist.
       }
       return next;
     });
@@ -370,7 +372,7 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
                       .map((grant) => grant.rootId)
                       .filter((rootId) => rootIds.has(rootId)),
                   );
-                  const open = expanded.has(device.id);
+                  const open = !collapsed.has(device.id);
                   return (
                     <div className="relay-device" key={device.id}>
                       <div className="relay-device-head">
@@ -406,14 +408,17 @@ export function RelayPanel({ onClose, onToast }: RelayPanelProps) {
                           </div>
                           {roots.length === 0 && <span className="relay-hint">还没有添加任何文件夹。</span>}
                           {roots.map((root) => (
-                            <label className="relay-folder" key={root.id}>
+                            <label
+                              className="relay-folder"
+                              key={root.id}
+                              title={root.displayName || root.path}
+                            >
                               <input
                                 type="checkbox"
                                 checked={granted.has(root.id)}
                                 onChange={() => toggleRoot(device, root.id)}
                               />
                               <span className="relay-folder-path">{root.path}</span>
-                              <span className="relay-folder-name">{root.displayName}</span>
                             </label>
                           ))}
                         </div>

@@ -366,7 +366,12 @@ async fn session(
                 drop(guard);
                 drop(tx);
                 let _ = writer_task.await;
-                return Err(anyhow!("unsupported protocol version"));
+                return Err(anyhow!(
+                    "unsupported protocol version {ver} for role {role} (relay expects host v{} and client v{}–v{})",
+                    pod_relay_protocol::msg::PROTOCOL_VERSION,
+                    pod_relay_protocol::msg::MIN_CLIENT_VERSION,
+                    pod_relay_protocol::msg::PROTOCOL_VERSION
+                ));
             }
             (role, key_id, auth)
         }

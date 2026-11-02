@@ -1721,11 +1721,7 @@ input[type="range"]::-webkit-slider-thumb {
   white-space: nowrap;
 }
 
-.relay-folder-name {
-  margin-left: auto;
-  color: var(--muted);
-  flex: 0 0 auto;
-}
+
 
 .relay-actions.spread {
   justify-content: space-between;

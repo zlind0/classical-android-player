@@ -52,6 +52,11 @@ fn positional(args: &[String]) -> Option<String> {
 }
 
 fn main() {
+    println!(
+        "[pod-relay] relay-server v{} commit {}",
+        env!("CARGO_PKG_VERSION"),
+        env!("POD_GIT_COMMIT")
+    );
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
