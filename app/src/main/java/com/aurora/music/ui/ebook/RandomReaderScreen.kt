@@ -27,8 +27,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -57,6 +65,7 @@ import com.aurora.music.data.ebook.ParsedEbook
 import com.aurora.music.ui.components.LottieLoader
 import com.aurora.music.ui.ios5.Ios5GlossButton
 import com.aurora.music.viewmodel.PlayerViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -108,6 +117,27 @@ fun RandomReaderScreen(
     var starting by remember { mutableStateOf(true) }
 
     val pager = rememberPagerState(initialPage = 1) { 3 }
+
+    // 切书流水线：手势连滑/耳机连按时串行切书，提示音不被打断（见 [drainSwitches]）。
+    val switchPipe = remember { BookSwitchPipeline() }
+    // 屏幕最上方 20% 是系统状态栏的下拉区：从这里开始的上下滑不参与切书。
+    val topZone = remember { TopZoneDragGuard() }
+    val blockTopZoneDrag = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (available.y == 0f) return Offset.Zero
+                // 手势从顶部下拉区开始：纵向位移全部吃掉，状态栏照常拉下来，pager 不动。
+                if (source == NestedScrollSource.UserInput && topZone.startedInTopZone) {
+                    return Offset(0f, available.y)
+                }
+                // 顶部手势抬手后的惯性也同样吃掉，否则手指没拖动、页面却被甩到下一本。
+                if (source == NestedScrollSource.SideEffect && topZone.blockFling) {
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+        }
+    }
 
     // 随机阅读内切章节：复用阅读器已有的按块跳转请求。
     var pendingJump by remember { mutableStateOf<BlockJump?>(null) }
@@ -249,50 +279,113 @@ fun RandomReaderScreen(
         onDispose { controller?.isAppearanceLightNavigationBars = previous ?: false }
     }
 
+    /** 停掉仍在播的切书提示音：换章节/退出时不让它稍后抢着开口。 */
+    fun cancelSwitchAnnouncement() {
+        switchPipe.announceJob?.cancel()
+        switchPipe.announceJob = null
+        switchPipe.announcing = false
+        switchPipe.readAfter = false
+    }
+
+    /** 提示音之后真正开口：读当前（最新）这一本。 */
+    suspend fun readCurrentBook() {
+        val book = manager.state.value.current ?: return
+        // 提示音期间新书已经完成排版：用屏幕上实际的第一字（而不是旧随机锚点）起读；
+        // playFrom 内部还会吸附到该字所在句子的句首。
+        val (c, b, ch) = currentPosition(book)
+        val chapter = manager.loadChapter(book.path, c) ?: return
+        val parsed = feedParsed(book, c, chapter)
+        tts.setBook("feed:${book.path}", parsed, book.path, force = true)
+        tts.playFrom(c, b, ch)
+    }
+
     /**
-     * 切书统一入口：耳机/通知栏、上下滑都走它。
-     * @param autoRead 切好后是否停顿一下再朗读（耳机切书总是读；手势只在原本正在朗读时才续读）。
+     * 播切书提示音（音效 + “上一本/下一本书名”），播完接着读最新一本。
+     *
+     * 连滑时的约定：
+     * - 提示音还没播完又切了书：不打断、不重播，播完后直接读最后落定的那本；
+     * - 提示音已经播完（甚至已经开始读）才切书：重新播一遍提示音，再读最新那本。
+     */
+    fun startBookAnnouncement(direction: Int, title: String) {
+        switchPipe.announcing = true
+        switchPipe.readAfter = true
+        switchPipe.announceJob = scope.launch {
+            try {
+                tts.playBookSwitchAnnouncement(direction, title)
+                while (true) {
+                    // 连续切书：等排队的那几本都换完再开口，避免读完旧书又被下一本打断。
+                    withTimeoutOrNull(5_000L) {
+                        while (switchPipe.running || manager.state.value.loading) delay(40)
+                    }
+                    if (!switchPipe.readAfter) break
+                    switchPipe.readAfter = false
+                    readCurrentBook()
+                    // 主循环真正开播前还有一小段空窗：这期间连滑不能被当成静音翻书。
+                    withTimeoutOrNull(2_000L) { while (!tts.playing.value) delay(30) }
+                    // 空窗里又切了书（提示音已播过）：直接读最新那本，不再重播。
+                    if (!switchPipe.readAfter) break
+                }
+            } finally {
+                switchPipe.announcing = false
+            }
+        }
+    }
+
+    /** 串行消费切书请求：一次只翻一本，翻完再处理下一本。 */
+    suspend fun drainSwitches() {
+        try {
+            while (true) {
+                val req = switchPipe.queue.removeFirstOrNull() ?: break
+                if (switchPipe.closed) break
+                val ok = manager.turn(req.direction)
+                if (!ok) {
+                    showToast(manager.state.value.error ?: "切换失败")
+                    runCatching { pager.scrollToPage(1) }
+                    continue
+                }
+                // 新书数据已经就位：这时才把 pager 收回中间。相邻页一直是最终布局，
+                // 收回去的画面和刚才停住的那一页完全一致，不会有跳变。
+                runCatching { pager.scrollToPage(1) }
+                // 切过去就先把新书的目标位置记下：后台听书时进程被杀也能恢复到最后切到的那本。
+                persistResume()
+                if (!req.read) continue
+                switchPipe.readAfter = true
+                // 提示音还在播：让它播完（播完由那个任务读最新一本），这里既不打断也不重播。
+                if (switchPipe.announcing) continue
+                startBookAnnouncement(req.direction, manager.state.value.current?.title.orEmpty())
+            }
+        } finally {
+            switchPipe.running = false
+        }
+    }
+
+    /**
+     * 切书统一入口：耳机/通知栏、上下滑、投屏页都走它。
+     * 请求只入队，由 [drainSwitches] 串行执行，快速连滑不会打断提示音，也不会让 TTS 卡死。
+     * @param autoRead 切好后是否接着朗读（耳机切书总是读；手势只在原本正在朗读时才续读）。
      */
     fun switchBook(direction: Int, autoRead: Boolean, announce: Boolean = false) {
-        if (manager.state.value.loading) {
-            // 还在换书：先把 pager 收回中间，别停在相邻页上。
+        if (switchPipe.closed) return
+        if (manager.state.value.current == null) {
             scope.launch { runCatching { pager.scrollToPage(1) } }
             return
         }
-        autoReadJob[0]?.cancel()
-        autoReadJob[0] = null
-        val wasPlaying = tts.playing.value
-        if (wasPlaying) tts.stop(savePos = false)
+        if (manager.state.value.loading) {
+            // 上一本还在路上：先把 pager 收回中间，让这次滑动也能落回页面上；
+            // 请求照常入队，等上一本落定后接着切。
+            scope.launch { runCatching { pager.scrollToPage(1) } }
+        }
+        // 听书会话还活着就续读：提示音播放期间 tts.playing 已经是 false，
+        // 但用户仍在听书，此时连滑不能被当成静音翻书（旧行为会因此不再开口）。
+        val listening = autoRead || announce || tts.playing.value ||
+            switchPipe.announcing || switchPipe.readAfter
+        // 正在读正文就先停；提示音期间 tts.playing 为 false，不会误停提示音。
+        if (tts.playing.value) tts.stop(savePos = false)
         persistResume()
-        autoReadJob[0] = scope.launch {
-            val ok = manager.turn(direction)
-            if (!ok) {
-                showToast(manager.state.value.error ?: "切换失败")
-                runCatching { pager.scrollToPage(1) }
-                return@launch
-            }
-            // 新书数据已经就位：这时才把 pager 收回中间。相邻页一直是最终布局，
-            // 收回去的画面和刚才停住的那一页完全一致，不会有跳变。
-            runCatching { pager.scrollToPage(1) }
-            // 切过去就先把新书的目标位置记下：后台听书时进程被杀也能恢复到最后切到的那本。
-            persistResume()
-            if (!autoRead) return@launch
-            val book = manager.state.value.current ?: return@launch
-            // 只要切书前 TTS 正在朗读，不管手势/耳机/投屏页触发，都先响提示音，
-            // 再报“上一本/下一本书名”，然后接着读新书正文。
-            // 耳机键即使原本静音也保留 announce=true 的旧行为。
-            if (announce || wasPlaying) {
-                tts.playBookSwitchAnnouncement(direction, book.title)
-            } else {
-                delay(750)
-            }
-            // 提示音期间新书已经完成排版：用屏幕上实际的第一字（而不是旧随机锚点）起读；
-            // playFrom 内部还会吸附到该字所在句子的句首。
-            val (c, b, ch) = currentPosition(book)
-            val chapter = manager.loadChapter(book.path, c) ?: return@launch
-            val parsed = feedParsed(book, c, chapter)
-            tts.setBook("feed:${book.path}", parsed, book.path, force = true)
-            tts.playFrom(c, b, ch)
+        switchPipe.queue.addLast(BookSwitchRequest(direction, listening))
+        if (!switchPipe.running) {
+            switchPipe.running = true
+            scope.launch { drainSwitches() }
         }
     }
 
@@ -304,10 +397,12 @@ fun RandomReaderScreen(
         val book = manager.state.value.current ?: return
         val count = book.chapterCount.coerceAtLeast(book.chapterTitles.size).coerceAtLeast(1)
         val target = kotlin.random.Random.nextInt(count)
-        val wasPlaying = tts.playing.value
+        // 提示音/等待续读期间 tts.playing 已经是 false，但听书会话还活着。
+        val wasPlaying = tts.playing.value || switchPipe.announcing || switchPipe.readAfter
         autoReadJob[0]?.cancel()
         autoReadJob[0] = null
-        if (wasPlaying) tts.stop(savePos = false)
+        cancelSwitchAnnouncement()
+        if (tts.playing.value) tts.stop(savePos = false)
         autoReadJob[0] = scope.launch {
             // 先取正文，才能在这一章里随机落到某个段落，而不是永远从章首开始。
             val chapter = manager.loadChapter(book.path, target)
@@ -330,10 +425,11 @@ fun RandomReaderScreen(
     /** 目录跳转：只换章节/段落，不写本地书架进度。 */
     fun jumpToChapter(chapter: Int, block: Int) {
         val book = manager.state.value.current ?: return
-        val wasPlaying = tts.playing.value
+        val wasPlaying = tts.playing.value || switchPipe.announcing || switchPipe.readAfter
         autoReadJob[0]?.cancel()
         autoReadJob[0] = null
-        if (wasPlaying) tts.stop(savePos = false)
+        cancelSwitchAnnouncement()
+        if (tts.playing.value) tts.stop(savePos = false)
         manager.rememberPosition(book.path, chapter, block, 0)
         persistResume()
         jumpGen += 1
@@ -385,6 +481,9 @@ fun RandomReaderScreen(
     }
 
     fun closeReader() {
+        switchPipe.closed = true
+        switchPipe.queue.clear()
+        cancelSwitchAnnouncement()
         autoReadJob[0]?.cancel()
         autoReadJob[0] = null
         persistResume()
@@ -397,6 +496,9 @@ fun RandomReaderScreen(
     DisposableEffect(Unit) {
         onDispose {
             // 退出随机阅读时清掉远程书目：通知栏不该停留在没有会话的随机书上。
+            switchPipe.closed = true
+            switchPipe.queue.clear()
+            cancelSwitchAnnouncement()
             tts.resetBook()
             cast.setBook(null)
             cast.stop()
@@ -421,9 +523,9 @@ fun RandomReaderScreen(
         if (pager.isScrollInProgress) return@LaunchedEffect
         val delta = pager.settledPage - 1
         if (delta != 0) {
-            // 手势切书：原本在朗读才续读，避免静音翻书时突然开口。
+            // 手势切书：是否续读由 switchBook 判断（原本在朗读/提示音还没播完才算听书）。
             // 不在这里回收 pager：等新书数据就位后再收，停住的相邻页本身就是最终布局。
-            switchBook(if (delta > 0) 1 else -1, autoRead = tts.playing.value)
+            switchBook(if (delta > 0) 1 else -1, autoRead = false)
         }
     }
 
@@ -551,7 +653,31 @@ fun RandomReaderScreen(
         BoundaryPager(boundary = BOOK_BOUNDARY_HEIGHT, modifier = Modifier.fillMaxSize()) {
         VerticalPager(
             state = pager,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                // 记录手势起点：从屏幕上方 20%（状态栏下拉区）开始的上下滑不切书。
+                .pointerInput(Unit) {
+                    var tracking: PointerId? = null
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val down = event.changes.firstOrNull { it.changedToDownIgnoreConsumed() }
+                            if (down != null && tracking == null) {
+                                tracking = down.id
+                                topZone.blockFling = false
+                                topZone.startedInTopZone = down.position.y < size.height * TOP_STATUS_BAR_ZONE
+                            }
+                            val tracked = tracking?.let { id -> event.changes.firstOrNull { it.id == id } }
+                            if (tracked != null && !tracked.pressed) {
+                                tracking = null
+                                // 抬手这一刻 scrollable 会按拖动速度起惯性：顶部手势连惯性一起挡掉。
+                                topZone.blockFling = topZone.startedInTopZone
+                                topZone.startedInTopZone = false
+                            }
+                        }
+                    }
+                }
+                .nestedScroll(blockTopZoneDrag),
             userScrollEnabled = !optionsOpen,
             beyondViewportPageCount = 1,
         ) { page ->
@@ -744,6 +870,41 @@ fun RandomReaderScreen(
 
 /** 每页比屏幕多出来的那一条：上一本书的书名/章节，翻页时先露出来，落定后藏到屏幕上沿之外。 */
 private val BOOK_BOUNDARY_HEIGHT = 30.dp
+
+/**
+ * 屏幕最上方这一段是系统状态栏的下拉区：从这里开始的上下滑只交给系统，
+ * 不参与随机阅读的切上一本/下一本（否则拉状态栏会顺带翻书）。
+ */
+private const val TOP_STATUS_BAR_ZONE = 0.2f
+
+/** 切书请求：连滑/连按时排队，由同一个协程串行执行。 */
+private data class BookSwitchRequest(
+    val direction: Int,
+    /** 切完是否接着读（听书会话还活着）。 */
+    val read: Boolean,
+)
+
+/**
+ * 切书流水线的跨重组状态。连续快速切书时只跑一个消费协程：
+ * 提示音不被打断，播完后统一读最后落定的那一本。
+ */
+private class BookSwitchPipeline {
+    val queue = ArrayDeque<BookSwitchRequest>()
+    var running = false
+    var closed = false
+    /** 切书提示音（音效 + 报书名）是否正在播；播放期间不打断也不重播。 */
+    var announcing = false
+    /** 提示音之后还要读最新一本（连续切书时一直保持，直到真正开口）。 */
+    var readAfter = false
+    var announceJob: Job? = null
+}
+
+/** 手势起点守卫：本次上下滑是否从屏幕上方状态栏下拉区开始。 */
+private class TopZoneDragGuard {
+    var startedInTopZone = false
+    /** 顶部手势抬手后的惯性：没有拖动位移，惯性也不能让 pager 翻页。 */
+    var blockFling = false
+}
 
 /**
  * 按「屏幕高 + 分界条高」排版 pager，再整体上移一个分界条高：
