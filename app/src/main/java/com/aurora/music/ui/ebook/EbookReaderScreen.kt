@@ -78,6 +78,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -1194,7 +1196,37 @@ private fun PageView(
     val linkStyles = remember(linkColor) {
         TextLinkStyles(style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))
     }
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Top) {
+    Column(
+        // ── Android 10（API 29）整页汉字不绘制的定点修复 ─────────────────────────
+        // 症状：阅读页正文/顶栏的字形成片消失，但排版位置完全正确。
+        //   · 27sp 整页 0 行；17sp 只剩页尾 4 行；14sp 只剩页尾 ~14 行；
+        //   · 目录页（整页链接）下划线一条不少，字形一个没有 —— 说明 text op 执行了，
+        //     只有 GlyphRun 的 mask 没画上；
+        //   · 朗读/拖动翻页（每帧只有小增量）正常，静止后消失；重开设置浮层也不自愈
+        //     （只有浮层节点脏，正文复用上一帧结果，DisplayList 没有重放）。
+        //
+        // 原因：DisplayList 里只有 glyph id + 坐标，没有像素；字形 mask 来自 GPU 字形
+        // 图集（A8 纹理页，通常 1024²）。27sp 中文一字 ≈ 71×71 texel ≈ 5KB，一页 ≈ 250 字
+        // ≈ 1.2MB 掩码 ≈ 1～2 个图集页。而顶栏 + 正文整页被录进**同一个 GPU pass**
+        // （一个 target、一条 op 队列），所以“画一页”本身就会在录制途中把图集撑满并触发
+        // 扩容/回收；已经被作废的图集页上的字形被静默跳过（无异常、无 path fallback，
+        // 位置依旧正确）。断点只取决于“这个 pass 里累计塞进图集的字节数”，因此字号越小
+        // 断点越靠后、留下的尾巴越长；树里先画的顶栏先死，最后画的页尾能活。
+        //
+        // 修复：给正文页一个真离屏层。Offscreen 会让 RenderNode 变成 layer（saveLayer +
+        // 独立 target），在页面开始处插进一道硬边界：先 flush 掉边界前的 op，本页的字形
+        // 从刚清空的图集增量重新开始堆，不再和顶栏/前文叠加，撞不到临界点。
+        // 注意不能用普通 `Modifier.graphicsLayer { }`：属性全默认时 HWUI 判定不需要独立
+        // 缓冲，会把子 DisplayList 内联进父 pass，行为与不加层完全一致（已 A/B 验证）。
+        //
+        // 代价：每个可见页多一张 ARGB 离屏缓冲（1080×2000 ≈ 8.6MB，只有可见页分配），
+        // 翻页时该层重新栅格化；层内是透明底，中文可能失去 LCD subpixel AA（略微变灰）。
+        // 只改绘制路径，不改 layout，链接点击/末行裁切/控件状态均不受影响。
+        // 若将来顶栏（ReaderTitleOrStatus）在某个字号下也丢字，把它包进同一个层即可
+        // （目前它靠“正文层在它之后插边界”受益，实测正常）。
+        Modifier.fillMaxSize().graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen),
+        verticalArrangement = Arrangement.Top,
+    ) {
         // 按块聚合成段显示；超链接按块坐标裁到当前页片后挂 annotation
         val byBlock = slices.groupBy { it.block }.toSortedMap()
         byBlock.forEach { (bi, ss) ->
