@@ -384,6 +384,11 @@ impl FeedService {
 
     fn snapshot(&self, session_id: &str, session: &FeedSession) -> FeedSnapshot {
         let index = if session.queue.len() >= 2 { 1 } else { 0 };
+        self.snapshot_at(session_id, session, index)
+    }
+
+    fn snapshot_at(&self, session_id: &str, session: &FeedSession, index: usize) -> FeedSnapshot {
+        let index = index.min(session.queue.len().saturating_sub(1));
         let books = session
             .queue
             .iter()
@@ -490,6 +495,77 @@ impl FeedService {
             .lock()
             .map_err(|_| anyhow!("feed session lock poisoned"))?;
         // 顺手清掉一段时间没动过的会话（客户端异常退出不会发 close）。
+        let now = Instant::now();
+        sessions.retain(|_, s| now.duration_since(s.last_used) < SESSION_TTL);
+        sessions.insert(id, session);
+        Ok(snapshot)
+    }
+
+    /// Parses up to `count` random books for the relay prefetch queue.
+    ///
+    /// The returned snapshot is built from the parsed items, but the session
+    /// only keeps the full pool. Large batches therefore do not pin dozens of
+    /// parsed books in memory; `chapter` re-parses on demand from the pool.
+    pub fn batch(
+        &self,
+        _root_key: &str,
+        pool: &[String],
+        count: usize,
+        resume: Option<FeedResume>,
+    ) -> Result<FeedSnapshot> {
+        let mut pool = pool.to_vec();
+        pool.sort();
+        pool.dedup();
+        if pool.is_empty() {
+            return Err(anyhow!("random pool is empty"));
+        }
+        let count = count.max(1);
+        let mut rng = rand::thread_rng();
+        pool.shuffle(&mut rng);
+
+        let mut parsed: Vec<FeedItem> = Vec::new();
+        let resume_item = resume
+            .as_ref()
+            .filter(|r| pool.iter().any(|p| p == &r.path))
+            .and_then(|r| self.make_resume_item(r));
+        let resume_path = resume_item.as_ref().map(|item| item.path.clone());
+        if let Some(item) = resume_item {
+            parsed.push(item);
+        }
+        for path in &pool {
+            if parsed.len() >= count {
+                break;
+            }
+            if resume_path.as_ref().is_some_and(|p| p == path)
+                || parsed.iter().any(|i| &i.path == path)
+            {
+                continue;
+            }
+            if let Some(item) = self.make_item(path.clone()) {
+                parsed.push(item);
+            }
+        }
+        if parsed.is_empty() {
+            return Err(anyhow!("no parsable ebook in random pool"));
+        }
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut session = FeedSession {
+            pool,
+            queue: parsed.into_iter().collect(),
+            last_used: Instant::now(),
+        };
+        let snapshot = self.snapshot_at(&id, &session, 0);
+        // Small batches (the initial three-book window) keep their queue so
+        // `feed/turn` still works as a fallback. Large prefetch batches only
+        // need the pool for `feed/chapter`.
+        if count > 3 {
+            session.queue.clear();
+        }
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| anyhow!("feed session lock poisoned"))?;
         let now = Instant::now();
         sessions.retain(|_, s| now.duration_since(s.last_used) < SESSION_TTL);
         sessions.insert(id, session);

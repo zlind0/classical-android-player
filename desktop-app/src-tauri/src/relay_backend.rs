@@ -158,6 +158,46 @@ impl LibraryBackend for HostBackend {
         ))
     }
 
+    async fn feed_batch(
+        &self,
+        client_id: Option<[u8; 16]>,
+        root_key: &str,
+        count: usize,
+        resume: Option<serde_json::Value>,
+    ) -> Result<Vec<u8>> {
+        if let Some(id) = client_id {
+            let root: i64 = root_key
+                .parse()
+                .map_err(|_| anyhow!("invalid rootKey"))?;
+            if !self.grants.allows(&id, root) {
+                return Err(anyhow!("folder is not shared with this device"));
+            }
+        }
+        let db = self.state.db.clone();
+        let root = root_key.to_string();
+        let lookup_root = root.clone();
+        let paths = tauri::async_runtime::spawn_blocking(move || {
+            let conn = db.lock();
+            db::root_book_paths_all(&conn, &lookup_root)
+        })
+        .await??;
+        if paths.is_empty() {
+            return Err(anyhow!("random pool is empty"));
+        }
+        let feed = self.state.feed.clone();
+        let resume: Option<crate::ebook_feed::FeedResume> =
+            resume.and_then(|value| serde_json::from_value(value).ok());
+        let snapshot = tauri::async_runtime::spawn_blocking(move || {
+            feed.batch(&root, &paths, count, resume)
+        })
+        .await??;
+        let body = serde_json::to_vec(&snapshot).context("serialize feed batch")?;
+        // The relay path never goes through `HostBackend::live`, so claim the
+        // session here; `feed/chapter` checks ownership against this map.
+        relay_access::claim_from_response(&self.grants, client_id, &body);
+        Ok(body)
+    }
+
     async fn live(&self, req: LiveRequest) -> Result<LiveResponse> {
         let decision = match relay_access::check(
             &self.state,

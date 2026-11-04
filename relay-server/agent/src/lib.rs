@@ -4,16 +4,19 @@
 pub mod backend;
 pub mod client;
 pub mod config;
+pub mod feed_queue;
 pub mod index;
 pub mod push;
 pub mod snapshot;
 
 pub use backend::{LibraryBackend, LiveRequest, LiveResponse, Stat};
 pub use config::{generate_media_key, AgentConfig};
+pub use feed_queue::FeedQueues;
 pub use push::StatInfo;
 
 use anyhow::{anyhow, Result};
 use client::HostLink;
+use feed_queue::FEED_QUEUE_TARGET;
 use index::Index;
 use pod_relay_protocol::access::{scope_version, AuthorizedDevice, Scope};
 use pod_relay_protocol::crypto::{live_key, live_open, live_seal, FRAGMENT_BYTES};
@@ -238,6 +241,9 @@ async fn run_inner(
     mut access: watch::Receiver<u64>,
 ) {
     let mut backoff = 1u64;
+    // The prefetched random-reading books survive relay reconnects: the phone
+    // should not lose its queue just because the tunnel blipped.
+    let feed_queues = FeedQueues::new();
     loop {
         if *stop.borrow() {
             break;
@@ -256,6 +262,7 @@ async fn run_inner(
             &devices,
             &scopes,
             &mut access,
+            &feed_queues,
         )
         .await;
         set_status(&status, |s| {
@@ -304,6 +311,7 @@ async fn session(
     devices: &Arc<RwLock<Vec<AuthorizedDevice>>>,
     scopes: &Arc<RwLock<Vec<Scope>>>,
     access: &mut watch::Receiver<u64>,
+    feed_queues: &Arc<FeedQueues>,
 ) -> Result<()> {
     let master = config.media_key()?;
     let key_id = pod_relay_protocol::crypto::key_id(&master);
@@ -472,10 +480,11 @@ async fn session(
                     } => {
                         let backend = backend.clone();
                         let push = push.clone();
+                        let queues = feed_queues.clone();
                         let key = live_key(&master);
                         tokio::spawn(async move {
                             let _ = handle_live(
-                                backend, push, key, seq, client_seq, client_id, ct,
+                                backend, push, queues, key, seq, client_seq, client_id, ct,
                             )
                             .await;
                         });
@@ -635,6 +644,7 @@ fn item_root(item: &Value) -> Option<i64> {
 async fn handle_live(
     backend: Arc<dyn LibraryBackend>,
     push: Arc<PushState>,
+    queues: Arc<FeedQueues>,
     key: [u8; 32],
     relay_seq: u32,
     client_seq: u32,
@@ -656,14 +666,24 @@ async fn handle_live(
     let started = std::time::Instant::now();
     let method = payload.method.clone();
     let path = payload.path.clone();
-    let response = backend
-        .live(LiveRequest {
-            method: payload.method,
-            path: payload.path,
-            body,
-            client_id: Some(client_id),
-        })
-        .await?;
+    let response = if path.starts_with("/library/ebook/feed/start") {
+        feed_start(&backend, &queues, client_id, &body).await
+    } else if path.starts_with("/library/ebook/feed/batch") {
+        feed_batch(&backend, &queues, client_id, &body).await
+    } else {
+        match backend
+            .live(LiveRequest {
+                method: payload.method,
+                path: payload.path,
+                body,
+                client_id: Some(client_id),
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => error_response(500, err.to_string()),
+        }
+    };
     let client_short = mylog::file_short(&client_id);
     eprintln!(
         "[pod-relay] live request {method} {path} from client {client_short} -> HTTP {} ({} body) in {}",
@@ -686,6 +706,146 @@ async fn handle_live(
     })
     .await?;
     Ok(())
+}
+
+fn error_response(status: u16, message: impl Into<String>) -> LiveResponse {
+    let body = serde_json::json!({ "error": message.into() });
+    LiveResponse {
+        status,
+        body: serde_json::to_vec(&body).unwrap_or_default(),
+    }
+}
+
+/// Starts a random-reading session and returns the first three books.
+///
+/// The remaining books are parsed in the background and pushed into the
+/// per-client queue, so the phone gets a fast first screen and a deep cache.
+async fn feed_start(
+    backend: &Arc<dyn LibraryBackend>,
+    queues: &Arc<FeedQueues>,
+    client_id: [u8; 16],
+    body: &[u8],
+) -> LiveResponse {
+    let request: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let root_key = request
+        .get("rootKey")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let resume = request.get("resume").cloned();
+    queues.reset(client_id, &root_key);
+    let raw = match backend
+        .feed_batch(Some(client_id), &root_key, 3, resume)
+        .await
+    {
+        Ok(raw) => raw,
+        Err(err) => return error_response(500, err.to_string()),
+    };
+    let snapshot: Value = match serde_json::from_slice(&raw) {
+        Ok(snapshot) => snapshot,
+        Err(err) => return error_response(500, err.to_string()),
+    };
+    let session_id = snapshot
+        .get("sessionId")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let books = snapshot
+        .get("books")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    queues.push(client_id, &session_id, books);
+    let (session_id, books, _) = queues.take(client_id, 3);
+    if books.is_empty() {
+        return error_response(503, "no random books available");
+    }
+    spawn_refill(backend.clone(), queues.clone(), client_id);
+    let response = serde_json::json!({
+        "sessionId": session_id,
+        "index": 0,
+        "books": books,
+    });
+    LiveResponse {
+        status: 200,
+        body: serde_json::to_vec(&response).unwrap_or_default(),
+    }
+}
+
+/// Serves a batch from the per-client queue. Never parses on the request path:
+/// an empty queue returns 503 and a background refill fills it.
+async fn feed_batch(
+    backend: &Arc<dyn LibraryBackend>,
+    queues: &Arc<FeedQueues>,
+    client_id: [u8; 16],
+    body: &[u8],
+) -> LiveResponse {
+    let request: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let count = request
+        .get("count")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(20)
+        .clamp(1, FEED_QUEUE_TARGET as u64) as usize;
+    let (session_id, books, needs_refill) = queues.take(client_id, count);
+    if needs_refill {
+        spawn_refill(backend.clone(), queues.clone(), client_id);
+    }
+    if books.is_empty() {
+        // The first batch after a cold start may arrive before the background
+        // refill finishes. Ask for one now and let the phone retry.
+        spawn_refill(backend.clone(), queues.clone(), client_id);
+        return error_response(503, "random book queue is empty");
+    }
+    let response = serde_json::json!({
+        "sessionId": session_id,
+        "index": 0,
+        "books": books,
+    });
+    LiveResponse {
+        status: 200,
+        body: serde_json::to_vec(&response).unwrap_or_default(),
+    }
+}
+
+fn spawn_refill(backend: Arc<dyn LibraryBackend>, queues: Arc<FeedQueues>, client_id: [u8; 16]) {
+    if !queues.begin_refill(client_id) {
+        return;
+    }
+    tokio::spawn(async move {
+        let root_key = queues.root_key(client_id).unwrap_or_default();
+        if root_key.is_empty() {
+            queues.clear_refilling(client_id);
+            return;
+        }
+        match backend
+            .feed_batch(Some(client_id), &root_key, FEED_QUEUE_TARGET, None)
+            .await
+        {
+            Ok(raw) => match serde_json::from_slice::<Value>(&raw) {
+                Ok(snapshot) => {
+                    let session_id = snapshot
+                        .get("sessionId")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let books = snapshot
+                        .get("books")
+                        .and_then(|value| value.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    queues.push(client_id, &session_id, books);
+                }
+                Err(err) => {
+                    eprintln!("[pod-relay] feed refill decode failed: {err}");
+                    queues.clear_refilling(client_id);
+                }
+            },
+            Err(err) => {
+                eprintln!("[pod-relay] feed refill failed: {err}");
+                queues.clear_refilling(client_id);
+            }
+        }
+    });
 }
 
 /// Convenience for hosts: describe the fragment layout of a file.

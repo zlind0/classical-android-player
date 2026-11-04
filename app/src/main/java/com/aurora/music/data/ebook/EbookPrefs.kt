@@ -28,6 +28,11 @@ const val MAX_RECENT_FONTS = 10
 const val MIN_RECENT_BOOKS = 5
 const val MAX_RECENT_BOOKS = 20
 
+/** 随机阅读本地预缓存本数范围。 */
+const val MIN_FEED_CACHE = 5
+const val MAX_FEED_CACHE = 50
+const val DEFAULT_FEED_CACHE = 20
+
 /** 随机阅读上次停下的位置（用于下次“开始阅读”恢复；书已不在随机池时由服务端重新随机）。 */
 data class EbookFeedResume(
     val deviceId: String = "",
@@ -77,6 +82,8 @@ class EbookPrefs(context: Context) {
         val HDMI_CAST_MUSIC_ON_CAST = booleanPreferencesKey("hdmi_cast_music_on_cast")
         /** 随机阅读是否请求插图（服务端 v1 暂不返回，开关先留口子）。 */
         val FEED_IMAGES = booleanPreferencesKey("feed_images")
+        /** 随机阅读本地预缓存本数（5..50）。 */
+        val FEED_CACHE_SIZE = intPreferencesKey("feed_cache_size")
         /** 随机阅读上次位置（JSON）。 */
         val FEED_RESUME = stringPreferencesKey("feed_resume")
     }
@@ -104,6 +111,10 @@ class EbookPrefs(context: Context) {
     /** 随机阅读：是否请求插图（实验开关）。 */
     private val _feedImages = MutableStateFlow(false)
     val feedImages: StateFlow<Boolean> = _feedImages.asStateFlow()
+
+    /** 随机阅读：本地预缓存本数（5..50，默认 20）。 */
+    private val _feedCacheSize = MutableStateFlow(DEFAULT_FEED_CACHE)
+    val feedCacheSize: StateFlow<Int> = _feedCacheSize.asStateFlow()
 
     /** 随机阅读上次位置；空/书已不在池时由调用方重新随机。 */
     private val _feedResume = MutableStateFlow(EbookFeedResume())
@@ -169,6 +180,12 @@ class EbookPrefs(context: Context) {
             appContext.ebookReadDataStore.data.map { p ->
                 p[Keys.FEED_IMAGES] ?: false
             }.collect { _feedImages.value = it }
+        }
+        scope.launch {
+            appContext.ebookReadDataStore.data.map { p ->
+                (p[Keys.FEED_CACHE_SIZE] ?: DEFAULT_FEED_CACHE)
+                    .coerceIn(MIN_FEED_CACHE, MAX_FEED_CACHE)
+            }.collect { _feedCacheSize.value = it }
         }
         scope.launch {
             appContext.ebookReadDataStore.data.map { p ->
@@ -269,6 +286,15 @@ class EbookPrefs(context: Context) {
     /** 随机阅读“加载插图（实验）”开关；协议字段已传，服务端 v1 暂不返回图片。 */
     fun setFeedImages(enabled: Boolean) {
         scope.launch { appContext.ebookReadDataStore.edit { it[Keys.FEED_IMAGES] = enabled } }
+    }
+
+    /** 随机阅读本地预缓存本数（5..50）。 */
+    fun setFeedCacheSize(value: Int) {
+        scope.launch {
+            appContext.ebookReadDataStore.edit {
+                it[Keys.FEED_CACHE_SIZE] = value.coerceIn(MIN_FEED_CACHE, MAX_FEED_CACHE)
+            }
+        }
     }
 
     /** 记住随机阅读最后停下的位置，下次进入优先恢复。 */

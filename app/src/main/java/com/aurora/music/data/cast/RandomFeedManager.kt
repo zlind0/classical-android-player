@@ -16,9 +16,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -49,6 +51,8 @@ data class RandomFeedState(
     val next: RandomFeedBook? = null,
     val loading: Boolean = false,
     val error: String? = null,
+    /** 本地预缓存里还有没有下一本；false 时 UI 禁止上滑/切下一本。 */
+    val canNext: Boolean = true,
 )
 
 data class FeedPosition(val chapter: Int, val block: Int, val char: Int)
@@ -70,6 +74,8 @@ private data class FeedStartBody(
 )
 
 private data class FeedTurnBody(val sessionId: String, val direction: Int)
+
+private data class FeedBatchBody(val count: Int)
 
 /** 老桌面端只认 paths：退回到一个上限样本，避免整个书库再次进 body。 */
 private const val LEGACY_POOL_SAMPLE = 512
@@ -97,6 +103,11 @@ class RandomFeedManager(
         .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
+    /** 切书/取预缓存批次：链路卡住时快速失败，别让 UI 等 90 秒。 */
+    private val turnClient = client.newBuilder()
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+
     private val _state = MutableStateFlow(RandomFeedState())
     val state: StateFlow<RandomFeedState> = _state.asStateFlow()
 
@@ -116,6 +127,14 @@ class RandomFeedManager(
 
     private val history = ArrayDeque<RandomFeedBook>()
     private val forward = ArrayDeque<RandomFeedBook>()
+
+    // ---- 远程 feed 的本地预缓存：一次向 relay 要一批，切书不再等网络 ----
+    private val remoteLock = Any()
+    private val remoteQueue = ArrayDeque<RandomFeedBook>()
+    private val remoteScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var remoteQueueJob: Job? = null
+    private var remoteRetryJob: Job? = null
+    private var remoteCacheSize = 20
 
     // ---- 本地/设备间模式：整本下载并解析，随机排队，提前解析若干本 ----
     private val localLock = Any()
@@ -179,6 +198,7 @@ class RandomFeedManager(
         poolPaths: List<String>,
         resume: EbookFeedResume?,
         includeImages: Boolean,
+        cacheSize: Int = 20,
     ): Boolean = withContext(Dispatchers.IO) {
         localPrefetchJob?.cancel()
         localPrefetchJob = null
@@ -189,6 +209,12 @@ class RandomFeedManager(
             localSeen.clear()
             localQueue.clear()
         }
+        remoteQueueJob?.cancel()
+        remoteQueueJob = null
+        remoteRetryJob?.cancel()
+        remoteRetryJob = null
+        synchronized(remoteLock) { remoteQueue.clear() }
+        remoteCacheSize = cacheSize.coerceIn(5, 50)
         var base = remoteLibrary.onlineBaseUrl(deviceId)
         var pool = poolPaths.ifEmpty { remoteLibrary.ebookPoolPaths(deviceId, rootKey) }
         // 冷启动恢复阅读器时设备发现可能还没就绪：给它几秒，别让用户先看到失败。
@@ -264,6 +290,19 @@ class RandomFeedManager(
             return@withContext false
         }
         applySnapshot(deviceId, rootKey, snapshot, resetHistory = true)
+        // 首屏三本里除了当前和“下一本”，第三本也放进本地队列，别浪费。
+        val extra = snapshot.books.map { it.toBook() }
+            .filter { it.path.isNotBlank() && it.path != rawCurrent?.path && it.path != serverNext?.path }
+        synchronized(remoteLock) {
+            extra.forEach { book ->
+                if (remoteQueue.none { it.path == book.path }) {
+                    remoteQueue.addLast(book)
+                    expectedChapters[book.path] = book.chapterCount
+                }
+            }
+        }
+        // 首屏先给界面，其余预缓存后台补；失败不影响已经拿到的三本。
+        remoteQueueJob = remoteScope.launch { fillRemoteQueue() }
         true
     }
 
@@ -288,6 +327,11 @@ class RandomFeedManager(
         localPrefetchJob = null
         localSession++
         localMode = true
+        remoteQueueJob?.cancel()
+        remoteQueueJob = null
+        remoteRetryJob?.cancel()
+        remoteRetryJob = null
+        synchronized(remoteLock) { remoteQueue.clear() }
         localDownloadDeviceId = downloadDeviceId
         localPool = pool
         synchronized(localLock) {
@@ -411,6 +455,7 @@ class RandomFeedManager(
             next = synchronized(localLock) { localQueue.firstOrNull() }?.let(::resolve),
             loading = false,
             error = null,
+            canNext = true,
         )
     }
 
@@ -450,63 +495,176 @@ class RandomFeedManager(
     suspend fun turn(direction: Int): Boolean = withContext(Dispatchers.IO) {
         if (direction == 0) return@withContext true
         if (localMode) return@withContext localTurn(direction)
-        if (direction == 0) return@withContext true
         val st = _state.value
         if (st.current == null) return@withContext false
-        // 先回本地历史：来回翻书不再打服务端，也不消耗随机窗口。
+        // 先回本地历史/预缓存：来回翻书不再打服务端，也不消耗随机窗口。
         if (direction < 0) {
-            val prev = history.removeLastOrNull()
+            val prev = synchronized(remoteLock) {
+                history.removeLastOrNull() ?: serverPrevious?.also { serverPrevious = null }
+            }
             if (prev != null) {
-                st.current?.let { forward.addLast(it) }
-                rawCurrent = prev
-                serverPrevious = history.lastOrNull()
-                serverNext = forward.lastOrNull()
+                synchronized(remoteLock) {
+                    rawCurrent?.let { forward.addLast(it) }
+                    rawCurrent = prev
+                    serverPrevious = history.lastOrNull()
+                    serverNext = forward.lastOrNull()
+                }
                 publish(loading = false)
                 return@withContext true
             }
         } else {
-            val next = forward.removeLastOrNull()
+            val next = synchronized(remoteLock) { takeNextLocked() }
             if (next != null) {
-                st.current?.let { pushHistory(it) }
-                rawCurrent = next
-                serverPrevious = history.lastOrNull()
-                serverNext = forward.lastOrNull()
+                synchronized(remoteLock) {
+                    rawCurrent?.let { pushHistory(it) }
+                    rawCurrent = next
+                    serverPrevious = history.lastOrNull()
+                    serverNext = forward.lastOrNull()
+                }
+                publish(loading = false)
+                maybeRefill()
+                return@withContext true
+            }
+            // 本地预缓存空了：先向 relay 要一批，再决定是否真的没书了。
+            updateState { it.copy(loading = true, error = null) }
+            fillRemoteQueue()
+            val fetched = synchronized(remoteLock) { takeNextLocked() }
+            if (fetched != null) {
+                synchronized(remoteLock) {
+                    rawCurrent?.let { pushHistory(it) }
+                    rawCurrent = fetched
+                    serverPrevious = history.lastOrNull()
+                    serverNext = forward.lastOrNull()
+                }
                 publish(loading = false)
                 return@withContext true
             }
         }
+        // 老桌面端没有 feed/batch：退回原来的服务端 turn。
+        serverTurn(direction)
+    }
+
+    /** 服务端 turn 兜底：老桌面端或本地没有上一本时使用。 */
+    private suspend fun serverTurn(direction: Int): Boolean = withContext(Dispatchers.IO) {
+        val st = _state.value
+        if (st.current == null) return@withContext false
         val base = remoteLibrary.onlineBaseUrl(st.deviceId)
         if (base == null) {
-            _state.value = st.copy(loading = false, error = "设备离线，无法继续切换")
+            updateState { it.copy(loading = false, error = "设备离线，无法继续切换") }
+            if (direction > 0) disableNext()
             return@withContext false
         }
-        _state.value = st.copy(loading = true, error = null)
+        updateState { it.copy(loading = true, error = null) }
         val reply = postJsonReply(
             "$base/library/ebook/feed/turn",
             gson.toJson(FeedTurnBody(st.sessionId, direction)),
+            turnClient,
         ).getOrElse { err ->
-            _state.value = st.copy(
-                loading = false,
-                error = "切换失败：连不上桌面端（${err.message ?: err.javaClass.simpleName}）",
-            )
+            updateState {
+                it.copy(
+                    loading = false,
+                    error = "切换失败：连不上桌面端（${err.message ?: err.javaClass.simpleName}）",
+                )
+            }
+            if (direction > 0) disableNext()
             return@withContext false
         }
         if (reply.status !in 200..299) {
-            _state.value = st.copy(loading = false, error = "切换失败：${replyError(reply)}")
+            updateState { it.copy(loading = false, error = "切换失败：${replyError(reply)}") }
+            if (direction > 0) disableNext()
             return@withContext false
         }
         val snapshot = runCatching { gson.fromJson(reply.body, FeedSnapshotWire::class.java) }.getOrNull()
         if (snapshot == null || snapshot.books.isEmpty()) {
-            _state.value = st.copy(loading = false, error = "切换失败：服务端返回的数据不完整")
+            updateState { it.copy(loading = false, error = "切换失败：服务端返回的数据不完整") }
+            if (direction > 0) disableNext()
             return@withContext false
         }
-        if (direction < 0) {
-            st.current?.let { pushForward(it) }
-        } else {
-            st.current?.let { pushHistory(it) }
+        synchronized(remoteLock) {
+            if (direction < 0) {
+                st.current?.let { pushForward(it) }
+            } else {
+                st.current?.let { pushHistory(it) }
+            }
         }
         applySnapshot(st.deviceId, st.rootKey, snapshot, resetHistory = false)
         true
+    }
+
+    private fun disableNext() {
+        updateState { it.copy(canNext = false) }
+        scheduleRetry()
+    }
+
+    /**
+     * 向 relay 的预缓存队列要一批书，补到 [remoteCacheSize]。
+     * 返回实际新增的本数；网络失败/队列为空返回 0。
+     */
+    private suspend fun fillRemoteQueue(): Int = withContext(Dispatchers.IO) {
+        if (localMode) return@withContext 0
+        val (need, sessionId, deviceId) = synchronized(remoteLock) {
+            Triple(
+                remoteCacheSize - remoteQueue.size,
+                _state.value.sessionId,
+                _state.value.deviceId,
+            )
+        }
+        if (need <= 0 || sessionId.isBlank()) return@withContext 0
+        val base = remoteLibrary.onlineBaseUrl(deviceId) ?: return@withContext 0
+        val reply = postJsonReply(
+            "$base/library/ebook/feed/batch",
+            gson.toJson(FeedBatchBody(need)),
+            turnClient,
+        ).getOrElse { return@withContext 0 }
+        if (reply.status !in 200..299) return@withContext 0
+        val snapshot = runCatching { gson.fromJson(reply.body, FeedSnapshotWire::class.java) }
+            .getOrNull() ?: return@withContext 0
+        var added = 0
+        synchronized(remoteLock) {
+            if (snapshot.sessionId.isNotBlank()) {
+                _state.value = _state.value.copy(sessionId = snapshot.sessionId)
+            }
+            val known = HashSet<String>()
+            rawCurrent?.path?.let { known.add(it) }
+            history.forEach { known.add(it.path) }
+            forward.forEach { known.add(it.path) }
+            remoteQueue.forEach { known.add(it.path) }
+            serverNext?.path?.let { known.add(it) }
+            snapshot.books.forEach { wire ->
+                val book = wire.toBook()
+                if (book.path.isNotBlank() && known.add(book.path)) {
+                    remoteQueue.addLast(book)
+                    expectedChapters[book.path] = book.chapterCount
+                    seedChapter(book, wire)
+                    added++
+                }
+            }
+            if (added > 0) {
+                _state.value = _state.value.copy(canNext = true)
+            }
+        }
+        if (added > 0) publish(loading = false)
+        added
+    }
+
+    /** 预缓存低于一半时后台补满；不阻塞当前切书。 */
+    private fun maybeRefill() {
+        if (localMode) return
+        val size = synchronized(remoteLock) { remoteQueue.size }
+        if (size >= remoteCacheSize / 2) return
+        if (remoteQueueJob?.isActive == true) return
+        remoteQueueJob = remoteScope.launch { fillRemoteQueue() }
+    }
+
+    /** 一本都不剩时每 3 秒重试一次，relay 补货后自动恢复上滑。 */
+    private fun scheduleRetry() {
+        if (remoteRetryJob?.isActive == true) return
+        remoteRetryJob = remoteScope.launch {
+            while (isActive && !_state.value.canNext && _state.value.sessionId.isNotBlank()) {
+                delay(3_000)
+                if (fillRemoteQueue() > 0) break
+            }
+        }
     }
 
     /**
@@ -597,6 +755,11 @@ class RandomFeedManager(
             localSeen.clear()
             localQueue.clear()
         }
+        remoteQueueJob?.cancel()
+        remoteQueueJob = null
+        remoteRetryJob?.cancel()
+        remoteRetryJob = null
+        synchronized(remoteLock) { remoteQueue.clear() }
         val st = _state.value
         val base = remoteLibrary.onlineBaseUrl(st.deviceId)
         val sid = st.sessionId
@@ -631,37 +794,48 @@ class RandomFeedManager(
         snapshot: FeedSnapshotWire,
         resetHistory: Boolean,
     ) {
-        if (resetHistory) history.clear()
-        val index = snapshot.index.coerceIn(0, (snapshot.books.size - 1).coerceAtLeast(0))
-        snapshot.books.forEach { expectedChapters[it.path] = it.chapterCount }
-        val adjusted = snapshot.books.map { it.toBook() }
-        // 窗口里每本书的当前章快照都先收下：邻居页据此显示“下一本”的正文预览，
-        // 切过去时也已经有第一屏可渲染。
-        adjusted.zip(snapshot.books).forEach { (book, wire) -> seedChapter(book, wire) }
-        rawCurrent = adjusted.getOrNull(index) ?: adjusted.first()
-        serverPrevious = adjusted.getOrNull(index - 1)
-        serverNext = adjusted.getOrNull(index + 1)
-        _state.value = RandomFeedState(
-            deviceId = deviceId,
-            rootKey = rootKey,
-            sessionId = snapshot.sessionId,
-            current = rawCurrent?.let(::resolve),
-            previous = (history.lastOrNull() ?: serverPrevious)?.let(::resolve),
-            next = (forward.lastOrNull() ?: serverNext)?.let(::resolve),
-            loading = false,
-            error = null,
-        )
+        synchronized(remoteLock) {
+            if (resetHistory) history.clear()
+            val index = snapshot.index.coerceIn(0, (snapshot.books.size - 1).coerceAtLeast(0))
+            snapshot.books.forEach { expectedChapters[it.path] = it.chapterCount }
+            val adjusted = snapshot.books.map { it.toBook() }
+            // 窗口里每本书的当前章快照都先收下：邻居页据此显示“下一本”的正文预览，
+            // 切过去时也已经有第一屏可渲染。
+            adjusted.zip(snapshot.books).forEach { (book, wire) -> seedChapter(book, wire) }
+            rawCurrent = adjusted.getOrNull(index) ?: adjusted.first()
+            serverPrevious = adjusted.getOrNull(index - 1)
+            serverNext = adjusted.getOrNull(index + 1)
+            _state.value = RandomFeedState(
+                deviceId = deviceId,
+                rootKey = rootKey,
+                sessionId = snapshot.sessionId,
+                current = rawCurrent?.let(::resolve),
+                previous = (history.lastOrNull() ?: serverPrevious)?.let(::resolve),
+                next = (forward.lastOrNull() ?: serverNext ?: remoteQueue.firstOrNull())?.let(::resolve),
+                loading = false,
+                error = null,
+                canNext = true,
+            )
+        }
+    }
+
+    private fun updateState(transform: (RandomFeedState) -> RandomFeedState) {
+        synchronized(remoteLock) { _state.value = transform(_state.value) }
     }
 
     private fun publish(loading: Boolean) {
-        val st = _state.value
-        _state.value = st.copy(
-            current = rawCurrent?.let(::resolve),
-            previous = (history.lastOrNull() ?: serverPrevious)?.let(::resolve),
-            next = (forward.lastOrNull() ?: serverNext)?.let(::resolve),
-            loading = loading,
-            error = null,
-        )
+        synchronized(remoteLock) {
+            val st = _state.value
+            val next = forward.lastOrNull() ?: serverNext ?: remoteQueue.firstOrNull()
+            _state.value = st.copy(
+                current = rawCurrent?.let(::resolve),
+                previous = (history.lastOrNull() ?: serverPrevious)?.let(::resolve),
+                next = next?.let(::resolve),
+                loading = loading,
+                error = null,
+                canNext = st.canNext || next != null,
+            )
+        }
     }
 
     private fun fail(deviceId: String, rootKey: String, message: String) {
@@ -670,6 +844,7 @@ class RandomFeedManager(
             rootKey = rootKey,
             loading = false,
             error = message,
+            canNext = false,
         )
     }
 
@@ -681,6 +856,20 @@ class RandomFeedManager(
             blockIndex = p.block,
             charOffset = p.char,
         )
+    }
+
+    /**
+     * 取下一本：先回前进栈，再取服务端窗口的下一本，最后才用本地预缓存。
+     * 服务端窗口的下一本可能也在预缓存里，取走时一并去重。
+     */
+    private fun takeNextLocked(): RandomFeedBook? {
+        forward.removeLastOrNull()?.let { return it }
+        serverNext?.let { next ->
+            serverNext = null
+            remoteQueue.removeAll { it.path == next.path }
+            return next
+        }
+        return remoteQueue.removeFirstOrNull()
     }
 
     private fun pushHistory(book: RandomFeedBook) {
@@ -754,12 +943,16 @@ class RandomFeedManager(
     private data class HttpReply(val status: Int, val body: String)
 
     /** 保留状态码与响应体：失败时把服务端 `{"error": "..."}` 原样带回给界面。 */
-    private fun postJsonReply(url: String, body: String): Result<HttpReply> = runCatching {
+    private fun postJsonReply(
+        url: String,
+        body: String,
+        http: OkHttpClient = client,
+    ): Result<HttpReply> = runCatching {
         val req = Request.Builder()
             .url(url)
             .post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
-        client.newCall(req).execute().use { r ->
+        http.newCall(req).execute().use { r ->
             HttpReply(r.code, r.body?.string().orEmpty())
         }
     }

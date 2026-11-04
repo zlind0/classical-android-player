@@ -76,6 +76,11 @@ impl DeviceGrants {
         self.devices.read().ok()?.get(id).cloned()
     }
 
+    /// Whether a relay client may read books from `root`.
+    pub fn allows(&self, id: &[u8; 16], root: i64) -> bool {
+        self.grants(id).map(|grant| grant.allows(root)).unwrap_or(false)
+    }
+
     fn claim_feed(&self, session: &str, id: [u8; 16]) {
         if session.is_empty() {
             return;

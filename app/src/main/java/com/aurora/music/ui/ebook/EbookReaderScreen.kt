@@ -1636,6 +1636,8 @@ internal fun EbookOptionsPage(
     feedMode: Boolean = false,
     feedImages: Boolean = false,
     onSetFeedImages: (Boolean) -> Unit = {},
+    feedCacheSize: Int = com.aurora.music.data.ebook.DEFAULT_FEED_CACHE,
+    onSetFeedCacheSize: (Int) -> Unit = {},
 ) {
     val context = LocalContext.current
     val container = (context.applicationContext as AuroraApplication).container
@@ -1830,7 +1832,22 @@ internal fun EbookOptionsPage(
             }
             }
             if (feedMode) {
-                ios5Section("插图") {
+                ios5Section("随机阅读") {
+                    var draftCache by remember(feedCacheSize) {
+                        mutableFloatStateOf(feedCacheSize.toFloat())
+                    }
+                    Ios5SliderRow(
+                        title = "预缓存本数",
+                        valueLabel = "${draftCache.toInt()}本",
+                        value = draftCache,
+                        range = com.aurora.music.data.ebook.MIN_FEED_CACHE.toFloat()..
+                            com.aurora.music.data.ebook.MAX_FEED_CACHE.toFloat(),
+                        steps = com.aurora.music.data.ebook.MAX_FEED_CACHE -
+                            com.aurora.music.data.ebook.MIN_FEED_CACHE - 1,
+                        onValueChange = { draftCache = it },
+                        onValueChangeFinished = { onSetFeedCacheSize(draftCache.toInt()) },
+                    )
+                    Ios5CellDivider()
                     Ios5SwitchRow(
                         title = "加载插图（实验）",
                         subtitle = "服务端 v1 暂不返回图片；开关会随请求一起发送",

@@ -100,6 +100,7 @@ class RelayProxy(
             -> serveLiveJson(output, request)
             "/library/ebook/feed/start",
             "/library/ebook/feed/turn",
+            "/library/ebook/feed/batch",
             "/library/ebook/feed/chapter",
             "/library/ebook/feed/close",
             -> serveLiveJson(output, request)
@@ -252,7 +253,14 @@ class RelayProxy(
             sendText(output, 500, "Internal Server Error", "encrypt failed")
             return
         }
-        val reply = runCatching { client.live(seq, sealed) }.getOrNull()
+        // start 要等桌面端解析首屏三本；turn/batch 走预缓存，链路卡住时快速失败。
+        val timeoutMs = when (request.path) {
+            "/library/ebook/feed/start" -> 90_000L
+            "/library/ebook/feed/batch" -> 30_000L
+            "/library/ebook/feed/turn" -> 20_000L
+            else -> 20_000L
+        }
+        val reply = runCatching { client.live(seq, sealed, timeoutMs) }.getOrNull()
         if (reply == null || reply.status == 0) {
             sendText(output, 503, "Service Unavailable", "relay offline")
             return

@@ -32,8 +32,8 @@ class RelayAuthException(val code: Int, message: String) : IllegalStateException
 class RelayClient(private val config: RelayConfig) {
 
     private companion object {
-        /** 客户端每 15 秒一个 PING：既满足服务端 90 秒空闲限制，也能及时判定半开连接。 */
-        const val HEARTBEAT_MS = 15_000L
+        /** 客户端每 5 秒一个 PING：半开链路最多 10 秒就能发现并重连。 */
+        const val HEARTBEAT_MS = 5_000L
         const val MIN_BACKOFF_MS = 500L
         const val MAX_BACKOFF_MS = 8_000L
         /** 首次 + 两次重试；仍然认证失败就停止，避免无限重连。 */
@@ -63,6 +63,8 @@ class RelayClient(private val config: RelayConfig) {
     @Volatile private var socket: SSLSocket? = null
     @Volatile private var connected = false
     @Volatile private var running = false
+    /** 最近一次收到任何帧（含 PONG）的时间；心跳用它判定半开链路。 */
+    @Volatile private var lastInboundAt = 0L
     private var job: Job? = null
 
     /** 用来打断退避等待：网络恢复时立刻重连，而不是等指数退避走完。 */
@@ -207,6 +209,7 @@ class RelayClient(private val config: RelayConfig) {
         val channel = Channel<ByteArray>(Channel.UNLIMITED)
         outbox = channel
         connected = true
+        lastInboundAt = System.currentTimeMillis()
 
         val writer = launch(Dispatchers.IO) {
             try {
@@ -221,12 +224,16 @@ class RelayClient(private val config: RelayConfig) {
             }
         }
 
-        // 中继服务器 90 秒收不到任何帧就断开客户端；没有心跳时 socket 读超时也会
-        // 每 30 秒把连接掐掉。每 20 秒一个 PING 同时解决保活和「半开连接」探测。
+        // 中继服务器 90 秒收不到任何帧就断开客户端。每 5 秒一个 PING 保活；
+        // 连续两个心跳周期收不到任何帧（包括 PONG）就主动重连，别让 live 请求干等。
         val heartbeat = launch(Dispatchers.IO) {
             while (isActive && connected) {
                 delay(HEARTBEAT_MS)
                 if (!connected) break
+                if (System.currentTimeMillis() - lastInboundAt > HEARTBEAT_MS * 2) {
+                    reconnectNow()
+                    break
+                }
                 sendNoWait(
                     RelayProto.PING,
                     RelayProto.Writer().u64(System.nanoTime()).build(),
@@ -258,6 +265,7 @@ class RelayClient(private val config: RelayConfig) {
                 decoder.push(buffer, count)
                 continue
             }
+            lastInboundAt = System.currentTimeMillis()
             val message = runCatching { RelayMsg.decode(frame) }.getOrNull() ?: continue
             if (message is RelayMsg.ErrorMsg && message.code in AUTH_ERROR_CODES) {
                 // 已建立的会话被撤销时 relay 会先发 ERROR 再断开；必须把它当成
@@ -347,10 +355,15 @@ class RelayClient(private val config: RelayConfig) {
         sendNoWait(RelayProto.PIN, RelayProto.Writer().raw(fileId).u32(ttlSec).build())
     }
 
-    suspend fun live(seq: Int, ciphertext: ByteArray): RelayMsg.LiveResp? {
+    suspend fun live(
+        seq: Int,
+        ciphertext: ByteArray,
+        timeoutMs: Long = 90_000,
+    ): RelayMsg.LiveResp? {
         val payload = RelayProto.Writer().u32(seq).bytes(ciphertext).build()
-        // 随机阅读 start 要在桌面端解析最多 3 本 EPUB（大书可能很慢），给足等待时间。
-        return call(RelayProto.LIVE_REQ, payload, 90_000) as? RelayMsg.LiveResp
+        // start 要在桌面端解析最多 3 本 EPUB（大书可能很慢），给足等待时间；
+        // turn/batch 走预缓存，调用方会传更短的超时。
+        return call(RelayProto.LIVE_REQ, payload, timeoutMs) as? RelayMsg.LiveResp
     }
 
     fun randomSeq(): Int = SecureRandom().nextInt(Int.MAX_VALUE - 1) + 1

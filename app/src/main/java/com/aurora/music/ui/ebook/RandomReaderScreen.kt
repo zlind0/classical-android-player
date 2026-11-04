@@ -94,6 +94,7 @@ fun RandomReaderScreen(
     val state by manager.state.collectAsStateWithLifecycle()
     val prefs by container.ebookPrefs.prefs.collectAsStateWithLifecycle()
     val feedImages by container.ebookPrefs.feedImages.collectAsStateWithLifecycle()
+    val feedCacheSize by container.ebookPrefs.feedCacheSize.collectAsStateWithLifecycle()
     val chapterVersion by manager.chapterVersion.collectAsStateWithLifecycle()
     val ttsPlaying by tts.playing.collectAsStateWithLifecycle()
     val ttsPosition by tts.position.collectAsStateWithLifecycle()
@@ -122,6 +123,21 @@ fun RandomReaderScreen(
     val switchPipe = remember { BookSwitchPipeline() }
     // 屏幕最上方 20% 是系统状态栏的下拉区：从这里开始的上下滑不参与切书。
     val topZone = remember { TopZoneDragGuard() }
+    // 本地预缓存空了以后，上滑/下滑到不存在的邻居页要直接吃掉。
+    val directionGuard = remember { PagerDirectionGuard() }
+    val blockDirectionDrag = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (available.y == 0f) return Offset.Zero
+                if (source != NestedScrollSource.UserInput && source != NestedScrollSource.SideEffect) {
+                    return Offset.Zero
+                }
+                if (available.y > 0f && !directionGuard.canNext) return Offset(0f, available.y)
+                if (available.y < 0f && !directionGuard.canPrevious) return Offset(0f, available.y)
+                return Offset.Zero
+            }
+        }
+    }
     val blockTopZoneDrag = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -223,6 +239,7 @@ fun RandomReaderScreen(
                 poolPaths = poolPaths,
                 resume = resume,
                 includeImages = container.ebookPrefs.feedImages.value,
+                cacheSize = container.ebookPrefs.feedCacheSize.value,
             )
         }
     }
@@ -343,8 +360,10 @@ fun RandomReaderScreen(
                 val ok = manager.turn(req.direction)
                 if (!ok) {
                     showToast(manager.state.value.error ?: "切换失败")
+                    // 失败后不要回放积压的滑动：否则链路恢复时会一口气刷过很多本。
+                    switchPipe.queue.clear()
                     runCatching { pager.scrollToPage(1) }
-                    continue
+                    break
                 }
                 // 新书数据已经就位：这时才把 pager 收回中间。相邻页一直是最终布局，
                 // 收回去的画面和刚才停住的那一页完全一致，不会有跳变。
@@ -370,6 +389,11 @@ fun RandomReaderScreen(
     fun switchBook(direction: Int, autoRead: Boolean, announce: Boolean = false) {
         if (switchPipe.closed) return
         if (manager.state.value.current == null) {
+            scope.launch { runCatching { pager.scrollToPage(1) } }
+            return
+        }
+        if (direction > 0 && !manager.state.value.canNext) {
+            showToast("没有更多随机书了")
             scope.launch { runCatching { pager.scrollToPage(1) } }
             return
         }
@@ -551,6 +575,10 @@ fun RandomReaderScreen(
 
     // 切书后停顿一下再朗读由 [switchBook] 内部的任务负责：这里只保留当前书供界面使用。
     val currentBook = state.current
+    LaunchedEffect(state.canNext, state.previous) {
+        directionGuard.canNext = state.canNext
+        directionGuard.canPrevious = state.previous != null
+    }
 
     if (currentBook == null) {
         Box(Modifier.fillMaxSize().background(Color.White), contentAlignment = Alignment.Center) {
@@ -727,7 +755,8 @@ fun RandomReaderScreen(
                         }
                     }
                 }
-                .nestedScroll(blockTopZoneDrag),
+                .nestedScroll(blockTopZoneDrag)
+                .nestedScroll(blockDirectionDrag),
             userScrollEnabled = !optionsOpen,
             beyondViewportPageCount = 1,
         ) { page ->
@@ -804,6 +833,8 @@ fun RandomReaderScreen(
                 feedMode = true,
                 feedImages = feedImages,
                 onSetFeedImages = { container.ebookPrefs.setFeedImages(it) },
+                feedCacheSize = feedCacheSize,
+                onSetFeedCacheSize = { container.ebookPrefs.setFeedCacheSize(it) },
             )
         }
 
@@ -960,6 +991,12 @@ private class TopZoneDragGuard {
     var startedInTopZone = false
     /** 顶部手势抬手后的惯性：没有拖动位移，惯性也不能让 pager 翻页。 */
     var blockFling = false
+}
+
+/** 没有上一本/下一本时，把对应方向的拖动和惯性一起吃掉。 */
+private class PagerDirectionGuard {
+    var canNext = true
+    var canPrevious = true
 }
 
 /**

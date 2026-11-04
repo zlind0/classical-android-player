@@ -39,4 +39,19 @@ pub trait LibraryBackend: Send + Sync {
     async fn stat(&self, path: &str) -> Result<Stat>;
     async fn fetch_range(&self, path: &str, start: u64, end: u64) -> Result<Vec<u8>>;
     async fn live(&self, req: LiveRequest) -> Result<LiveResponse>;
+
+    /// Pre-parses a batch of random-reading books for one relay client.
+    ///
+    /// The agent keeps a per-client queue and serves `feed/batch` from it, so
+    /// the phone never waits for the host to parse a book on every page turn.
+    /// Hosts that do not support random reading keep the default error.
+    async fn feed_batch(
+        &self,
+        _client_id: Option<[u8; 16]>,
+        _root_key: &str,
+        _count: usize,
+        _resume: Option<serde_json::Value>,
+    ) -> Result<Vec<u8>> {
+        Err(anyhow::anyhow!("feed batch is not supported by this host"))
+    }
 }
