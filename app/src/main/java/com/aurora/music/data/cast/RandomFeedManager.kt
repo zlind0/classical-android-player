@@ -75,7 +75,7 @@ private data class FeedStartBody(
 
 private data class FeedTurnBody(val sessionId: String, val direction: Int)
 
-private data class FeedBatchBody(val count: Int)
+private data class FeedBatchBody(val rootKey: String, val count: Int)
 
 /** 老桌面端只认 paths：退回到一个上限样本，避免整个书库再次进 body。 */
 private const val LEGACY_POOL_SAMPLE = 512
@@ -611,10 +611,14 @@ class RandomFeedManager(
         }
         if (need <= 0 || sessionId.isBlank()) return@withContext 0
         val base = remoteLibrary.onlineBaseUrl(deviceId) ?: return@withContext 0
+        val rootKey = synchronized(remoteLock) { _state.value.rootKey }
+        // 局域网直连桌面端时 batch 要现场解析一批书，给足时间；
+        // 走 relay 时 NAS 端有预取队列，用短超时快速失败。
+        val http = if (deviceId in remoteLibrary.relayDevices.value) turnClient else client
         val reply = postJsonReply(
             "$base/library/ebook/feed/batch",
-            gson.toJson(FeedBatchBody(need)),
-            turnClient,
+            gson.toJson(FeedBatchBody(rootKey = rootKey, count = need)),
+            http,
         ).getOrElse { return@withContext 0 }
         if (reply.status !in 200..299) return@withContext 0
         val snapshot = runCatching { gson.fromJson(reply.body, FeedSnapshotWire::class.java) }

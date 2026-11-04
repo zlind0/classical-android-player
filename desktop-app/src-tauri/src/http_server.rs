@@ -41,6 +41,7 @@ pub fn build_router(state: HttpState) -> Router {
         .route("/library/ebook/random", get(library_ebook_random))
         .route("/library/ebook/search", get(library_ebook_search))
         .route("/library/ebook/feed/start", post(library_ebook_feed_start))
+        .route("/library/ebook/feed/batch", post(library_ebook_feed_batch))
         .route("/library/ebook/feed/turn", post(library_ebook_feed_turn))
         .route("/library/ebook/feed/chapter", get(library_ebook_feed_chapter))
         .route("/library/ebook/feed/close", post(library_ebook_feed_close))
@@ -400,6 +401,47 @@ async fn library_ebook_feed_start(
     let root = request.root_key;
     let resume = request.resume;
     let result = tokio::task::spawn_blocking(move || feed.start(&root, &valid, resume)).await;
+    match result {
+        Ok(Ok(snapshot)) => json_response(json!(snapshot)),
+        Ok(Err(err)) => feed_error(StatusCode::UNPROCESSABLE_ENTITY, err.to_string()),
+        Err(err) => feed_error(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedBatchRequest {
+    #[serde(default)]
+    root_key: String,
+    #[serde(default)]
+    count: usize,
+}
+
+/// LAN random-reading prefetch: parse a batch of books for the phone's local
+/// cache. The relay path uses the NAS agent's per-client queue instead.
+async fn library_ebook_feed_batch(
+    State(state): State<HttpState>,
+    Json(request): Json<FeedBatchRequest>,
+) -> Response {
+    let root_key = request.root_key;
+    let count = request.count.clamp(1, 50);
+    let lookup_root = root_key.clone();
+    let valid = match run_db(&state, move |conn| {
+        db::root_book_paths_all(conn, &lookup_root)
+    })
+    .await
+    {
+        Ok(paths) => paths,
+        Err(err) => return feed_error(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+    };
+    if valid.is_empty() {
+        return feed_error(StatusCode::BAD_REQUEST, "该随机书库暂无可解析的 EPUB");
+    }
+    let feed = state.feed.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        feed.batch(&root_key, &valid, count, None)
+    })
+    .await;
     match result {
         Ok(Ok(snapshot)) => json_response(json!(snapshot)),
         Ok(Err(err)) => feed_error(StatusCode::UNPROCESSABLE_ENTITY, err.to_string()),
