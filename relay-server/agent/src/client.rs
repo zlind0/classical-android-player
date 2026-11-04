@@ -50,6 +50,14 @@ impl HostLink {
             .connect(name, tcp)
             .await
             .context("relay TLS handshake")?;
+        eprintln!(
+            "[pod-relay] relay TLS handshake ok, server certificate pinned to {}",
+            config
+                .relay
+                .server_fingerprint
+                .get(..12)
+                .unwrap_or(&config.relay.server_fingerprint)
+        );
 
         let (reader, writer) = tokio::io::split(stream);
         let writer = Arc::new(Mutex::new(writer));

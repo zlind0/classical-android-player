@@ -6,6 +6,7 @@ use anyhow::Result;
 use pod_relay_protocol::crypto::meta_key;
 use pod_relay_protocol::msg::Msg;
 use pod_relay_protocol::snapshot::pack;
+use pod_relay_server::log::bytes;
 
 pub async fn push(
     link: &HostLink,
@@ -41,9 +42,13 @@ pub async fn push(
         ok: true,
     })
     .await?;
+    let wire: u64 = chunks.iter().map(|chunk| chunk.len() as u64).sum();
     eprintln!(
-        "[pod-relay] pushed snapshot scope {scope:016x} version {version} ({} chunks)",
-        header.chunks
+        "[pod-relay] pushed snapshot scope {scope:016x} v{version}: {} plain -> {} compressed in {} chunk(s), {} on the wire",
+        bytes(header.plain_len),
+        bytes(header.gz_len),
+        header.chunks,
+        bytes(wire)
     );
     Ok(())
 }

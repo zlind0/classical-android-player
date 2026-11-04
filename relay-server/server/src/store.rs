@@ -1,6 +1,7 @@
 //! Encrypted fragment store. One aligned container file per media file plus a
 //! bitmap of present fragments and a JSON metadata sidecar.
 
+use crate::log::{bytes, file_short, kind_from_mime};
 use anyhow::{Context, Result};
 use pod_relay_protocol::crypto::{FRAGMENT_BYTES, TAG_BYTES};
 use pod_relay_protocol::file_id::hex;
@@ -126,6 +127,8 @@ impl FragmentStore {
 
     /// Drops every cached fragment (used when the media key changes).
     pub fn clear_all(&self) {
+        let before = self.used();
+        let files = self.file_count();
         if let Ok(mut inner) = self.inner.lock() {
             inner.files.clear();
         }
@@ -142,6 +145,38 @@ impl FragmentStore {
         }
         let _ = fs::create_dir_all(&frag);
         self.used.store(0, Ordering::Relaxed);
+        eprintln!(
+            "[pod-relay] cache purge complete: dropped {files} file(s), {} freed",
+            bytes(before)
+        );
+    }
+
+    /// Number of `.dat` containers currently on disk (also correct before the
+    /// in-memory map has been populated at startup).
+    pub fn file_count(&self) -> usize {
+        if let Ok(inner) = self.inner.lock() {
+            if !inner.files.is_empty() {
+                return inner.files.len();
+            }
+        }
+        let frag = self.root.join("frag");
+        let mut count = 0;
+        if let Ok(shards) = fs::read_dir(&frag) {
+            for shard in shards.flatten() {
+                if !shard.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                if let Ok(files) = fs::read_dir(shard.path()) {
+                    count += files
+                        .flatten()
+                        .filter(|file| {
+                            file.path().extension().and_then(|e| e.to_str()) == Some("dat")
+                        })
+                        .count();
+                }
+            }
+        }
+        count
     }
 
     pub fn capacity(&self) -> u64 {
@@ -239,20 +274,26 @@ impl FragmentStore {
             return Ok(());
         }
         let now = now_secs();
-        let mut victims: Vec<(i64, FileId)> = Vec::new();
+        let mut victims: Vec<(i64, FileId, String)> = Vec::new();
         {
             let inner = self.inner.lock().unwrap();
             for (id, entry) in inner.files.iter() {
                 if entry.pinned_until > now {
                     continue;
                 }
-                victims.push((entry.last_access, *id));
+                victims.push((entry.last_access, *id, entry.stat.mime.clone()));
             }
         }
-        victims.sort_by_key(|(access, _)| *access);
+        victims.sort_by_key(|(access, _, _)| *access);
         let mut freed = 0u64;
-        let mut removed = Vec::new();
-        for (_, id) in victims {
+        let mut removed = 0usize;
+        eprintln!(
+            "[pod-relay] cache eviction: need {} but only {} free, checking {} candidate(s)",
+            bytes(need),
+            bytes(self.capacity.saturating_sub(used)),
+            victims.len()
+        );
+        for (last_access, id, mime) in victims {
             if used - freed + need <= self.capacity {
                 break;
             }
@@ -266,13 +307,32 @@ impl FragmentStore {
             };
             self.remove(&id);
             freed += size;
-            removed.push(id);
+            removed += 1;
             self.evicted.fetch_add(1, Ordering::Relaxed);
+            eprintln!(
+                "[pod-relay] cache evicted {} {} ({}), unused for {}s",
+                kind_from_mime(&mime),
+                file_short(&id),
+                bytes(size),
+                now - last_access
+            );
         }
         let remaining = used.saturating_sub(freed);
         self.used.store(remaining, Ordering::Relaxed);
         if remaining + need > self.capacity {
+            eprintln!(
+                "[pod-relay] cache eviction failed: removed {removed} file(s), still {} over capacity",
+                bytes(remaining + need - self.capacity)
+            );
             anyhow::bail!("relay store is full");
+        }
+        if removed > 0 {
+            eprintln!(
+                "[pod-relay] cache eviction done: removed {removed} file(s), {} freed, {} used of {}",
+                bytes(freed),
+                bytes(remaining),
+                bytes(self.capacity)
+            );
         }
         Ok(())
     }
@@ -298,6 +358,13 @@ impl FragmentStore {
                 return Ok(());
             }
             let old_size = SLOT * entry.stat.count as u64;
+            eprintln!(
+                "[pod-relay] cache reset for {}: layout changed from {} to {} fragments, dropping {}",
+                file_short(&id),
+                entry.stat.count,
+                stat.count,
+                bytes(old_size)
+            );
             inner.files.remove(&id);
             self.used
                 .store(self.used().saturating_sub(old_size), Ordering::Relaxed);

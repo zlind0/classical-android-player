@@ -1,6 +1,7 @@
 //! Versioned storage for encrypted library snapshots. Keeps the current and the
 //! previous version so a client mid-download never mixes versions.
 
+use crate::log::bytes;
 use anyhow::Result;
 use pod_relay_protocol::snapshot::SnapshotHeader;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,25 @@ struct SnapshotMeta {
     gz_len: u64,
     chunks: u32,
     salt: [u8; 8],
+}
+
+fn dir_size(dir: &Path) -> u64 {
+    fn walk(dir: &Path, total: &mut u64) {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if let Ok(meta) = entry.metadata() {
+                    if meta.is_dir() {
+                        walk(&entry.path(), total);
+                    } else {
+                        *total += meta.len();
+                    }
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    walk(dir, &mut total);
+    total
 }
 
 pub struct SnapshotStore {
@@ -129,39 +149,38 @@ impl SnapshotStore {
             .position(|v| *v == keep)
             .map(|pos| pos.saturating_sub(1))
             .unwrap_or(0);
-        for version in versions.iter().take(keep_from) {
-            let _ = fs::remove_dir_all(self.version_dir(scope, *version));
+        let stale: Vec<i64> = versions.iter().take(keep_from).copied().collect();
+        for version in &stale {
+            let dir = self.version_dir(scope, *version);
+            let size = dir_size(&dir);
+            let _ = fs::remove_dir_all(&dir);
+            eprintln!(
+                "[pod-relay] cache pruned library snapshot scope {scope:016x} v{version} ({}), keeping the newest two versions",
+                bytes(size)
+            );
         }
     }
 
     /// Removes every stored snapshot (media key changed / host reset).
     pub fn clear_all(&self) {
+        let before = self.disk_usage();
+        let mut removed = 0usize;
         if let Ok(entries) = fs::read_dir(&self.root) {
             for entry in entries.flatten() {
                 if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    removed += 1;
                     let _ = fs::remove_dir_all(entry.path());
                 }
             }
         }
         let _ = fs::create_dir_all(&self.root);
+        eprintln!(
+            "[pod-relay] cache purge complete: dropped {removed} snapshot scope(s), {} freed",
+            bytes(before)
+        );
     }
 
     pub fn disk_usage(&self) -> u64 {
-        fn walk(dir: &Path, total: &mut u64) {
-            if let Ok(entries) = fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    if let Ok(meta) = entry.metadata() {
-                        if meta.is_dir() {
-                            walk(&entry.path(), total);
-                        } else {
-                            *total += meta.len();
-                        }
-                    }
-                }
-            }
-        }
-        let mut total = 0;
-        walk(&self.root, &mut total);
-        total
+        dir_size(&self.root)
     }
 }

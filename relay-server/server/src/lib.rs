@@ -4,6 +4,7 @@
 pub mod auth;
 pub mod cert;
 pub mod config;
+pub mod log;
 pub mod server;
 pub mod snapshot;
 pub mod store;

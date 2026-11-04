@@ -8,6 +8,7 @@ use pod_relay_protocol::crypto::{
     encrypt_fragment, file_salt, FRAGMENT_BYTES,
 };
 use pod_relay_protocol::msg::{FileId, Msg};
+use pod_relay_server::log::{bytes, elapsed, file_short, kind_from_route};
 use std::collections::{HashMap, HashSet};
 
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -144,10 +145,16 @@ impl PushState {
                 mime: stat.mime.clone(),
                 key_id: stat.key_id,
             },
-            Err(_) => Msg::StatErr {
-                file_id,
-                code: pod_relay_protocol::msg::err::NOT_FOUND,
-            },
+            Err(err) => {
+                eprintln!(
+                    "[pod-relay] stat for {} failed: {err}",
+                    file_short(&file_id)
+                );
+                Msg::StatErr {
+                    file_id,
+                    code: pod_relay_protocol::msg::err::NOT_FOUND,
+                }
+            }
         };
         let _ = self.send_req(req, msg).await;
     }
@@ -188,7 +195,10 @@ impl PushState {
             let permit = me.sem.clone().acquire_owned().await;
             if let Ok(permit) = permit {
                 if let Err(err) = me.push_window(file_id, index, priority).await {
-                    eprintln!("[pod-relay] push failed: {err}");
+                    eprintln!(
+                        "[pod-relay] push failed for {} fragment {index}: {err}",
+                        file_short(&file_id)
+                    );
                 }
                 drop(permit);
             }
@@ -198,7 +208,8 @@ impl PushState {
         });
     }
 
-    async fn push_window(self: &Arc<Self>, file_id: FileId, index: u32, _priority: u8) -> Result<()> {
+    async fn push_window(self: &Arc<Self>, file_id: FileId, index: u32, priority: u8) -> Result<()> {
+        let started = std::time::Instant::now();
         let stat = self.stat(file_id).await?;
         if index >= stat.count {
             return Ok(());
@@ -233,6 +244,7 @@ impl PushState {
         let route = self
             .route(&file_id)
             .ok_or_else(|| anyhow!("unknown file id"))?;
+        let kind = kind_from_route(&route);
         let data = self
             .backend
             .fetch_range(&route, start_byte, end_byte - 1)
@@ -278,6 +290,12 @@ impl PushState {
         }
 
         self.send_msg(Msg::HostPushEnd { file_id, ok: true }).await?;
+        eprintln!(
+            "[pod-relay] pushed {kind} {} fragments {first}..={last} ({} from {route}, priority {priority}) in {}",
+            file_short(&file_id),
+            bytes(data.len() as u64),
+            elapsed(started.elapsed().as_millis())
+        );
         Ok(())
     }
 }

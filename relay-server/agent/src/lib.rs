@@ -18,6 +18,7 @@ use index::Index;
 use pod_relay_protocol::access::{scope_version, AuthorizedDevice, Scope};
 use pod_relay_protocol::crypto::{live_key, live_open, live_seal, FRAGMENT_BYTES};
 use pod_relay_protocol::msg::Msg;
+use pod_relay_server::log as mylog;
 use push::PushState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -241,6 +242,11 @@ async fn run_inner(
         if *stop.borrow() {
             break;
         }
+        eprintln!(
+            "[pod-relay] connecting to relay {} (shard {}, attempt backoff {backoff}s)",
+            config.relay.addr,
+            config.relay.server_fingerprint.get(..12).unwrap_or(&config.relay.server_fingerprint)
+        );
         let outcome = session(
             backend.clone(),
             config.clone(),
@@ -260,6 +266,10 @@ async fn run_inner(
         }
         let wait = Duration::from_secs(backoff);
         backoff = (backoff * 2).min(60);
+        eprintln!(
+            "[pod-relay] relay link down, retrying in {}s",
+            wait.as_secs()
+        );
         let sleep = tokio::time::sleep(wait);
         tokio::select! {
             _ = sleep => {}
@@ -303,12 +313,26 @@ async fn session(
     });
 
     let mut link = HostLink::connect(&config, key_id).await?;
+    eprintln!(
+        "[pod-relay] connected to relay {} as host session {} (relay cache {} of {}, library v{}), media key {}",
+        config.relay.addr,
+        link.hello.session_id,
+        mylog::bytes(link.hello.store_used),
+        mylog::bytes(link.hello.store_cap),
+        link.hello.lib_version,
+        key_id
+    );
     let mut version = backend.library_version().await?;
     let mut json = backend.snapshot_json().await?;
     // The index is built from a separate compact list: hosts may keep huge
     // lazy-scanned ebook roots out of the client snapshot, but the relay still
     // needs their file ids to authorize downloads.
     let mut index = Index::build(&backend.index_json().await?)?;
+    eprintln!(
+        "[pod-relay] indexed {} file(s) for relay access control (library v{version}, snapshot {})",
+        index.len(),
+        mylog::bytes(json.len() as u64)
+    );
 
     let push = PushState::new(
         backend.clone(),
@@ -494,6 +518,11 @@ async fn sync_access(
     }
 
     let device_list = devices.read().map(|list| list.clone()).unwrap_or_default();
+    eprintln!(
+        "[pod-relay] syncing access for {} authorized device(s){}",
+        device_list.len(),
+        if reset { " (fresh host session)" } else { "" }
+    );
     for device in &device_list {
         link.send(Msg::AuthorizeClient {
             client_id: device.id,
@@ -522,12 +551,17 @@ async fn sync_access(
         }
     }
 
+    let scope_total = unique.len();
+    let scope_pending = unique.keys().filter(|id| !pushed.contains(id)).count();
+    eprintln!(
+        "[pod-relay] library scopes: {scope_total} total, {scope_pending} need pushing for v{library_version}"
+    );
     for (id, scope) in unique {
         if pushed.contains(&id) {
             continue;
         }
-        let (version, bytes) = scoped_snapshot(json, &scope, library_version)?;
-        snapshot::push(link, config, id, version, &bytes).await?;
+        let (version, payload) = scoped_snapshot(json, &scope, library_version)?;
+        snapshot::push(link, config, id, version, &payload).await?;
         pushed.insert(id);
     }
     Ok(())
@@ -619,6 +653,9 @@ async fn handle_live(
             .decode(payload.body.as_bytes())
             .unwrap_or_default()
     };
+    let started = std::time::Instant::now();
+    let method = payload.method.clone();
+    let path = payload.path.clone();
     let response = backend
         .live(LiveRequest {
             method: payload.method,
@@ -627,6 +664,13 @@ async fn handle_live(
             client_id: Some(client_id),
         })
         .await?;
+    let client_short = mylog::file_short(&client_id);
+    eprintln!(
+        "[pod-relay] live request {method} {path} from client {client_short} -> HTTP {} ({} body) in {}",
+        response.status,
+        mylog::bytes(response.body.len() as u64),
+        mylog::elapsed(started.elapsed().as_millis())
+    );
     use base64::Engine;
     let encoded = LivePayload {
         method: String::new(),
