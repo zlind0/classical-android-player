@@ -176,6 +176,11 @@ class TtsWorker(
     private val endWaiters = mutableMapOf<Pair<TtsOwner, Long>, kotlin.coroutines.Continuation<Unit>>()
     private val waitLock = Any()
 
+    // 全局串行闸门：intro 与 ebook 共用一条 TTS 队列，永不同时发声。
+    // 公平 FIFO：intro 会排在当前 ebook 段之后、下一段之前。
+    private val playbackGate = Mutex()
+    private val activeStreams = mutableMapOf<TtsOwner, TtsStream>()
+
     init {
         ebookPlayer.onQueueEnded = { onPlayerEnded(TtsOwner.EBOOK) }
         introPlayer.onQueueEnded = { onPlayerEnded(TtsOwner.INTRO) }
@@ -200,11 +205,29 @@ class TtsWorker(
      *   队列由 [EbookTtsPlayer.appendWav] 续接，AudioTrack / DSP 链不重建（Phase 2）。
      */
     suspend fun openStream(owner: TtsOwner, restartPlayer: Boolean = true): TtsStream {
+        // 先排队：同一时刻只允许一个 owner 的流在播。
+        playbackGate.lock()
         val gen = gens.next(owner)
         stopFlags[owner]?.set(false)
-        if (restartPlayer) withContext(Dispatchers.Main) { playerOf(owner).stop() }
-        synchronized(waitLock) { playerGen[owner] = gen }
-        return TtsStream(owner, gen, this, restartPlayer)
+        val stream = TtsStream(owner, gen, this, restartPlayer)
+        // 先登记再碰播放器：stop() 在 withContext 窗口里也能找到并关闭它。
+        synchronized(activeStreams) { activeStreams[owner] = stream }
+        try {
+            if (restartPlayer) withContext(Dispatchers.Main) { playerOf(owner).stop() }
+            synchronized(waitLock) { playerGen[owner] = gen }
+            return stream
+        } catch (t: Throwable) {
+            stream.close()
+            throw t
+        }
+    }
+
+    /** 流结束/被停时释放串行闸门。 */
+    internal fun releaseStream(owner: TtsOwner, stream: TtsStream) {
+        val removed = synchronized(activeStreams) {
+            if (activeStreams[owner] === stream) activeStreams.remove(owner) else null
+        }
+        if (removed != null) runCatching { playbackGate.unlock() }
     }
 
     /** 停指定 owner（null = 全停）：代际作废 + 引擎急停 + 播放器停 + 唤醒等待者。任意线程可调。 */
@@ -214,6 +237,8 @@ class TtsWorker(
             gens.next(o)
             stopFlags[o]?.set(true)
             sysSlots[o]?.let { runCatching { it.tts.stop() } }
+            // 释放串行闸门：被停的流不再占用队列。
+            synchronized(activeStreams) { activeStreams[o] }?.close()
         }
         // 内置引擎：同时打断 native 侧正在阻塞的 SpeakSsml，停止键不必等当前块合完
         msEngine.requestStop()
@@ -501,6 +526,7 @@ class TtsStream internal constructor(
 ) {
     private var started = false
     private var enqueued = false
+    private var closed = false
 
     /** 本流代际：后台预热等附带任务凭它判断是否过期。 */
     val generation: Long get() = gen
@@ -512,7 +538,20 @@ class TtsStream internal constructor(
         return res
     }
 
-    suspend fun awaitDone() = worker.awaitInternal(owner, gen, enqueued)
+    suspend fun awaitDone() {
+        try {
+            worker.awaitInternal(owner, gen, enqueued)
+        } finally {
+            close()
+        }
+    }
+
+    /** 释放串行闸门；可重复调用。 */
+    fun close() {
+        if (closed) return
+        closed = true
+        worker.releaseStream(owner, this)
+    }
 
     fun isAlive(): Boolean = worker.isCurrent(owner, gen)
 }

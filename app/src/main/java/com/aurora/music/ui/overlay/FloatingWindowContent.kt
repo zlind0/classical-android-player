@@ -53,6 +53,10 @@ data class FloatingUiState(
     val repeat: RepeatMode = RepeatMode.OFF,
     val liked: Boolean = false,
     val hasTrack: Boolean = false,
+    /** 书在播：中间封面区域盖同色遮罩并显示当前朗读句。 */
+    val bookActive: Boolean = false,
+    val bookSentence: String = "",
+    val bookCover: String = "",
 )
 
 /**
@@ -101,68 +105,89 @@ fun FloatingWindowContent(
             corner = 0.dp,
             fullQuality = true,
         )
-        // 顶栏：关闭钮 + 艺人/标题（栏背景吞掉点按，只有露出的封面点按才回 app）
-        Row(
-            Modifier.align(Alignment.TopCenter).fillMaxWidth()
-                .background(Color(0xFF14161B).copy(alpha = 0.62f))
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() },
-                    onClick = {},
-                )
-                .padding(start = 8.dp, end = 10.dp, top = 8.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            AppleCloseButton(size = 30.dp * tScale, onClick = onClose)
-            Spacer(Modifier.width(8.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    state.artist.ifBlank { " " },
-                    color = Color(0xFFB9BEC7),
-                    fontSize = (11.sp * fontScale),
-                    lineHeight = (13.sp * fontScale),
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = Ios5Sans,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                MarqueeText(
-                    text = state.title.ifBlank { " " },
-                    color = Color.White,
-                    fontSize = (14.sp * fontScale),
-                    lineHeight = (17.sp * fontScale),
-                    fontFamily = Ios5Sans,
-                    modifier = Modifier.fillMaxWidth(),
+        Column(Modifier.fillMaxSize()) {
+            // 顶栏：关闭钮 + 艺人/标题（栏背景吞掉点按，只有露出的封面点按才回 app）
+            Row(
+                Modifier.fillMaxWidth()
+                    .background(Color(0xFF14161B).copy(alpha = 0.62f))
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() },
+                        onClick = {},
+                    )
+                    .padding(start = 8.dp, end = 10.dp, top = 8.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AppleCloseButton(size = 30.dp * tScale, onClick = onClose)
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        state.artist.ifBlank { " " },
+                        color = Color(0xFFB9BEC7),
+                        fontSize = (11.sp * fontScale),
+                        lineHeight = (13.sp * fontScale),
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = Ios5Sans,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    MarqueeText(
+                        text = state.title.ifBlank { " " },
+                        color = Color.White,
+                        fontSize = (14.sp * fontScale),
+                        lineHeight = (17.sp * fontScale),
+                        fontFamily = Ios5Sans,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+            // 中间：书在播时盖同色遮罩，用尽可能大的字号铺满当前朗读句。
+            Box(
+                Modifier.weight(1f).fillMaxWidth()
+                    .background(
+                        if (state.bookActive) Color(0xFF14161B).copy(alpha = 0.62f)
+                        else Color.Transparent,
+                    )
+                    .padding(8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (state.bookActive && state.bookSentence.isNotBlank()) {
+                    AutoSizeText(
+                        text = state.bookSentence,
+                        modifier = Modifier.fillMaxSize(),
+                        color = Color.White,
+                        fontFamily = Ios5Sans,
+                    )
+                }
+            }
+            // 底栏：与横屏控制栏同构的五组走带键
+            Box(
+                Modifier.fillMaxWidth()
+                    .background(Color(0xFF14161B).copy(alpha = 0.62f))
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() },
+                        onClick = {},
+                    )
+                    .padding(vertical = 4.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Ios5TransportControls(
+                    isPlaying = state.isPlaying,
+                    shuffle = state.shuffle,
+                    repeat = state.repeat,
+                    isLiked = state.liked,
+                    onTogglePlay = onTogglePlay,
+                    onNext = onNext,
+                    onPrevious = onPrevious,
+                    onToggleLike = onToggleLike,
+                    onToggleShuffle = onToggleShuffle,
+                    onCycleRepeat = onCycleRepeat,
+                    scale = tScale,
                 )
             }
-        }
-        // 底栏：与横屏控制栏同构的五组走带键
-        Box(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                .background(Color(0xFF14161B).copy(alpha = 0.62f))
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() },
-                    onClick = {},
-                )
-                .padding(vertical = 4.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Ios5TransportControls(
-                isPlaying = state.isPlaying,
-                shuffle = state.shuffle,
-                repeat = state.repeat,
-                isLiked = state.liked,
-                onTogglePlay = onTogglePlay,
-                onNext = onNext,
-                onPrevious = onPrevious,
-                onToggleLike = onToggleLike,
-                onToggleShuffle = onToggleShuffle,
-                onCycleRepeat = onCycleRepeat,
-                scale = tScale,
-            )
         }
     }
 }

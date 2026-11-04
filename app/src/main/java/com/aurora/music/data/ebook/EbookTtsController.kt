@@ -470,57 +470,62 @@ class EbookTtsController(context: Context) {
                 continue
             }
             val stream = tts.openStream(TtsOwner.EBOOK, restartPlayer = first)
-            val seenAt = System.currentTimeMillis()
-            _position.value = para
-            positionAt = seenAt
-            positionIdx = idx
-            _sectionTitle.value = sectionTitleFor(para.chapter, para.block)
-            // 每推进一段/一句就直存章/块/字：锁屏后 UI 没了、pager 动不了时靠这行续命。
-            // 带观测时间戳，比它更旧的快照（比如阅读页手里冻结的旧位置）落盘时会被 DB 丢弃。
-            store?.takeIf { persistProgress }?.saveTtsPos(bookPath, para.chapter, para.block, para.startChar, seenAt)
-            if (first && movePage || !first) _turn.value = Triple(para.chapter, para.block, para.startChar)
-            first = false
-            // 每段现读一次设置：音量/语速等滑杆下一段即生效，不用停播重进
-            val segPrefs = runCatching { settings.unifiedTts.first() }.getOrDefault(tp)
-            // append 只等合成+入队（首块已开播），返回实测总时长与首播时刻
-            val res = stream.append(para.readText, segPrefs)
-            if (res.totalMs <= 0) {
+            try {
+                val seenAt = System.currentTimeMillis()
+                _position.value = para
+                positionAt = seenAt
+                positionIdx = idx
+                _sectionTitle.value = sectionTitleFor(para.chapter, para.block)
+                // 每推进一段/一句就直存章/块/字：锁屏后 UI 没了、pager 动不了时靠这行续命。
+                // 带观测时间戳，比它更旧的快照（比如阅读页手里冻结的旧位置）落盘时会被 DB 丢弃。
+                store?.takeIf { persistProgress }?.saveTtsPos(bookPath, para.chapter, para.block, para.startChar, seenAt)
+                if (first && movePage || !first) _turn.value = Triple(para.chapter, para.block, para.startChar)
+                first = false
+                // 每段现读一次设置：音量/语速等滑杆下一段即生效，不用停播重进
+                val segPrefs = runCatching { settings.unifiedTts.first() }.getOrDefault(tp)
+                // append 只等合成+入队（首块已开播），返回实测总时长与首播时刻
+                val res = stream.append(para.readText, segPrefs)
+                if (res.totalMs <= 0) {
+                    idx++
+                    continue
+                }
+                _paraTiming.value = ParaTiming(
+                    chapter = para.chapter,
+                    block = para.block,
+                    startChar = para.startChar,
+                    endChar = para.endChar.coerceAtMost(para.text.length),
+                    totalChars = para.readText.length.coerceAtLeast(1),
+                    durationMs = res.totalMs.coerceAtLeast(1000),
+                    startedAt = res.startedAtElapsed,
+                )
+                // 后台预热下一段（只写内存缓存，不碰播放器；过期自动丢弃）
+                val nextIdx = idx + 1
+                if (nextIdx < paras.size) {
+                    val gen = stream.generation
+                    val nextText = paras[nextIdx].readText
+                    scope.launch(Dispatchers.IO) {
+                        runCatching { tts.warmCache(nextText, segPrefs, TtsOwner.EBOOK, gen) }
+                    }
+                }
+                stream.awaitDone()
+                if (!stream.isAlive()) return // 被 stop/切段作废
+                // 睡眠定时：本单位读完后若已到点就停（一次性，读完这段/句再停），
+                // worker 收尾清定时并再停一次旁路（幂等兜底）。
+                sleep.timer.value?.let { st ->
+                    if (android.os.SystemClock.elapsedRealtime() >= st.deadlineElapsed) {
+                        _notice.value = "睡眠定时已到，停止朗读"
+                        _paraTiming.value = null
+                        _playing.value = false
+                        runCatching { player?.stop() }
+                        sleep.consumeFired()
+                        return
+                    }
+                }
                 idx++
-                continue
+            } finally {
+                // 释放 TTS 串行闸门：intro 与听书共用一条队列，永不同时发声。
+                stream.close()
             }
-            _paraTiming.value = ParaTiming(
-                chapter = para.chapter,
-                block = para.block,
-                startChar = para.startChar,
-                endChar = para.endChar.coerceAtMost(para.text.length),
-                totalChars = para.readText.length.coerceAtLeast(1),
-                durationMs = res.totalMs.coerceAtLeast(1000),
-                startedAt = res.startedAtElapsed,
-            )
-            // 后台预热下一段（只写内存缓存，不碰播放器；过期自动丢弃）
-            val nextIdx = idx + 1
-            if (nextIdx < paras.size) {
-                val gen = stream.generation
-                val nextText = paras[nextIdx].readText
-                scope.launch(Dispatchers.IO) {
-                    runCatching { tts.warmCache(nextText, segPrefs, TtsOwner.EBOOK, gen) }
-                }
-            }
-            stream.awaitDone()
-            if (!stream.isAlive()) return // 被 stop/切段作废
-            // 睡眠定时：本单位读完后若已到点就停（一次性，读完这段/句再停），
-            // worker 收尾清定时并再停一次旁路（幂等兜底）。
-            sleep.timer.value?.let { st ->
-                if (android.os.SystemClock.elapsedRealtime() >= st.deadlineElapsed) {
-                    _notice.value = "睡眠定时已到，停止朗读"
-                    _paraTiming.value = null
-                    _playing.value = false
-                    runCatching { player?.stop() }
-                    sleep.consumeFired()
-                    return
-                }
-            }
-            idx++
         }
         _paraTiming.value = null
         _playing.value = false

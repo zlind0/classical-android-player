@@ -49,6 +49,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
@@ -114,27 +115,10 @@ class PlaybackService : MediaLibraryService() {
     @Volatile private var lastMusicPosition: PositionState? = null
 
     // ---- 统一会话（单服务单会话）：音乐 + 听书共用一个系统会话 ----
-    // 双播一旦进入（dualArmed）就保持，直到用户亲手停掉其中一路；
-    // 外部暂停（耳机/来电/系统暂停键）只停播放不退出，双恢复靠 externalSnapshot。
-    @Volatile private var dualArmed = false
+    // 控制/状态仲裁全部收进 NeoUnifiedPlayer；这里只保留会话 player 的引用。
     private var unifiedPlayer: UnifiedPlayer? = null
+    private var neo: NeoUnifiedPlayer? = null
     private var noisyReceiver: BroadcastReceiver? = null
-    @Volatile private var lastBookPara: com.aurora.music.data.ebook.EbookTtsController.Para? = null
-
-    private data class ExternalSnapshot(
-        val musicWasPlaying: Boolean,
-        val bookPara: com.aurora.music.data.ebook.EbookTtsController.Para?,
-        /** true=瞬态（来电），挂断自动双恢复；false=常停，等系统/用户播放键。 */
-        val autoResume: Boolean,
-    )
-
-    @Volatile private var externalSnapshot: ExternalSnapshot? = null
-
-    private val dualControl = object : DualMusicControl {
-        override fun isMusicPlaying(): Boolean = runCatching { player.isPlaying }.getOrDefault(false)
-        // 双播时系统上/下曲切音乐：预留口，默认不处理（只动书），后面再实现。
-        override fun switchMusicFromSystem(direction: Int): Boolean = false
-    }
 
     @Volatile private var sleepFadeActive = false
     private var sleepFadeStartMs = 0L
@@ -268,20 +252,16 @@ class PlaybackService : MediaLibraryService() {
 
         player.addListener(object : Player.Listener {
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                if (!playWhenReady && externalSnapshot == null) {
+                if (!playWhenReady) {
                     when (reason) {
                         // 其他音乐 App 抢占：双停，不自动恢复（等系统播放键双恢复）。
                         Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS ->
-                            noteExternalInterruption(autoResume = false, pauseMusic = false)
+                            neo?.onExternalInterruption(autoResume = false, pauseMusic = false)
                         // 耳机拔出/蓝牙断开：ExoPlayer 已停音乐，这里补停书。常停不自动恢复。
                         Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_BECOMING_NOISY ->
-                            noteExternalInterruption(autoResume = false, pauseMusic = false)
-                        // 用户在 App 内亲手停音乐：书若在播则退到 BOOK 态，书不受影响。
-                        Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST ->
-                            if (dualArmed && ebookPlaying) {
-                                dualArmed = false
-                                refreshArbitration()
-                            }
+                            neo?.onExternalInterruption(autoResume = false, pauseMusic = false)
+                        // 用户亲手停音乐由 NeoUnifiedPlayer.musicPause() 处理（书在播则卸载），
+                        // 这里不额外动作，避免把系统暂停误判成卸载。
                     }
                 }
                 publishMusicState(force = true)
@@ -293,18 +273,15 @@ class PlaybackService : MediaLibraryService() {
                     // 这里只快照 + 停书；挂断后音乐自动恢复，书由下面 NONE 分支恢复。
                     // 注意：不要调 player.pause()，否则会破坏音乐的自动恢复。
                     Player.PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS ->
-                        noteExternalInterruption(autoResume = true, pauseMusic = false)
+                        neo?.onExternalInterruption(autoResume = true, pauseMusic = false)
                     Player.PLAYBACK_SUPPRESSION_REASON_NONE ->
-                        if (externalSnapshot?.autoResume == true) resumeExternalSnapshot()
+                        neo?.onExternalResume()
                 }
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                // App 内开音乐时书正播着 → 进入双播。
-                if (isPlaying && ebookPlaying && !dualArmed) dualArmed = true
                 publishMusicState(force = true)
-                unifiedPlayer?.setDualMusicPlaying(isPlaying)
-                refreshArbitration()
+                // 通道状态由 NeoUnifiedPlayer 自己监听 music 维护，这里只推服务快照。
             }
 
             override fun onEvents(p: Player, events: Player.Events) {
@@ -387,51 +364,26 @@ class PlaybackService : MediaLibraryService() {
             // 听书混音状态：播放态 + 用户设定的站内保留音量 + duck 开关
             container.ebookTts.playing.collect { playing ->
                 ebookPlaying = playing
-                if (playing) {
-                    // App 内开书（阅读页播放键）：
-                    // 外部快照说音乐本在播 → 音乐跟着回来（ebook 既定规则）；
-                    // 音乐正播着 → 进入双播。之后转为用户态 dual，快照清掉。
-                    val snap = externalSnapshot
-                    if (!player.isPlaying && snap?.musicWasPlaying == true) {
-                        runCatching { player.play() }
-                    }
-                    if (player.isPlaying || snap?.musicWasPlaying == true) dualArmed = true
-                    externalSnapshot = null
-                } else {
-                    // 快照还在 = 外部/系统停的书，保持 dualArmed 等双恢复；
-                    // 快照不在 = 用户亲手停书，退出双播，音乐不受影响。
-                    if (externalSnapshot == null && dualArmed) dualArmed = false
-                }
-                refreshArbitration()
-            }
-        }
-        scope.launch {
-            // 断点缓存：stop() 会清掉控制器的 position，这里留一份给外部暂停快照/双恢复用。
-            container.ebookTts.position.collect { pos ->
-                if (pos != null) lastBookPara = pos
             }
         }
 
-        // 统一会话 player：BOOK / DUAL 模式的会话 player，MUSIC 模式沿用音乐 ExoPlayer。
+        // 统一控制层：音乐 + 听书两个通道，会话 player 的切换在它内部完成。
         val up = UnifiedPlayer(mainLooper, container)
-        up.onDualSystemPause = { noteExternalInterruption(autoResume = false, pauseMusic = true) }
-        up.onDualSystemResume = {
-            val snap = externalSnapshot
-            if (snap == null) {
-                // 没有联合暂停快照：系统播放键只恢复音乐（若在播），不偷偷开始朗读。
-                false
-            } else {
-                externalSnapshot = null
-                if (snap.musicWasPlaying && !player.isPlaying) runCatching { player.play() }
-                // 暂停前书确实在播 → 双恢复；只有音乐一路 → 书保持停止。
-                snap.bookPara != null
-            }
-        }
         up.attach()
         unifiedPlayer = up
-        // 阅读页底栏亲手停朗读：快照并暂停音乐，两路一起停；快照保留 dualArmed，
-        // 阅读页播放键 / 系统播放键再按时双恢复。
-        container.ebookTts.onUserStop = { onBookUserStop() }
+        val setSessionPlayer: (Player) -> Unit = { target ->
+            val session = mediaSession
+            if (session != null && runCatching { session.player }.getOrNull() !== target) {
+                runCatching { session.setPlayer(target) }
+                if (target === player) updateCustomLayout()
+                else runCatching { session.setCustomLayout(emptyList()) }
+            }
+        }
+        val n = NeoUnifiedPlayer(container, player, up, setSessionPlayer, scope)
+        n.attach()
+        neo = n
+        // 阅读页底栏亲手停朗读：音乐一起暂停，两路都 arm，等全局播放双恢复。
+        container.ebookTts.onUserStop = { neo?.onBookUserStop() }
         container.ebookTtsPlayer.onAudioFocusChange = { change ->
             scope.launch { handleBookFocusChange(change) }
         }
@@ -439,7 +391,7 @@ class PlaybackService : MediaLibraryService() {
         val noisy = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
-                    noteExternalInterruption(autoResume = false, pauseMusic = false)
+                    neo?.onExternalInterruption(autoResume = false, pauseMusic = false)
                 }
             }
         }
@@ -467,7 +419,6 @@ class PlaybackService : MediaLibraryService() {
             abookPlaybackCb = cb
             runCatching { am.registerAudioPlaybackCallback(cb, null) }
         }
-        refreshArbitration()
         scope.launch {
             container.settingsStore.unifiedTts.collect {
                 ebookMusicLevel = it.ownMusicLevel
@@ -752,133 +703,8 @@ class PlaybackService : MediaLibraryService() {
     private fun volBase(): Float = replayGainMultiplier() * ebookDuckApplied * abookGainApplied *
         if (container.castMute.value) 0f else 1f
 
-    /**
-     * 统一会话仲裁：单服务单会话，按模式换会话 player。
-     * - DUAL/BOOK → [UnifiedPlayer]（通知栏显示书的 heading/书名，双播也显示书）；
-     * - MUSIC → 音乐 ExoPlayer（与原来完全一致）。
-     * - 两路都停且非 DUAL 时粘滞：不切 player（暂停什么留什么），起播时再按播放态
-     *   强制切换（App 内另起一路可抢占）。避免书暂停瞬间翻成旧歌。
-     * 只在模式或 player 变化时切换，控制器不断连。
-     */
-    private fun refreshArbitration() {
-        val session = mediaSession ?: return
-        val up = unifiedPlayer ?: return
-        val musicPlaying = player.isPlaying
-        val bookPlaying = ebookPlaying
-        val current = runCatching { session.player }.getOrNull()
-        if (!musicPlaying && !bookPlaying && !dualArmed) {
-            up.dualControl = null
-            up.setDualMusicPlaying(false)
-            if (current === up) {
-                runCatching { session.setCustomLayout(emptyList()) }
-            } else if (current === player) {
-                updateCustomLayout()
-            } else {
-                runCatching { session.setPlayer(player) }
-                updateCustomLayout()
-            }
-            return
-        }
-        val mode = computeUnifiedMode(musicPlaying, bookPlaying, dualArmed)
-        up.dualControl = if (mode == UnifiedSessionMode.DUAL) dualControl else null
-        up.setDualMusicPlaying(player.isPlaying)
-        val wantUnified = mode != UnifiedSessionMode.MUSIC
-        if (wantUnified && current !== up) {
-            runCatching { session.setPlayer(up) }
-            runCatching { session.setCustomLayout(emptyList()) }
-        } else if (!wantUnified && current !== player) {
-            runCatching { session.setPlayer(player) }
-            updateCustomLayout()
-        }
-    }
-
-    /**
-     * 外部打断双停：快照先行（调用方必须保证快照在停之前建好，
-     * 服务侧才能区分“用户亲手单停”和“外部/系统双停”）。
-     *
-     * @param autoResume true=瞬态（来电），挂断自动双恢复；false=常停，等系统/用户播放键。
-     * @param pauseMusic 是否顺手停音乐（音乐侧已被系统压住/停掉时传 false，避免破坏自动恢复）。
-     */
-    private fun noteExternalInterruption(autoResume: Boolean, pauseMusic: Boolean) {
-        if (!player.isPlaying && !ebookPlaying) return
-        if (externalSnapshot == null) {
-            externalSnapshot = ExternalSnapshot(
-                musicWasPlaying = player.isPlaying,
-                // 书没在播时不断点快照：lastBookPara 可能是上次读完的旧书，避免挂断后误续播。
-                bookPara = if (ebookPlaying) lastBookPara else null,
-                autoResume = autoResume,
-            )
-        }
-        if (pauseMusic) runCatching { player.pause() }
-        if (ebookPlaying) runCatching { container.ebookTts.stop() }
-    }
-
-    /**
-     * 阅读页底栏「停止朗读」（用户亲手停）：音乐一起暂停。
-     * 只在音乐真正在播时建快照：快照让 playing collector 保留 dualArmed，
-     * 之后阅读页播放键（collector）或系统播放键（UnifiedPlayer）能把两路一起恢复。
-     */
-    private fun onBookUserStop() {
-        if (externalSnapshot != null || !player.isPlaying) return
-        externalSnapshot = ExternalSnapshot(
-            musicWasPlaying = true,
-            bookPara = lastBookPara,
-            autoResume = false,
-        )
-        runCatching { player.pause() }
-    }
-
-    /**
-     * 音乐选项卡 / 阅读页音乐气泡的播放暂停：永远只动站内音乐，不开始也不停止朗读。
-     * - 听书时从音乐选项卡暂停 → 朗读继续；
-     * - 两路一起暂停后从音乐选项卡播放 → 只恢复音乐，朗读保持停止；
-     * - 书没在播时恢复音乐 → 退出双播态，会话切回音乐 player（列表/封面回到歌）。
-     */
-    private fun toggleMusicFromApp() {
-        // 与 UI 同口径：缓冲中且 playWhenReady 也算“在播”，这一下应是暂停。
-        val playing = player.isPlaying ||
-            (player.playWhenReady && player.playbackState == Player.STATE_BUFFERING)
-        if (playing) {
-            runCatching { player.pause() }
-        } else {
-            runCatching { player.play() }
-            if (!ebookPlaying) {
-                // 只恢复了音乐：释放联合暂停快照，书等阅读页/系统播放键再续。
-                externalSnapshot = null
-                dualArmed = false
-            }
-        }
-        musicSoloIfBookIdle()
-        refreshArbitration()
-    }
-
-    /**
-     * App 要从控制器下发音乐队列（点歌/开有声书）前的接管：
-     * 停书后会话按“粘滞”策略还停在 [UnifiedPlayer]（书的占位时间线），
-     * 此时 setMediaItems 会落到书上、随后的 play 还会被当成“继续朗读”而开口读书。
-     * 先把会话切回音乐 player，命令随之落到真正的音乐 ExoPlayer；
-     * 若书在播（双播），保留 dualArmed，起播后 onIsPlayingChanged 会仲裁回 UnifiedPlayer。
-     */
-    private fun takeSessionForMusic() {
-        val session = mediaSession ?: return
-        if (!container.ebookTts.playing.value) {
-            // 书没在播：音乐独占语义，退出双播态并释放联合暂停快照（按播放键不再带起朗读）。
-            dualArmed = false
-            externalSnapshot = null
-        }
-        if (runCatching { session.player }.getOrNull() === player) return
-        runCatching { session.setPlayer(player) }
-        updateCustomLayout()
-    }
-
-    /** 书没在播时的音乐操作：会话回音乐 player（书在播就保持双播，交给仲裁）。 */
-    private fun musicSoloIfBookIdle() {
-        if (container.ebookTts.playing.value) return
-        takeSessionForMusic()
-    }
-
     // ---- 音乐 UI（选项卡/阅读页音乐气泡）的走带键：永远操作站内音乐 player ----
-    // 双播时会话 player 是 UnifiedPlayer（书），直接下发 seek/next 会被路由到朗读上。
+    // 双播时会话 player 是书，直接下发 seek/next 会被路由到朗读上。
 
     private fun musicJumpTo(index: Int) {
         if (index !in 0 until player.mediaItemCount) return
@@ -886,13 +712,13 @@ class PlaybackService : MediaLibraryService() {
             player.seekTo(index, 0)
             player.play()
         }
-        musicSoloIfBookIdle()
+        neo?.onMusicCommand()
         publishMusicState(force = true)
     }
 
     private fun musicNext() {
         runCatching { player.seekToNextMediaItem() }
-        musicSoloIfBookIdle()
+        neo?.onMusicCommand()
         publishMusicState(force = true)
     }
 
@@ -900,7 +726,7 @@ class PlaybackService : MediaLibraryService() {
         runCatching {
             if (player.currentPosition > 4000) player.seekTo(0) else player.seekToPreviousMediaItem()
         }
-        musicSoloIfBookIdle()
+        neo?.onMusicCommand()
         publishMusicState(force = true)
     }
 
@@ -908,22 +734,8 @@ class PlaybackService : MediaLibraryService() {
         val dur = player.duration
         if (fraction < 0f || dur <= 0) return
         runCatching { player.seekTo((fraction.coerceIn(0f, 1f) * dur).toLong()) }
-        musicSoloIfBookIdle()
+        neo?.onMusicCommand()
         publishMusicState(force = true)
-    }
-
-    /** 外部瞬态结束（来电挂断）：按快照双恢复，一次性。 */
-    private fun resumeExternalSnapshot() {
-        val snap = externalSnapshot ?: return
-        externalSnapshot = null
-        if (snap.musicWasPlaying && !player.isPlaying) runCatching { player.play() }
-        val para = snap.bookPara
-        if (para != null && !ebookPlaying) {
-            runCatching { container.ebookTts.playFromBookmark(para.chapter, para.block, para.startChar) }
-        }
-        // 快照里两路都在播 → 回到双播；否则按实际播的状态自然落位。
-        if (snap.musicWasPlaying && para != null) dualArmed = true
-        refreshArbitration()
     }
 
     /**
@@ -934,11 +746,11 @@ class PlaybackService : MediaLibraryService() {
     private fun handleBookFocusChange(focusChange: Int) {
         when (focusChange) {
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ->
-                if (ebookPlaying) noteExternalInterruption(autoResume = true, pauseMusic = true)
+                if (ebookPlaying) neo?.onExternalInterruption(autoResume = true, pauseMusic = true)
             AudioManager.AUDIOFOCUS_LOSS ->
-                if (ebookPlaying) noteExternalInterruption(autoResume = false, pauseMusic = true)
+                if (ebookPlaying) neo?.onExternalInterruption(autoResume = false, pauseMusic = true)
             AudioManager.AUDIOFOCUS_GAIN ->
-                if (externalSnapshot?.autoResume == true) resumeExternalSnapshot()
+                neo?.onExternalResume()
         }
     }
 
@@ -1280,6 +1092,9 @@ class PlaybackService : MediaLibraryService() {
                 .add(SessionCommand(CMD_MUSIC_NEXT, Bundle.EMPTY))
                 .add(SessionCommand(CMD_MUSIC_PREV, Bundle.EMPTY))
                 .add(SessionCommand(CMD_MUSIC_SEEK, Bundle.EMPTY))
+                .add(SessionCommand(CMD_MUSIC_PAUSE_TEMP, Bundle.EMPTY))
+                .add(SessionCommand(CMD_MUSIC_RESUME_TEMP, Bundle.EMPTY))
+                .add(SessionCommand(CMD_BOOK_STARTED, Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(sessionCommands)
@@ -1298,17 +1113,13 @@ class PlaybackService : MediaLibraryService() {
                     customCommand.customExtras.getStringArrayList("order"),
                 )
                 CMD_REPEAT -> cycleRepeat()
-                CMD_MUSIC_TOGGLE -> toggleMusicFromApp()
-                CMD_MUSIC_PAUSE -> {
-                    runCatching { player.pause() }
-                    publishMusicState(force = true)
-                }
-                CMD_MUSIC_PLAY -> {
-                    runCatching { player.play() }
-                    musicSoloIfBookIdle()
-                    publishMusicState(force = true)
-                }
-                CMD_MUSIC_SOLO -> takeSessionForMusic()
+                CMD_MUSIC_TOGGLE -> neo?.musicToggle()
+                CMD_MUSIC_PAUSE -> neo?.musicPause()
+                CMD_MUSIC_PLAY -> neo?.musicPlay()
+                CMD_MUSIC_SOLO -> neo?.takeSessionForMusic()
+                CMD_MUSIC_PAUSE_TEMP -> neo?.pauseMusicForIntro()
+                CMD_MUSIC_RESUME_TEMP -> neo?.resumeMusicForIntro()
+                CMD_BOOK_STARTED -> neo?.onBookStartedFromApp()
                 CMD_MUSIC_JUMP ->
                     musicJumpTo(customCommand.customExtras.getInt("index", -1))
                 CMD_MUSIC_NEXT -> musicNext()
@@ -1610,56 +1421,13 @@ class PlaybackService : MediaLibraryService() {
             // App 内按钮直接调控制器，不走这里，独立性不变。
             ACTION_PLAY_PAUSE -> {
                 wakeFadeActive = false
-                val up = unifiedPlayer
-                val sessionPlayer = runCatching { mediaSession?.player }.getOrNull()
-                if (dualArmed && up != null) {
-                    if (player.isPlaying || ebookPlaying) {
-                        noteExternalInterruption(autoResume = false, pauseMusic = true)
-                    } else {
-                        val snap = externalSnapshot
-                        externalSnapshot = null
-                        if (snap?.musicWasPlaying == true) runCatching { player.play() }
-                        val para = snap?.bookPara ?: up.peekPara() ?: lastBookPara
-                        if (para != null) runCatching { container.ebookTts.playFromBookmark(para.chapter, para.block, para.startChar) }
-                        if (snap?.musicWasPlaying == true && para != null) dualArmed = true
-                        refreshArbitration()
-                    }
-                } else if (up != null && resolveSinglePlayTarget(
-                        musicPlaying = player.isPlaying,
-                        bookPlaying = ebookPlaying,
-                        sessionIsUnified = sessionPlayer === up,
-                        hasBookmark = up.hasBookmark(),
-                    ) == SinglePlayTarget.BOOK
-                ) {
-                    // 书单路（播或暂停）：只动书，音乐不受影响，暂停什么恢复什么。
-                    if (ebookPlaying) {
-                        runCatching { container.ebookTts.stop() }
-                    } else {
-                        val snap = externalSnapshot
-                        externalSnapshot = null
-                        val para = snap?.bookPara ?: up.peekPara() ?: lastBookPara
-                        if (para != null) runCatching { container.ebookTts.playFromBookmark(para.chapter, para.block, para.startChar) }
-                    }
-                } else {
-                    if (player.isPlaying) player.pause() else player.play()
+                val n = neo
+                if (n != null) {
+                    if (n.isAnyPlaying()) n.pause() else n.play()
                 }
             }
-            ACTION_NEXT -> {
-                val up = unifiedPlayer
-                val sessionPlayer = runCatching { mediaSession?.player }.getOrNull()
-                val bookActive = ebookPlaying || (up != null && sessionPlayer === up && up.hasBookmark())
-                if (routeSystemNav(dualArmed, player.isPlaying, bookActive) == SystemNavTarget.BOOK) {
-                    if (dualControl.switchMusicFromSystem(+1) != true) container.ebookTts.next()
-                } else player.seekToNextMediaItem()
-            }
-            ACTION_PREV -> {
-                val up = unifiedPlayer
-                val sessionPlayer = runCatching { mediaSession?.player }.getOrNull()
-                val bookActive = ebookPlaying || (up != null && sessionPlayer === up && up.hasBookmark())
-                if (routeSystemNav(dualArmed, player.isPlaying, bookActive) == SystemNavTarget.BOOK) {
-                    if (dualControl.switchMusicFromSystem(-1) != true) container.ebookTts.prev()
-                } else if (player.currentPosition > 4000) player.seekTo(0) else player.seekToPreviousMediaItem()
-            }
+            ACTION_NEXT -> neo?.next()
+            ACTION_PREV -> neo?.previous()
             ACTION_ALARM -> startAlarmPlayback()
             ACTION_ALARM_DISMISS -> dismissAlarm()
             // 睡眠定时到点：音乐走淡出通道（渐弱后停），听书由 EbookTtsController 读完当前再停，不在这里动。
@@ -1779,8 +1547,7 @@ class PlaybackService : MediaLibraryService() {
         player.clearMediaItems()
         // 听书同样停掉，退出双播。
         runCatching { container.ebookTts.stop() }
-        dualArmed = false
-        externalSnapshot = null
+        neo?.onTaskRemoved()
         // 队列/位置已经在播放过程中持续落盘；这里再强制刷一次，保证下次冷启动能接上。
         runCatching { container.queueStore.requestFlush() }
         runCatching { container.uiState.requestFlush() }
@@ -1801,12 +1568,14 @@ class PlaybackService : MediaLibraryService() {
         mediaSession?.release()
         mediaSession = null
         runCatching { container.ebookTts.onUserStop = null }
+        neo = null
         runCatching { unifiedPlayer?.release() }
         unifiedPlayer = null
         runCatching { fadePlayer?.release() }
         fadePlayer = null
         runCatching { container.musicState.value = MusicPlaybackState() }
         runCatching { player.release() }
+        scope.cancel()
         super.onDestroy()
     }
 
@@ -1823,6 +1592,9 @@ class PlaybackService : MediaLibraryService() {
         const val CMD_MUSIC_NEXT = "com.aurora.music.MUSIC_NEXT"
         const val CMD_MUSIC_PREV = "com.aurora.music.MUSIC_PREV"
         const val CMD_MUSIC_SEEK = "com.aurora.music.MUSIC_SEEK"
+        const val CMD_MUSIC_PAUSE_TEMP = "com.aurora.music.MUSIC_PAUSE_TEMP"
+        const val CMD_MUSIC_RESUME_TEMP = "com.aurora.music.MUSIC_RESUME_TEMP"
+        const val CMD_BOOK_STARTED = "com.aurora.music.BOOK_STARTED"
         const val ACTION_PLAY_PAUSE = "com.aurora.music.action.PLAY_PAUSE"
         const val ACTION_NEXT = "com.aurora.music.action.NEXT"
         const val ACTION_PREV = "com.aurora.music.action.PREV"

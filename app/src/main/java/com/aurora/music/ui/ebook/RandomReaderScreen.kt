@@ -318,6 +318,8 @@ fun RandomReaderScreen(
         val parsed = feedParsed(book, c, chapter)
         tts.setBook("feed:${book.path}", parsed, book.path, force = true)
         tts.playFrom(c, b, ch)
+        // 两者都 arm 时，起播朗读也要把音乐一起带起来。
+        playerVM.onBookStartedFromApp()
     }
 
     /**
@@ -813,6 +815,7 @@ fun RandomReaderScreen(
                             prefetchChapters = 0,
                             feed = currentFeed,
                             active = true,
+                            onBookStarted = { playerVM.onBookStartedFromApp() },
                         )
                     }
                 } else {

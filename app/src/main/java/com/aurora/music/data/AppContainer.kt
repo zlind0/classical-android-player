@@ -398,6 +398,9 @@ class AppContainer(context: Context) {
     /** 站内音乐 player 的时间线位置/播放态（见 [MusicPlaybackState]）。 */
     val musicState = MutableStateFlow(MusicPlaybackState())
 
+    /** 统一控制层状态（音乐 + 听书两个通道），悬浮窗/UI 读这一份。 */
+    val unifiedState = MutableStateFlow(com.aurora.music.playback.UnifiedState())
+
     private val _sessionReady = MutableStateFlow<Boolean?>(null)
     val sessionReady: StateFlow<Boolean?> = _sessionReady.asStateFlow()
 

@@ -94,6 +94,19 @@ class FloatingWindowManager(
             container.musicState.collect { if (view != null) syncState() }
         }
         scope.launch {
+            // 统一控制层：书在播时悬浮窗中间显示当前朗读句。
+            container.unifiedState.collect { us ->
+                _ui.update {
+                    it.copy(
+                        bookActive = us.book.playing,
+                        bookSentence = us.bookSentence,
+                        bookCover = us.bookCover,
+                    )
+                }
+                if (view != null) syncState()
+            }
+        }
+        scope.launch {
             settings.floatingPrefs.collect { prefs ->
                 val prev = lastPrefs
                 lastPrefs = prefs
@@ -152,7 +165,9 @@ class FloatingWindowManager(
             if (!inBackground || view != null || dismissed) return@launch
             if (c == null) return@launch
             // 以站内音乐 player 为准：停书粘滞时会话时间线是书，别把电子书当成正在播的歌。
-            if (container.musicState.value.mediaId.isBlank()) return@launch
+            // 音乐已卸载但书在播时仍显示（背景用书封面）。
+            val us = container.unifiedState.value
+            if (container.musicState.value.mediaId.isBlank() && !us.book.playing) return@launch
             show(prefs)
         }
     }
@@ -187,15 +202,22 @@ class FloatingWindowManager(
         val c = controller ?: return
         // 双播/停书粘滞时会话 player 是 UnifiedPlayer（书），音乐信息以服务快照为准。
         val ms = container.musicState.value
+        val us = container.unifiedState.value
         val fromMusic = ms.mediaId.isNotBlank()
         val item = c.currentMediaItem
-        // 后台时队列被清空 → 关窗
-        if (!fromMusic && item == null && view != null) {
+        // 后台时队列被清空且书也没在播 → 关窗
+        if (!fromMusic && item == null && !us.book.playing && view != null) {
             hide()
             return
         }
         val md = item?.mediaMetadata
-        val repeat = when (if (fromMusic) ms.repeatMode else c.repeatMode) {
+        // 音乐卸载后仍保留最后一首的元数据（UnifiedState），悬浮窗继续显示专辑封面。
+        val useMusicMeta = fromMusic || us.musicTitle.isNotBlank()
+        val repeat = when (
+            if (fromMusic) ms.repeatMode
+            else if (useMusicMeta) Player.REPEAT_MODE_OFF
+            else c.repeatMode
+        ) {
             Player.REPEAT_MODE_ONE -> RepeatMode.ONE
             Player.REPEAT_MODE_ALL -> RepeatMode.ALL
             else -> RepeatMode.OFF
@@ -203,13 +225,19 @@ class FloatingWindowManager(
         val id = if (fromMusic) ms.mediaId else item?.mediaId.orEmpty()
         _ui.update {
             it.copy(
-                title = if (fromMusic) ms.title else md?.title?.toString().orEmpty(),
-                artist = if (fromMusic) ms.artist else md?.artist?.toString().orEmpty(),
-                artUri = if (fromMusic) ms.artUri else md?.artworkUri?.toString().orEmpty(),
-                isPlaying = if (fromMusic) ms.playing else c.isPlaying,
-                shuffle = if (fromMusic) ms.shuffle else c.shuffleModeEnabled,
+                title = if (useMusicMeta) (if (fromMusic) ms.title else us.musicTitle)
+                else md?.title?.toString().orEmpty(),
+                artist = if (useMusicMeta) (if (fromMusic) ms.artist else us.musicArtist)
+                else md?.artist?.toString().orEmpty(),
+                artUri = if (useMusicMeta) (if (fromMusic) ms.artUri else us.musicArtUri)
+                else us.bookCover.ifBlank { md?.artworkUri?.toString().orEmpty() },
+                isPlaying = if (fromMusic) ms.playing else us.music.playing,
+                shuffle = if (fromMusic) ms.shuffle else false,
                 repeat = repeat,
-                hasTrack = fromMusic || item != null,
+                hasTrack = fromMusic || item != null || us.book.playing,
+                bookActive = us.book.playing,
+                bookSentence = us.bookSentence,
+                bookCover = us.bookCover,
             )
         }
         if (id != lastSongId) {

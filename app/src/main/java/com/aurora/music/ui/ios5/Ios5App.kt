@@ -254,8 +254,8 @@ fun Ios5App() {
     LaunchedEffect(Unit) {
         container.songIntro.music = object : com.aurora.music.data.IntroMusicControl {
             override fun isPlaying(): Boolean = playerVM.state.value.isPlaying
-            override fun pause() = playerVM.pause()
-            override fun resume() = playerVM.play()
+            override fun pause() = playerVM.pauseForIntro()
+            override fun resume() = playerVM.resumeForIntro()
         }
         container.songIntro.events.collect { confirm(it) }
     }

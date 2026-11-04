@@ -161,33 +161,38 @@ class SongIntroController(
             // LLM 供句抖动由队列吸收，不再每句重建合成器/AudioTrack
             val stream = tts.openStream(TtsOwner.INTRO)
             try {
-                for (s in sentences) {
-                    ensurePaused()
-                    _state.value = SongIntroState(active = true, speaking = true)
-                    fullText.append(s)
-                    lastPartial = fullText.toString()
-                    // 纯标点句（如单个 "。"）直接跳过，不进合成器（硬合产不出音频）。
-                    if (!isSpeakable(s)) continue
-                    val res = stream.append(s, ttsPrefs)
-                    if (res.totalMs > 0) spoken++
+                try {
+                    for (s in sentences) {
+                        ensurePaused()
+                        _state.value = SongIntroState(active = true, speaking = true)
+                        fullText.append(s)
+                        lastPartial = fullText.toString()
+                        // 纯标点句（如单个 "。"）直接跳过，不进合成器（硬合产不出音频）。
+                        if (!isSpeakable(s)) continue
+                        val res = stream.append(s, ttsPrefs)
+                        if (res.totalMs > 0) spoken++
+                    }
+                    producer.join()
+                } finally {
+                    producer.cancel()
                 }
-                producer.join()
-            } finally {
-                producer.cancel()
-            }
-            stream.awaitDone()
-            if (!stream.isAlive()) throw CancellationException()
-            streamError.get()?.let { throw it }
-            if (spoken == 0 && streamError.get() == null) _events.emit("没能生成介绍，请稍后重试")
-            runCatching {
-                log?.add(
-                    SongIntroLogEntry(
-                        timeMs = System.currentTimeMillis(),
-                        model = prefs.llmModel,
-                        input = userText,
-                        result = fullText.toString(),
+                stream.awaitDone()
+                if (!stream.isAlive()) throw CancellationException()
+                streamError.get()?.let { throw it }
+                if (spoken == 0 && streamError.get() == null) _events.emit("没能生成介绍，请稍后重试")
+                runCatching {
+                    log?.add(
+                        SongIntroLogEntry(
+                            timeMs = System.currentTimeMillis(),
+                            model = prefs.llmModel,
+                            input = userText,
+                            result = fullText.toString(),
+                        )
                     )
-                )
+                }
+            } finally {
+                // 释放 TTS 串行闸门：intro 与听书共用一条队列，永不同时发声。
+                stream.close()
             }
         } catch (ce: CancellationException) {
             // 中断也留一条部分记录，方便回看说了哪几句

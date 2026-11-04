@@ -332,6 +332,15 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+        viewModelScope.launch {
+            // 音乐卸载后 musicState 为空，音乐 UI 的播放态改看统一状态，
+            // 避免落到会话 player（书）上，出现“音乐已暂停却显示暂停键”。
+            container.unifiedState.collect { us ->
+                if (container.musicState.value.mediaId.isBlank()) {
+                    _state.update { it.copy(isPlaying = us.music.playing) }
+                }
+            }
+        }
     }
 
     /** App 退到后台/被杀前主动落一次：队列、位置、是否在播。 */
@@ -548,7 +557,8 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
                 val c = controller ?: continue
                 // 双播时会话 c 是书：进度只能取音乐快照，否则会被书的占位 0 位覆盖。
                 val ms = container.musicState.value
-                val active = if (ms.mediaId.isNotBlank()) ms.playing else c.effectivelyPlaying
+                val active = if (ms.mediaId.isNotBlank()) ms.playing
+                else container.unifiedState.value.music.playing
                 if (!active) continue
                 val sample = applyPosition(c) ?: continue
                 val posSec = (sample.positionMs / 1000f).coerceAtLeast(0f)
@@ -617,7 +627,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         _state.update {
             it.copy(
                 current = cur,
-                isPlaying = if (hasMusic) ms.playing else c.effectivelyPlaying,
+                isPlaying = if (hasMusic) ms.playing else container.unifiedState.value.music.playing,
                 shuffle = if (hasMusic) ms.shuffle else c.shuffleModeEnabled,
                 repeat = when (if (hasMusic) ms.repeatMode else c.repeatMode) {
                     Player.REPEAT_MODE_ONE -> RepeatMode.ONE
@@ -1144,6 +1154,29 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
     fun play() {
         controller?.sendCustomCommand(
             SessionCommand(PlaybackService.CMD_MUSIC_PLAY, android.os.Bundle.EMPTY),
+            android.os.Bundle.EMPTY,
+        )
+    }
+
+    /** 歌曲介绍临时暂停音乐：不触发卸载，介绍结束再恢复。 */
+    fun pauseForIntro() {
+        controller?.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_MUSIC_PAUSE_TEMP, android.os.Bundle.EMPTY),
+            android.os.Bundle.EMPTY,
+        )
+    }
+
+    fun resumeForIntro() {
+        controller?.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_MUSIC_RESUME_TEMP, android.os.Bundle.EMPTY),
+            android.os.Bundle.EMPTY,
+        )
+    }
+
+    /** 阅读页起播朗读后通知服务：把 armed 的音乐一起带起来（两者都 arm 时双恢复）。 */
+    fun onBookStartedFromApp() {
+        controller?.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_BOOK_STARTED, android.os.Bundle.EMPTY),
             android.os.Bundle.EMPTY,
         )
     }

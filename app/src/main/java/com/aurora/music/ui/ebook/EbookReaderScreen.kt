@@ -384,6 +384,7 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
             onOpenMusic = { musicOpen = true },
             onOpenCast = { castOpen = true },
             castActive = castActive,
+            onBookStarted = { playerVM.onBookStartedFromApp() },
         )
 
         if (tocOpen) {
@@ -529,6 +530,8 @@ internal fun ReaderBody(
     feed: FeedReaderUi? = null,
     /** 随机阅读：只有正中间那一页是「活着」的；相邻页只负责按最终布局预渲染。 */
     active: Boolean = true,
+    /** 起播朗读后通知外层：把 armed 的音乐一起带起来。 */
+    onBookStarted: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val container = (context.applicationContext as AuroraApplication).container
@@ -1026,6 +1029,8 @@ internal fun ReaderBody(
                         if (sl != null) {
                             if (feed != null) feed.onPlayFrom(c, sl.block, sl.start)
                             else tts.playFrom(c, sl.block, sl.start)
+                            // 两者都 arm 时，阅读页播放键也要把音乐一起带起来。
+                            onBookStarted()
                         }
                     }
                 },
