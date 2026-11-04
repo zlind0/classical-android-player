@@ -184,6 +184,11 @@ export interface RelayStatus {
   pairing: { lanHost: string; lanPort: number };
 }
 
+export interface FeedRules {
+  script: string;
+  defaultScript: string;
+}
+
 export interface ScanProgress {
   rootId: number;
   rootName: string;
@@ -242,6 +247,9 @@ export const api = {
     invoke<RelayStatus>("relay_set_device_roots", { id, roots }),
   relayResetIdentity: () => invoke<RelayStatus>("relay_reset_identity"),
   relayResetEncryption: () => invoke<RelayStatus>("relay_reset_encryption"),
+  getFeedRules: () => invoke<FeedRules>("get_feed_rules"),
+  saveFeedRules: (script: string) => invoke<FeedRules>("save_feed_rules", { script }),
+  resetFeedRules: () => invoke<FeedRules>("reset_feed_rules"),
 };
 
 export function onScanProgress(handler: (progress: ScanProgress) => void): Promise<UnlistenFn> {

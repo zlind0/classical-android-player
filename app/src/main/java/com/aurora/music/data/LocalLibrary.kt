@@ -221,8 +221,11 @@ class LocalLibrary(
 
     /** DB 行 → 内存（available 在前原序，unavailable 沉底；专辑/艺人只看可用行）。 */
     private suspend fun rebuildFromRows(rows: List<MsTrack>) {
-        val avail = rows.filter { it.available }
-        val un = rows.filterNot { it.available }
+        // 旧版本把无标签曲目按每首独立 key 落过盘；读取时统一归一，
+        // 无需强制重同步也能把 Unknown artist / Unknown album 合并起来
+        val normalized = rows.map { it.withCanonicalUnknowns() }
+        val avail = normalized.filter { it.available }
+        val un = normalized.filterNot { it.available }
         val availSongs = avail.map { it.toSong(overlayGain = true) }
         val unSongs = un.map { it.toSong(overlayGain = true) }
         songs = availSongs + unSongs
@@ -257,7 +260,32 @@ class LocalLibrary(
                 )
             }
             .sortedBy { it.name.lowercase() }
-        _albumMerges.value = dao.allMerges().associate { it.albumKey to parseMergeJson(it.rowsJson) }
+        val storedMerges = dao.allMerges()
+        _albumMerges.value = if (storedMerges.any { isLegacyUnknownAlbumKey(it.albumKey) }) {
+            // 旧未知专辑 key 已失效：按新归一键重建合并表并落盘，避免每次重建都重算
+            val merges = albums.map { a ->
+                val ordered = availSongs.filter { it.albumId == a.id }
+                    .sortedWith(albumTrackComparator(pathFirst = false))
+                MsMerge(a.id, buildMergeJson(ordered))
+            }
+            dao.clearMerges()
+            dao.upsertMerges(merges)
+            merges.associate { it.albumKey to parseMergeJson(it.rowsJson) }
+        } else {
+            storedMerges.associate { it.albumKey to parseMergeJson(it.rowsJson) }
+        }
+    }
+
+    /** 把旧 DB 行/系统库返回值里的未知占位统一成稳定 key，保证同类只出现一次。 */
+    private fun MsTrack.withCanonicalUnknowns(): MsTrack {
+        val artistUnknown = isUnknownArtistTag(artist)
+        val albumUnknown = isUnknownAlbumTag(album)
+        return copy(
+            artist = if (artistUnknown) UNKNOWN_ARTIST_LABEL else artist.trim(),
+            artistId = if (artistUnknown) UNKNOWN_ARTIST_ID else artistId,
+            album = if (albumUnknown) UNKNOWN_ALBUM_LABEL else album.trim(),
+            albumKey = if (albumUnknown) UNKNOWN_ALBUM_ID else albumKey(album),
+        )
     }
 
     private fun MsTrack.toSong(overlayGain: Boolean): Song {
@@ -344,9 +372,12 @@ class LocalLibrary(
                     val albumId = c.getLong(albumIdCol)
                     val artistId = c.getLong(artistIdCol)
                     val title = c.getString(titleCol) ?: continue
-                    val artistName = c.getString(artistCol)?.takeIf { it.isNotBlank() && it != "<unknown>" } ?: "Unknown artist"
-                    val rawAlbum = c.getString(albumCol)?.takeIf { it.isNotBlank() }
-                    val albumName = rawAlbum ?: "Unknown album"
+                    val rawArtist = c.getString(artistCol)
+                    val artistUnknown = isUnknownArtistTag(rawArtist)
+                    val artistName = if (artistUnknown) UNKNOWN_ARTIST_LABEL else rawArtist!!.trim()
+                    val rawAlbum = c.getString(albumCol)
+                    val albumUnknown = isUnknownAlbumTag(rawAlbum)
+                    val albumName = if (albumUnknown) UNKNOWN_ALBUM_LABEL else rawAlbum!!.trim()
                     val durSec = (c.getLong(durCol) / 1000L).toInt()
                     // 短时长（<10s，含未知时长 0）直接忽略
                     if (durSec < MIN_TRACK_DURATION_SEC) continue
@@ -365,8 +396,8 @@ class LocalLibrary(
                     if (data.isNotBlank() && data.split('/').any { isHiddenName(it) }) continue
                     // 专辑键只看归一化标题：MediaStore 的 album_id 按艺人维度拆分，
                     // 同名专辑跨文件夹/跨艺人会被拆成多个 id，这里直接无视它；
-                    // 无专辑标签的每首独立成专（unique key），绝不合并
-                    val sidAlbum = if (rawAlbum == null) "unknown-album::$id" else albumKey(albumName)
+                    // 无标签或未知占位统一归到同一个 UNKNOWN_ALBUM_ID，不再每首独立成专
+                    val sidAlbum = if (albumUnknown) UNKNOWN_ALBUM_ID else albumKey(albumName)
                     val rawTrack = if (trackCol >= 0) runCatching { c.getInt(trackCol) }.getOrDefault(0) else 0
                     var discNo = if (discCol >= 0) runCatching { c.getInt(discCol) }.getOrDefault(0) else 0
                     var trackNo = rawTrack
@@ -381,7 +412,7 @@ class LocalLibrary(
                         mediaId = id.toString(),
                         title = title,
                         artist = artistName,
-                        artistId = artistId.toString(),
+                        artistId = if (artistUnknown) UNKNOWN_ARTIST_ID else artistId.toString(),
                         album = albumName,
                         albumKey = sidAlbum,
                         durationSec = durSec,

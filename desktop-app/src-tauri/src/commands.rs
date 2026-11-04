@@ -270,3 +270,37 @@ pub fn relay_reset_encryption(state: State<'_, AppState>) -> CmdResult<serde_jso
         .map_err(|err| err.to_string())?;
     Ok(state.relay.status())
 }
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedRulesView {
+    script: String,
+    default_script: String,
+}
+
+fn feed_rules_view(state: &AppState) -> FeedRulesView {
+    FeedRulesView {
+        script: state.feed.rules(),
+        default_script: crate::feed_rules::DEFAULT_RULES.to_string(),
+    }
+}
+
+#[tauri::command]
+pub fn get_feed_rules(state: State<'_, AppState>) -> FeedRulesView {
+    feed_rules_view(&state)
+}
+
+#[tauri::command]
+pub fn save_feed_rules(state: State<'_, AppState>, script: String) -> CmdResult<FeedRulesView> {
+    state
+        .feed
+        .set_rules(&script)
+        .map_err(|err| err.to_string())?;
+    Ok(feed_rules_view(&state))
+}
+
+#[tauri::command]
+pub fn reset_feed_rules(state: State<'_, AppState>) -> CmdResult<FeedRulesView> {
+    state.feed.reset_rules().map_err(|err| err.to_string())?;
+    Ok(feed_rules_view(&state))
+}

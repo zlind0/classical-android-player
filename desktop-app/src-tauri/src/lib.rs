@@ -3,6 +3,7 @@ mod db;
 mod discovery;
 mod ebook_feed;
 mod ebook_parse;
+mod feed_rules;
 mod http_server;
 mod media;
 mod meta;
@@ -26,6 +27,7 @@ pub struct AppState {
     pub cache_dir: PathBuf,
     pub data_dir: PathBuf,
     pub relay: Arc<relay_host::RelayManager>,
+    pub feed: Arc<ebook_feed::FeedService>,
 }
 
 fn boxed_error(error: impl ToString) -> Box<dyn std::error::Error> {
@@ -66,14 +68,14 @@ pub fn run() {
             let (pair_tx, mut pair_rx) = tokio::sync::mpsc::unbounded_channel();
             let pairing = Arc::new(relay_pairing::PairingState::new(pair_tx));
 
-            let feed = Arc::new(ebook_feed::FeedService::new(cache_dir.clone()));
+            let feed = Arc::new(ebook_feed::FeedService::new(cache_dir.clone(), &data_dir));
 
             let http_state = http_server::HttpState {
                 db: database.clone(),
                 info: info.clone(),
                 cache_dir: cache_dir.clone(),
                 pairing: pairing.clone(),
-                feed,
+                feed: feed.clone(),
             };
 
             let relay = relay_host::RelayManager::load(
@@ -97,6 +99,7 @@ pub fn run() {
                 cache_dir,
                 data_dir,
                 relay,
+                feed,
             });
 
             let discovery = discovery::start(&info);
@@ -130,6 +133,9 @@ pub fn run() {
             commands::relay_set_device_roots,
             commands::relay_reset_identity,
             commands::relay_reset_encryption,
+            commands::get_feed_rules,
+            commands::save_feed_rules,
+            commands::reset_feed_rules,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aurora Desktop");

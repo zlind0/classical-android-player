@@ -50,6 +50,35 @@ val AUDIO_EXTENSIONS = setOf("flac", "mp3", "m4a", "m4b", "aac", "alac", "ogg", 
 // 扫描过滤：时长小于此值（秒）的曲目直接忽略（含读不到时长的 0）
 const val MIN_TRACK_DURATION_SEC = 10
 
+// 未知艺人/专辑的统一归一键与展示名。所有无标签或占位标签的曲目都归到同一个
+// key，避免列表里出现成百上千个“Unknown artist / Unknown album”。
+const val UNKNOWN_ALBUM_ID = "unknown-album"
+const val UNKNOWN_ARTIST_ID = "unknown-artist"
+const val UNKNOWN_ALBUM_LABEL = "Unknown album"
+const val UNKNOWN_ARTIST_LABEL = "Unknown artist"
+
+/** 标签是否为空或常见的未知占位符（MediaStore/ID3 都可能给 `<unknown>`）。 */
+fun isUnknownAlbumTag(value: String?): Boolean {
+    val t = value?.trim().orEmpty()
+    return t.isEmpty() || t.equals("<unknown>", ignoreCase = true) ||
+        t.equals(UNKNOWN_ALBUM_LABEL, ignoreCase = true)
+}
+
+fun isUnknownArtistTag(value: String?): Boolean {
+    val t = value?.trim().orEmpty()
+    return t.isEmpty() || t.equals("<unknown>", ignoreCase = true) ||
+        t.equals(UNKNOWN_ARTIST_LABEL, ignoreCase = true)
+}
+
+fun albumDisplayName(value: String?): String =
+    if (isUnknownAlbumTag(value)) UNKNOWN_ALBUM_LABEL else value!!.trim()
+
+fun artistDisplayName(value: String?): String =
+    if (isUnknownArtistTag(value)) UNKNOWN_ARTIST_LABEL else value!!.trim()
+
+/** 旧版无标签曲目按 `unknown-album:<songId>` 拆成独立专辑；用于启动时迁移合并表。 */
+fun isLegacyUnknownAlbumKey(key: String): Boolean = key.startsWith("$UNKNOWN_ALBUM_ID::")
+
 fun isAudioFile(name: String): Boolean {
     val ext = name.substringAfterLast('.', "").lowercase()
     return ext in AUDIO_EXTENSIONS

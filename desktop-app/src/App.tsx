@@ -20,7 +20,8 @@ import {
 import { AddRootDialog } from "./components/AddRootDialog";
 import { AudiobooksView } from "./components/AudiobooksView";
 import { BooksView } from "./components/BooksView";
-import { HeadphonesIcon, MusicIcon, BookIcon, RefreshIcon, ServerIcon } from "./components/Icons";
+import { HeadphonesIcon, MusicIcon, BookIcon, RefreshIcon, RulesIcon, ServerIcon } from "./components/Icons";
+import { FeedRulesPanel } from "./components/FeedRulesPanel";
 import { MusicView } from "./components/MusicView";
 import { RelayPanel } from "./components/RelayPanel";
 import { PlayerBar } from "./components/Player";
@@ -62,6 +63,7 @@ export default function App() {
 
   const [player, setPlayer] = useState<PlayerState | null>(null);
   const [showRelay, setShowRelay] = useState(false);
+  const [showFeedRules, setShowFeedRules] = useState(false);
   const [playToken, setPlayToken] = useState(0);
 
   const showToast = useCallback((message: string) => setToast(message), []);
@@ -279,6 +281,9 @@ export default function App() {
                 扫描中 {total.total > 0 ? `${Math.min(total.scanned, total.total)} / ${total.total}` : "…"}
               </span>
             )}
+            <button className="btn ghost small" onClick={() => setShowFeedRules(true)}>
+              <RulesIcon width={15} height={15} /> 随机规则
+            </button>
             <button className="btn ghost small" onClick={() => setShowRelay(true)}>
               <ServerIcon width={15} height={15} /> 公网中继
             </button>
@@ -335,6 +340,10 @@ export default function App() {
 
       {showRelay && (
         <RelayPanel onClose={() => setShowRelay(false)} onToast={showToast} />
+      )}
+
+      {showFeedRules && (
+        <FeedRulesPanel onClose={() => setShowFeedRules(false)} onToast={showToast} />
       )}
 
       {pendingPath && (

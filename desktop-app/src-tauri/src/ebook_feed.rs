@@ -5,11 +5,13 @@
 //! ready at all times and hands out one chapter per book, so a vertical swipe
 //! can switch books without waiting for an EPUB parse.
 
-use crate::ebook_parse::{parse_epub, FeedChapter, ParsedBook};
+use crate::ebook_parse::{parse_epub, FeedBlock, FeedChapter, ParsedBook};
+use crate::feed_rules::{self, RuleEngine, DEFAULT_RULES};
 use anyhow::{anyhow, Result};
 use rand::seq::SliceRandom;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -19,6 +21,8 @@ use std::time::{Duration, Instant};
 const WINDOW_SIZE: usize = 3;
 const MEM_CACHE_BOOKS: usize = 6;
 const MIN_CHAPTER_CHARS: usize = 80;
+/// 每本书最多随机几次；全部被规则拒绝后交给调用方换一本书。
+const MAX_RANDOM_ATTEMPTS: usize = 5;
 /// 客户端没有发 close 就消失（进程被杀/快速退出）时，会话最多留这么久。
 const SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 
@@ -85,6 +89,8 @@ impl MemCache {
 
 pub struct FeedService {
     cache_dir: PathBuf,
+    rules_path: PathBuf,
+    rules: Mutex<String>,
     sessions: Mutex<HashMap<String, FeedSession>>,
     mem: Mutex<MemCache>,
 }
@@ -123,14 +129,49 @@ pub struct FeedChapterView {
 }
 
 impl FeedService {
-    pub fn new(cache_dir: PathBuf) -> Self {
+    pub fn new(cache_dir: PathBuf, data_dir: &Path) -> Self {
         let dir = cache_dir.join("ebook_feed");
         let _ = std::fs::create_dir_all(&dir);
+        let rules_path = data_dir.join("feed_rules.js");
+        let saved = std::fs::read_to_string(&rules_path)
+            .ok()
+            .filter(|script| feed_rules::validate(script).is_ok());
+        let script = match saved {
+            Some(script) => script,
+            None => {
+                let _ = std::fs::write(&rules_path, DEFAULT_RULES);
+                DEFAULT_RULES.to_string()
+            }
+        };
         FeedService {
             cache_dir: dir,
+            rules_path,
+            rules: Mutex::new(script),
             sessions: Mutex::new(HashMap::new()),
             mem: Mutex::new(MemCache::new()),
         }
+    }
+
+    pub fn rules(&self) -> String {
+        self.rules
+            .lock()
+            .map(|script| script.clone())
+            .unwrap_or_else(|_| DEFAULT_RULES.to_string())
+    }
+
+    /// Persists a user script after checking that it compiles and defines
+    /// `accept(ctx)`.  A broken script never replaces the last good one.
+    pub fn set_rules(&self, script: &str) -> Result<()> {
+        feed_rules::validate(script)?;
+        std::fs::write(&self.rules_path, script)?;
+        if let Ok(mut current) = self.rules.lock() {
+            *current = script.to_string();
+        }
+        Ok(())
+    }
+
+    pub fn reset_rules(&self) -> Result<()> {
+        self.set_rules(DEFAULT_RULES)
     }
 
     fn cache_key(path: &str) -> String {
@@ -210,13 +251,23 @@ impl FeedService {
         } else {
             candidates[rng.gen_range(0..candidates.len())]
         };
-        let blocks: Vec<usize> = book.chapters[chapter]
+        // 随机位置只落在正文段落上；标题块不是可读的起始位置。
+        let mut blocks: Vec<usize> = book.chapters[chapter]
             .blocks
             .iter()
             .enumerate()
-            .filter(|(_, b)| !b.text.trim().is_empty())
+            .filter(|(_, b)| b.level == 0 && !b.text.trim().is_empty())
             .map(|(i, _)| i)
             .collect();
+        if blocks.is_empty() {
+            blocks = book.chapters[chapter]
+                .blocks
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| !b.text.trim().is_empty())
+                .map(|(i, _)| i)
+                .collect();
+        }
         if blocks.is_empty() {
             return (chapter, 0, 0);
         }
@@ -226,16 +277,91 @@ impl FeedService {
         (chapter, block, char)
     }
 
+    /// The body paragraphs that belong to the heading section containing
+    /// `block`.  A chapter can hold several headings; rules such as "at least
+    /// ten paragraphs" must only look at the section the reader would see.
+    fn heading_blocks(blocks: &[FeedBlock], block: usize) -> (Vec<(usize, &str)>, usize) {
+        let block = block.min(blocks.len().saturating_sub(1));
+        let mut heading_start = 0usize;
+        let mut heading_level = 0u8;
+        for index in (0..=block).rev() {
+            if blocks[index].level > 0 {
+                heading_start = index + 1;
+                heading_level = blocks[index].level;
+                break;
+            }
+        }
+        let heading_end = blocks
+            .iter()
+            .enumerate()
+            .skip(heading_start)
+            .find(|(_, b)| b.level > 0 && (heading_level == 0 || b.level <= heading_level))
+            .map(|(index, _)| index)
+            .unwrap_or(blocks.len());
+        let paragraphs: Vec<(usize, &str)> = blocks[heading_start..heading_end]
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.level == 0 && !b.text.trim().is_empty())
+            .map(|(offset, b)| (heading_start + offset, b.text.as_str()))
+            .collect();
+        let picked = paragraphs
+            .iter()
+            .position(|(index, _)| *index == block)
+            .unwrap_or(0);
+        (paragraphs, picked)
+    }
+
+    fn rule_payload(book: &ParsedBook, chapter: usize, block: usize) -> serde_json::Value {
+        let chapter_data = &book.chapters[chapter];
+        let (heading_blocks, heading_index) = Self::heading_blocks(&chapter_data.blocks, block);
+        json!({
+            "book": {
+                "title": book.title,
+                "author": book.author,
+            },
+            "chapterIndex": chapter,
+            "chapterTitle": chapter_data.title,
+            "blockIndex": block,
+            "blocks": chapter_data
+                .blocks
+                .iter()
+                .enumerate()
+                .map(|(index, b)| json!({
+                    "index": index,
+                    "text": b.text,
+                    "level": b.level,
+                }))
+                .collect::<Vec<_>>(),
+            "headingBlocks": heading_blocks
+                .iter()
+                .map(|(index, text)| json!({ "index": index, "text": text }))
+                .collect::<Vec<_>>(),
+            "headingIndex": heading_index,
+            "headingParagraphs": heading_blocks.len(),
+        })
+    }
+
     fn make_item(&self, path: String) -> Option<FeedItem> {
         let book = self.load_book(&path).ok()?;
-        let (chapter, block, char) = Self::random_position(&book);
-        Some(FeedItem {
-            path,
-            book,
-            chapter,
-            block,
-            char,
-        })
+        let script = self.rules();
+        let mut engine = RuleEngine::new(&script)
+            .or_else(|_| RuleEngine::new(DEFAULT_RULES))
+            .ok()?;
+        // 同一本书最多随机 5 次；五次都被规则拒绝就换一本书。
+        for _ in 0..MAX_RANDOM_ATTEMPTS {
+            let (chapter, block, char) = Self::random_position(&book);
+            let payload = Self::rule_payload(&book, chapter, block);
+            if engine.accepts(&payload).unwrap_or(false) {
+                return Some(FeedItem {
+                    path,
+                    book,
+                    chapter,
+                    block,
+                    char,
+                });
+            }
+        }
+        None
     }
 
     fn make_resume_item(&self, resume: &FeedResume) -> Option<FeedItem> {
@@ -549,5 +675,40 @@ mod tests {
     fn cache_key_changes_with_metadata() {
         let a = FeedService::cache_key("/definitely/not/here.epub");
         assert_eq!(a.len(), 40);
+    }
+
+    #[test]
+    fn heading_blocks_only_cover_current_section() {
+        let blocks = vec![
+            FeedBlock {
+                text: "第一章".into(),
+                level: 1,
+            },
+            FeedBlock {
+                text: "一".into(),
+                level: 0,
+            },
+            FeedBlock {
+                text: "二".into(),
+                level: 0,
+            },
+            FeedBlock {
+                text: "第二节".into(),
+                level: 2,
+            },
+            FeedBlock {
+                text: "三".into(),
+                level: 0,
+            },
+        ];
+        // The h2 subsection still belongs to the h1 section.
+        let (paragraphs, picked) = FeedService::heading_blocks(&blocks, 2);
+        assert_eq!(paragraphs.len(), 3);
+        assert_eq!(picked, 1);
+        assert_eq!(paragraphs[1].1, "二");
+
+        let (paragraphs, picked) = FeedService::heading_blocks(&blocks, 4);
+        assert_eq!(paragraphs.len(), 1);
+        assert_eq!(picked, 0);
     }
 }

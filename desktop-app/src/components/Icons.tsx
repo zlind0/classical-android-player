@@ -120,6 +120,14 @@ export const CheckIcon = (props: IconProps) => (
   </svg>
 );
 
+export const RulesIcon = (props: IconProps) => (
+  <svg {...base(props)}>
+    <path d="M4 6h16M4 12h10M4 18h7" />
+    <circle cx="17" cy="12" r="2.5" />
+    <circle cx="13" cy="18" r="2.5" />
+  </svg>
+);
+
 export const ServerIcon = (props: IconProps) => (
   <svg {...base(props)}>
     <rect x="3" y="4" width="18" height="7" rx="2" />

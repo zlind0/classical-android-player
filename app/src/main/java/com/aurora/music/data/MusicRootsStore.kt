@@ -89,9 +89,10 @@ class MusicRootsStore(
         val rows = filesDao.allTrackRows()
         _trackRows.value = rows.groupBy({ it.rootId }, { it.toScanned() })
         rebuildCache()
-        // merges 为空（升级重建表/新库）→ 纯内存全量重算一次，无 IO
+        // merges 为空（升级重建表/新库）或残留旧版“每首未知专辑独立 key”时，
+        // 纯内存全量重算一次，让未知专辑的合并表与新归一键对齐
         val stored = filesDao.allMerges()
-        if (stored.isEmpty() && rows.isNotEmpty()) {
+        if ((stored.isEmpty() && rows.isNotEmpty()) || stored.any { isLegacyUnknownAlbumKey(it.albumId) }) {
             recomputeMerges()
         } else {
             _fileMerges.value = stored.associate { it.albumId to parseMergeJson(it.rowsJson) }
@@ -238,11 +239,12 @@ class MusicRootsStore(
         val availSongs = cachedSongs.filter { it.available }
         cachedAlbums = availSongs.groupBy { it.albumId }
             .map { (aid, ts) ->
-                // 展示标题只认 ID3：取出现最多的原始专辑名，无标签显示 Unknown album，不用目录名
-                val title = ts.groupingBy { it.album }.eachCount().maxByOrNull { it.value }?.key.orEmpty()
+                // 展示标题只认 ID3：取出现最多的原始专辑名，无标签统一显示 Unknown album，不用目录名
+                val title = ts.groupingBy { albumDisplayName(it.album) }.eachCount().maxByOrNull { it.value }?.key
+                    ?: UNKNOWN_ALBUM_LABEL
                 Album(
                     id = aid,
-                    title = title.ifBlank { "Unknown album" },
+                    title = title,
                     artist = ts.map { it.artist }.distinct().let { if (it.size == 1) it.first() else "Various artists" },
                     artworkUrl = covers[aid].orEmpty(),
                     year = 0,
@@ -255,7 +257,7 @@ class MusicRootsStore(
             .map { (aid, ts) ->
                 Artist(
                     id = aid,
-                    name = ts.first().artist.ifBlank { "Unknown artist" },
+                    name = artistDisplayName(ts.first().artist),
                     imageUrl = ts.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl.orEmpty(),
                     monthlyListeners = 0,
                 )
@@ -269,7 +271,7 @@ class MusicRootsStore(
      * 目录只用于找图，不参与分类。
      */
     private fun albumCovers(rows: List<ScannedTrack>): Map<String, String> =
-        rows.groupBy { fileAlbumKey(it.album, "file:${it.path}") }.mapValues { (aid, rs) ->
+        rows.groupBy { fileAlbumKey(it.album) }.mapValues { (aid, rs) ->
             val ordered = rs.sortedBy { it.path.lowercase() }
             val withArt = ordered.filter { it.artMd5.isNotBlank() }
             if (withArt.isNotEmpty()) {
@@ -289,9 +291,8 @@ class MusicRootsStore(
      * 展示层直读缓存 URI，不预检存在。
      */
     private fun resolveArtwork(row: ScannedTrack, covers: Map<String, String>): String {
-    val id = "file:${row.path}"
-    if (row.artMd5.isNotBlank()) return TrackArtworkCache.contentUri(context, row.artMd5)
-        val albumArt = covers[fileAlbumKey(row.album, id)]
+        if (row.artMd5.isNotBlank()) return TrackArtworkCache.contentUri(context, row.artMd5)
+        val albumArt = covers[fileAlbumKey(row.album)]
         if (!albumArt.isNullOrBlank()) return albumArt
         return row.artworkUrl
     }
@@ -320,7 +321,7 @@ class MusicRootsStore(
         val enabled = _roots.value.filter { it.enabled }.map { it.id }.toSet()
         val rows = _trackRows.value.filterKeys { it in enabled }.values.flatten()
         val merges = rows.sortedBy { it.path.lowercase() }
-            .groupBy { fileAlbumKey(it.album, "file:${it.path}") }
+            .groupBy { fileAlbumKey(it.album) }
             .map { (aid, rs) -> FileMerge(aid, buildMergeJson(rs.map { it.toSong() })) }
         filesDao.replaceMerges(merges)
         _fileMerges.value = merges.associate { it.albumId to parseMergeJson(it.rowsJson) }
@@ -383,32 +384,29 @@ fun fileTracksSorted(tracks: List<ScannedTrack>): List<ScannedTrack> =
 /**
  * 文件栈归一专辑 key：严格按 ID3 专辑名归一（跨文件夹同名即同专辑，
  * 与 MediaStore 栈一致；代价：撞名的不同专辑会被并到一起）。
- * 不用任何文件夹信息：无专辑标签的文件每首独立成专（unique key），
- * 绝不把同目录下的不同专辑并到一起。
+ * 无标签或未知占位统一归到 [UNKNOWN_ALBUM_ID]，不按目录/文件拆分。
  */
-fun fileAlbumKey(title: String, songId: String): String {
-    val t = title.trim()
-    return if (t.isEmpty()) "unknown-album::$songId" else "album::" + t.lowercase()
-}
+fun fileAlbumKey(title: String): String =
+    if (isUnknownAlbumTag(title)) UNKNOWN_ALBUM_ID else "album::" + title.trim().lowercase()
 
-/** 艺人 key：严格按 ID3 艺人名；无标签每首独立，不合并“未知艺人”。 */
-fun fileArtistKey(artist: String, songId: String): String {
-    val t = artist.trim()
-    return if (t.isEmpty()) "unknown-artist::$songId" else t
-}
+/** 艺人 key：严格按 ID3 艺人名；无标签或未知占位统一归到 [UNKNOWN_ARTIST_ID]。 */
+fun fileArtistKey(artist: String): String =
+    if (isUnknownArtistTag(artist)) UNKNOWN_ARTIST_ID else artist.trim()
 
 private fun albumsOf(
     rootId: Long,
     tracks: List<ScannedTrack>,
     covers: Map<String, String>,
 ): List<FileAlbum> =
-    fileTracksSorted(tracks).groupBy { fileAlbumKey(it.album, "file:${it.path}") }.map { (aid, rows) ->
+    fileTracksSorted(tracks).groupBy { fileAlbumKey(it.album) }.map { (aid, rows) ->
         val first = rows.first()
         FileAlbum(
             rootId = rootId,
             albumId = aid,
-            title = first.album.ifBlank { "Unknown album" },
-            artist = rows.map { it.artist }.distinct().let { if (it.size == 1) it.first() else "Various artists" },
+            title = albumDisplayName(first.album),
+            artist = rows.map { artistDisplayName(it.artist) }.distinct().let {
+                if (it.size == 1) it.first() else "Various artists"
+            },
             artworkUrl = covers[aid].orEmpty(),
             songCount = rows.size,
             durationSec = rows.sumOf { it.durationSec },
@@ -435,15 +433,15 @@ fun ScannedTrack.toSong(): Song {
     return Song(
         id = id,
         title = title.ifBlank { fileName.substringBeforeLast('.') },
-        artist = artist,
-        album = album,
+        artist = artistDisplayName(artist),
+        album = albumDisplayName(album),
         artworkUrl = artworkUrl,
         durationSec = durationSec,
         // 查询时不做 File.exists() 预检（大库下是全表 stat 风暴）；
         // 文件真没了由播放报错时标 unavailable + 跳过
         streamUrl = android.net.Uri.fromFile(File(path)).toString(),
-        albumId = fileAlbumKey(album, id),
-        artistId = fileArtistKey(artist, id),
+        albumId = fileAlbumKey(album),
+        artistId = fileArtistKey(artist),
         suffix = fileName.substringAfterLast('.', ""),
         path = path,
         accent = accentFor(path),

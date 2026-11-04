@@ -39,6 +39,7 @@ base64 = "0.22"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 rand = "0.8"
 async-trait = "0.1"
+boa_engine = { version = "0.20", default-features = false }
 
 [profile.release]
 codegen-units = 1
