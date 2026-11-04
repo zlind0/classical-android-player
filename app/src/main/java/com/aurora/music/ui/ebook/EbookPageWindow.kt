@@ -514,6 +514,17 @@ fun rememberPageWindow(
     LaunchedEffect(center, breaksSig, key, bookKey) {
         if (key == null || heightPx <= 100) return@LaunchedEffect
         val known = win.knownChapters()
+        // 从 FeedPageCache 恢复的断点只有分页结果、没有正文块。若此时 book 里
+        // 该章还没缓存，PageView 会拿到空 blocks + 非空 slices，整页空白
+        // （深色主题下就是黑屏）。先把窗口内各章的正文补上。
+        if (chapterLoader != null) {
+            for (c in known) {
+                if (win.chapterBlocks[c] == null) {
+                    val blocks = chapterLoader.invoke(c)
+                    if (blocks != null && blocks.isNotEmpty()) win.chapterBlocks[c] = blocks
+                }
+            }
+        }
         val firstCh = known.minOrNull() ?: center.chapter
         val lastCh = known.maxOrNull() ?: center.chapter
         val ahead = (1..prefetchChapters).map { lastCh + it }.filter { it < book.chapters.size }

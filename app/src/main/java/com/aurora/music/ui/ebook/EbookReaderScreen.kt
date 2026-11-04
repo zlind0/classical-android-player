@@ -977,18 +977,27 @@ internal fun ReaderBody(
                                 }
                             } else {
                                 val (c, p) = rendered.id
-                                PageView(
-                                    blocks = win.blocksFor(c) ?: book.chapters[c].blocks,
-                                    slices = rendered.slices,
-                                    prefs = prefs,
-                                    fontFamily = fontFamily,
-                                    ink = th.ink,
-                                    linkColor = linkColor,
-                                    onLinkClick = { tag -> handleLink(tag) },
-                                    highlightBlock = ttsPos?.takeIf { it.chapter == c }?.block,
-                                    highlightFrom = ttsPos?.takeIf { it.chapter == c }?.startChar ?: 0,
-                                    highlightTo = ttsPos?.takeIf { it.chapter == c }?.endChar ?: Int.MAX_VALUE,
-                                )
+                                val blocks = win.blocksFor(c) ?: book.chapters[c].blocks
+                                if (blocks.isEmpty()) {
+                                    // 分页结果还在、正文块没到（例如从 FeedPageCache 恢复）：
+                                    // 先显示 loader，别让 PageView 拿空 blocks 画出一整页空白。
+                                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                        LottieLoader(modifier = Modifier.size(64.dp))
+                                    }
+                                } else {
+                                    PageView(
+                                        blocks = blocks,
+                                        slices = rendered.slices,
+                                        prefs = prefs,
+                                        fontFamily = fontFamily,
+                                        ink = th.ink,
+                                        linkColor = linkColor,
+                                        onLinkClick = { tag -> handleLink(tag) },
+                                        highlightBlock = ttsPos?.takeIf { it.chapter == c }?.block,
+                                        highlightFrom = ttsPos?.takeIf { it.chapter == c }?.startChar ?: 0,
+                                        highlightTo = ttsPos?.takeIf { it.chapter == c }?.endChar ?: Int.MAX_VALUE,
+                                    )
+                                }
                             }
                         }
                 }

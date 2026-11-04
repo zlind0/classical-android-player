@@ -132,8 +132,9 @@ fun RandomReaderScreen(
                 if (source != NestedScrollSource.UserInput && source != NestedScrollSource.SideEffect) {
                     return Offset.Zero
                 }
-                if (available.y > 0f && !directionGuard.canNext) return Offset(0f, available.y)
-                if (available.y < 0f && !directionGuard.canPrevious) return Offset(0f, available.y)
+                // VerticalPager 里上滑（下一本）的 available.y 是负的，下滑是正的。
+                if (available.y < 0f && !directionGuard.canNext) return Offset(0f, available.y)
+                if (available.y > 0f && !directionGuard.canPrevious) return Offset(0f, available.y)
                 return Offset.Zero
             }
         }
@@ -394,6 +395,11 @@ fun RandomReaderScreen(
         }
         if (direction > 0 && !manager.state.value.canNext) {
             showToast("没有更多随机书了")
+            scope.launch { runCatching { pager.scrollToPage(1) } }
+            return
+        }
+        if (direction < 0 && manager.state.value.previous == null) {
+            // 还没有上一本：别把请求送进 turn 再弹失败提示，直接回正。
             scope.launch { runCatching { pager.scrollToPage(1) } }
             return
         }
