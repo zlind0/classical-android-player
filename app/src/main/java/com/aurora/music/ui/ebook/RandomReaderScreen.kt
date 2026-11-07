@@ -549,6 +549,11 @@ fun RandomReaderScreen(
 
     DisposableEffect(Unit) {
         onDispose {
+            // Activity 被重建（锁屏后回收、解锁恢复）时也要把“耳朵”最新位置先写进恢复点：
+            // 锁屏期间 ttsPosition 走 collectAsStateWithLifecycle，UI 在 STOPPED 不更新，
+            // ON_PAUSE 存的只是熄屏那一刻。这里直接读控制器的当前值，放在 manager.close()
+            // 清空 state 之前，避免解锁恢复时回到熄屏前的旧页/旧章。
+            persistResume()
             // 退出随机阅读时清掉远程书目：通知栏不该停留在没有会话的随机书上。
             switchPipe.closed = true
             switchPipe.queue.clear()

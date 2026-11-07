@@ -336,22 +336,27 @@ class PageWindow(val chapterCount: Int, initial: GlobalPage) {
         return true
     }
 
-    /** 按块跳：先 ensure 再定位（调用方已先落盘块锚点，不等分页）。 */
+    /**
+     * 按块跳：先 ensure 再定位（调用方已先落盘块锚点，不等分页）。
+     * 该章还没排出页时返回 false 且**不动 center**：绝不能退回第 0 页。
+     * 冷启动/Activity 重建时布局高度还没量到，paginateChapter 会短暂失败；
+     * 若此时按章首落定，调用方还会把它当成“新进度”写回 DB，解锁后就永远停在本章开头。
+     */
     suspend fun jumpToBlock(chapter: Int, block: Int): Boolean {
         if (chapter !in 0 until chapterCount) return false
         paginateChapter?.invoke(chapter)
         val pages = breaks[chapter]?.filter { it.isNotEmpty() }.orEmpty()
-        val p = if (pages.isEmpty()) 0 else pageForBlock(pages, block)
-        return jumpTo(GlobalPage(chapter, p))
+        if (pages.isEmpty()) return false
+        return jumpTo(GlobalPage(chapter, pageForBlock(pages, block)))
     }
 
-    /** TTS 跟读：同一调用跨章，按 (block, char) 精确定位。 */
+    /** TTS 跟读：同一调用跨章，按 (block, char) 精确定位；该章未排好时同样返回 false 不跳。 */
     suspend fun jumpToChar(chapter: Int, block: Int, char: Int): Boolean {
         if (chapter !in 0 until chapterCount) return false
         paginateChapter?.invoke(chapter)
         val pages = breaks[chapter]?.filter { it.isNotEmpty() }.orEmpty()
-        val p = if (pages.isEmpty()) 0 else pageForChar(pages, block, char)
-        return jumpTo(GlobalPage(chapter, p))
+        if (pages.isEmpty()) return false
+        return jumpTo(GlobalPage(chapter, pageForChar(pages, block, char)))
     }
 }
 
@@ -416,16 +421,29 @@ fun rememberPageWindow(
         else "mem@${prefs.fontSizeSp.toInt()}x${prefs.fontPath.hashCode()}@${widthPx}x$heightPx"
     }
 
-    val win = remember(bookKey, key) {
+    // 最近一次真正读到的位置（页 + 页首块/字）。
+    // 窗口会因屏幕高度变化（锁屏解锁时系统栏进出、旋转、改字号/字体）按 (bookKey, key) 重建；
+    // 重建时必须从“当前读到哪”续，不能用打开这本书时的 initial/anchor ——
+    // 那是**进入阅读页那一刻**的位置，通常会退回本章开头。
+    val lastCenter = remember(bookKey) { mutableStateOf<GlobalPage?>(null) }
+    val lastAnchor = remember(bookKey) { mutableStateOf<Pair<Int, Int>?>(null) }
+
+    val windowSeed = remember(bookKey, key) {
+        val prev = lastCenter.value
+        val seed = (prev ?: initial).let {
+            it.copy(
+                chapter = it.chapter.coerceIn(0, (book.chapters.size - 1).coerceAtLeast(0)),
+                page = it.page.coerceAtLeast(0),
+            )
+        }
+        // 首次建窗用 DB/调用方给的锚点；重建时用上一扇窗最后读到的块/字（按新布局重新换算成页）。
+        val anchor = lastAnchor.value ?: (anchorBlock to anchorChar)
         PageWindow(
             chapterCount = book.chapters.size,
-            initial = initial.copy(
-                chapter = initial.chapter.coerceIn(0, (book.chapters.size - 1).coerceAtLeast(0)),
-                page = initial.page.coerceAtLeast(0),
-            ),
+            initial = seed,
         ).also { w ->
             // 有块/字锚点时，先别渲染第 0 页，等锚点换算成页后再显示，避免“先跳章首再跳回”。
-            w.anchorPending = anchorBlock > 0 || anchorChar > 0
+            w.anchorPending = anchor.first > 0 || anchor.second > 0
             // 随机阅读：相邻页已经按同一布局排过一遍，换成当前页时直接复用，
             // 避免翻页落定的那一帧闪一下 loader。
             if (!persistPages && key != null) {
@@ -433,21 +451,32 @@ fun rememberPageWindow(
                     w.breaks.putAll(cached)
                     w.fullRewrite()
                     // 相邻页已经排过：直接落到锚点页，避免新当前页先显示章首再跳回来。
-                    if (anchorBlock > 0 || anchorChar > 0) {
+                    if (anchor.first > 0 || anchor.second > 0) {
                         val pages = cached[w.center.chapter]?.filter { it.isNotEmpty() }.orEmpty()
                         if (pages.isNotEmpty()) {
-                            w.jumpTo(GlobalPage(w.center.chapter, pageForChar(pages, anchorBlock, anchorChar)))
+                            w.jumpTo(GlobalPage(w.center.chapter, pageForChar(pages, anchor.first, anchor.second)))
                         }
                     }
                     w.anchorPending = false
                 }
             }
-        }
+        } to anchor
     }
+    val win = windowSeed.first
+    val windowAnchor = windowSeed.second
     var cacheBase by remember(bookKey) { mutableStateOf<Map<Int, List<List<PageSlice>>>>(emptyMap()) }
     var cacheKey by remember(bookKey) { mutableStateOf<String?>(null) }
     var bookMd5 by remember(bookKey) { mutableStateOf("") }
-    var anchorApplied by remember(bookKey, key) { mutableStateOf(anchorBlock <= 0 && anchorChar <= 0) }
+    var anchorApplied by remember(bookKey, key) {
+        mutableStateOf(windowAnchor.first <= 0 && windowAnchor.second <= 0)
+    }
+    // 只记录“已落定”的位置：锚点换算完成前 slotAt 为 null，不能把第 0 页当成最新位置。
+    LaunchedEffect(win.center, win.slotAt(PAGE_WINDOW_CENTER)) {
+        lastCenter.value = win.center
+        win.slotAt(PAGE_WINDOW_CENTER)?.slices?.firstOrNull()?.let {
+            lastAnchor.value = it.block.coerceAtLeast(0) to it.start.coerceAtLeast(0)
+        }
+    }
     // 落盘串行化：预排循环与跳转并发写全书 JSON 时不互相覆盖丢章
     val saveMutex = remember(bookKey) { Mutex() }
 
@@ -544,12 +573,14 @@ fun rememberPageWindow(
         if (cnt > 0 && center.page >= cnt) {
             win.jumpTo(GlobalPage(center.chapter, cnt - 1))
         }
-        // DB 块/字锚点（恢复优先级高于存的页码）：首章排好后一次性推导
-        if (!anchorApplied && (anchorBlock > 0 || anchorChar > 0)) {
+        // 块/字锚点（恢复优先级高于存的页码）：首章排好后一次性推导。
+        // 首次建窗用 DB 锚点；因高度/字号变化重建时用上一扇窗最后读到的锚点，
+        // 避免把“进书时”的旧锚点当成当前位置重新应用。
+        if (!anchorApplied && (windowAnchor.first > 0 || windowAnchor.second > 0)) {
             val pages = win.breaks[center.chapter]?.filter { it.isNotEmpty() }.orEmpty()
             if (pages.isNotEmpty()) {
                 anchorApplied = true
-                val p = pageForChar(pages, anchorBlock, anchorChar)
+                val p = pageForChar(pages, windowAnchor.first, windowAnchor.second)
                     .coerceIn(0, (pages.size - 1).coerceAtLeast(0))
                 if (p != center.page) win.jumpTo(GlobalPage(center.chapter, p))
                 // 锚点已换算成页：解除“先不渲染”，一次性把 41 槽按新 center 重排。
