@@ -95,6 +95,7 @@ fun RandomReaderScreen(
     val prefs by container.ebookPrefs.prefs.collectAsStateWithLifecycle()
     val feedImages by container.ebookPrefs.feedImages.collectAsStateWithLifecycle()
     val feedCacheSize by container.ebookPrefs.feedCacheSize.collectAsStateWithLifecycle()
+    val feedResume by container.ebookPrefs.feedResume.collectAsStateWithLifecycle()
     val chapterVersion by manager.chapterVersion.collectAsStateWithLifecycle()
     val ttsPlaying by tts.playing.collectAsStateWithLifecycle()
     val ttsPosition by tts.position.collectAsStateWithLifecycle()
@@ -201,8 +202,26 @@ fun RandomReaderScreen(
                 chapter = chapter,
                 block = block,
                 char = char,
+                at = System.currentTimeMillis(),
             ),
         )
+    }
+
+    /**
+     * 锁屏朗读后回到前台：控制器在后台按单位推进了 feed 恢复点，而阅读页的“眼睛”
+     * 还冻在熄屏那一刻。这里把窗口补到恢复点，避免解锁后仍显示锁屏前的旧页。
+     */
+    fun applyFeedResume() {
+        val b = manager.state.value.current ?: return
+        val r = container.ebookPrefs.feedResume.value
+        if (r.path != b.path) return
+        val (c, bl, ch) = currentPosition(b)
+        val ahead = r.chapter > c ||
+            (r.chapter == c && (r.block > bl || (r.block == bl && r.char > ch)))
+        if (!ahead) return
+        manager.rememberPosition(b.path, r.chapter, r.block, r.char)
+        jumpGen += 1
+        pendingJump = BlockJump(r.chapter, r.block, r.char, jumpGen)
     }
 
     fun showToast(message: String) {
@@ -593,6 +612,13 @@ fun RandomReaderScreen(
     LaunchedEffect(state.canNext, state.previous) {
         directionGuard.canNext = state.canNext
         directionGuard.canPrevious = state.previous != null
+    }
+
+    // 解锁/回前台且朗读已停：按后台推进的 feed 恢复点补一次窗口位置。
+    // 朗读中不在这里抢：页面跟读由 ReaderBody 的 turnRequest 负责。
+    LaunchedEffect(feedResume, currentBook?.path, ttsPlaying) {
+        if (ttsPlaying) return@LaunchedEffect
+        applyFeedResume()
     }
 
     if (currentBook == null) {

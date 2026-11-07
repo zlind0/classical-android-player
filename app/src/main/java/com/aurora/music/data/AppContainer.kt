@@ -338,6 +338,16 @@ class AppContainer(context: Context) {
         it.player = ebookTtsPlayer
         it.tts = ttsWorker
         it.store = ebookStore
+        // 随机阅读不走本地进度库：TTS 每推进一个单位就在这里落一次 feed 恢复点。
+        // 放在 App 作用域而不是阅读页，Activity 被销毁/重建也不会停止记录。
+        it.onProgress = { p ->
+            val resume = ebookPrefs.feedResume.value
+            if (resume.path.isNotBlank() && resume.path == p.path) {
+                ebookPrefs.saveFeedResume(
+                    resume.copy(chapter = p.chapter, block = p.block, char = p.char, at = p.at),
+                )
+            }
+        }
         it.sleep = sleepTimer
         sleepTimer.primaryActive = { runCatching { it.playing.value }.getOrDefault(false) }
         songIntro.tts = ttsWorker

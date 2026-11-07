@@ -41,6 +41,8 @@ data class EbookFeedResume(
     val chapter: Int = 0,
     val block: Int = 0,
     val char: Int = 0,
+    /** 该位置被观测到的时刻：避免 UI 的旧快照覆盖 TTS 后台推进的新位置。 */
+    val at: Long = 0L,
 )
 
 // 阅读设置：页面风格 / 字体 / 字号。复用 DataStore 模式，与音乐设置互相独立。
@@ -297,10 +299,20 @@ class EbookPrefs(context: Context) {
         }
     }
 
-    /** 记住随机阅读最后停下的位置，下次进入优先恢复。 */
+    /**
+     * 记住随机阅读最后停下的位置，下次进入优先恢复。
+     * 带单调保护：同一本书里比已存位置更旧的快照直接丢弃——锁屏朗读时控制器在后台
+     * 按单位推进恢复点，而 UI 在 STOPPED/RESUMED 时可能补写一个更旧的“眼睛”位置。
+     */
     fun saveFeedResume(resume: EbookFeedResume) {
         scope.launch {
-            appContext.ebookReadDataStore.edit { it[Keys.FEED_RESUME] = gson.toJson(resume) }
+            appContext.ebookReadDataStore.edit { prefs ->
+                val old = prefs[Keys.FEED_RESUME]?.let { json ->
+                    runCatching { gson.fromJson(json, EbookFeedResume::class.java) }.getOrNull()
+                }
+                if (old != null && old.path == resume.path && old.at > resume.at) return@edit
+                prefs[Keys.FEED_RESUME] = gson.toJson(resume)
+            }
         }
     }
 

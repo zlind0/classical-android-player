@@ -107,6 +107,29 @@ class EbookTtsController(context: Context) {
      */
     @Volatile var positionAt: Long = 0L
 
+    /** 某个朗读单位被观测到的完整进度（含书路径与时刻），用于跨 UI 生命周期持久化。 */
+    data class Progress(
+        val path: String,
+        val chapter: Int,
+        val block: Int,
+        val char: Int,
+        val at: Long,
+    )
+
+    /**
+     * 最后一次推进到的进度。和 [position] 不同，**停止朗读后仍然保留**：
+     * 锁屏里暂停再解锁时 UI 拿不到 position，但还需要知道“刚才停在哪”。
+     */
+    @Volatile var lastProgress: Progress? = null
+        private set
+
+    /**
+     * 每推进一个朗读单位（以及停止时）都会回调。App 作用域注入，
+     * 不依赖阅读页是否在前台/Activity 是否还活着，用于随机阅读这类
+     * 不走本地 DB 的场景把恢复点真正按单位落盘。
+     */
+    @Volatile var onProgress: ((Progress) -> Unit)? = null
+
     /** 当前朗读位置所在的目录标题（目录页 currentEntry 同口径，供通知栏作者栏；无目录时为空，由调用方回退书名）。 */
     private val _sectionTitle = MutableStateFlow("")
     val sectionTitle: StateFlow<String> = _sectionTitle.asStateFlow()
@@ -349,10 +372,14 @@ class EbookTtsController(context: Context) {
         // 下次打开靠这里的 DB 行。
         val cur = _position.value
         val bp = bookPath
-        if (savePos && persistProgress && cur != null && bp.isNotBlank()) {
+        if (savePos && cur != null && bp.isNotBlank()) {
             // 停在哪就按它被推进的那一刻落盘：比这更新的位置（用户手动翻页/后台已推进）不会被这次停播洗掉
             val at = positionAt.takeIf { it > 0 } ?: System.currentTimeMillis()
-            store?.saveTtsPos(bp, cur.chapter, cur.block, cur.startChar, at)
+            val prog = Progress(bp, cur.chapter, cur.block, cur.startChar, at)
+            lastProgress = prog
+            onProgress?.invoke(prog)
+            // 本地书库写 DB；随机阅读 persistProgress=false，只走上面的 onProgress。
+            if (persistProgress) store?.saveTtsPos(bp, cur.chapter, cur.block, cur.startChar, at)
         }
         // 用户亲手停：先通知服务快照并暂停音乐（此刻 playing/position 还在，服务能判断双播）。
         if (userInitiated) runCatching { onUserStop?.invoke() }
@@ -479,6 +506,11 @@ class EbookTtsController(context: Context) {
                 // 每推进一段/一句就直存章/块/字：锁屏后 UI 没了、pager 动不了时靠这行续命。
                 // 带观测时间戳，比它更旧的快照（比如阅读页手里冻结的旧位置）落盘时会被 DB 丢弃。
                 store?.takeIf { persistProgress }?.saveTtsPos(bookPath, para.chapter, para.block, para.startChar, seenAt)
+                // 跨 UI/Activity 生命周期的统一进度回调（随机阅读靠它按单位写恢复点；
+                // 本地书库另有上面的 DB 直写）。
+                val prog = Progress(bookPath, para.chapter, para.block, para.startChar, seenAt)
+                lastProgress = prog
+                onProgress?.invoke(prog)
                 if (first && movePage || !first) _turn.value = Triple(para.chapter, para.block, para.startChar)
                 first = false
                 // 每段现读一次设置：音量/语速等滑杆下一段即生效，不用停播重进

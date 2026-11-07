@@ -320,6 +320,17 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
                 (row?.pageIndex ?: 0).coerceAtLeast(0),
             )
             container.ebookTts.setBook(store.md5Of(bookPath), p, bookPath)
+            // Activity 重建（锁屏被回收/解锁）时，控制器在后台按单位推进的进度可能
+            // 还没落进 DB（persistProgress=false 的随机阅读、或 IO 尚未完成）。
+            // 内存里的 lastProgress 比 DB 新就以它为准。
+            container.ebookTts.lastProgress
+                ?.takeIf { it.path == bookPath && it.at > initAt }
+                ?.let { lp ->
+                    initPage = GlobalPage(lp.chapter, 0)
+                    initBlock = lp.block
+                    initChar = lp.char
+                    initAt = lp.at
+                }
             // 网页立刻落到“上次读到的地方”：不等分页完成，避免大书先在网页上闪一下第 1 章
             container.ebookCast.setReaderAnchor(
                 EbookCastAnchor(initPage.chapter, initBlock, initChar),
@@ -332,7 +343,13 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
     // 避免 TTS 耳朵位置后写覆盖用户手动翻到的章节。
     DisposableEffect(bookPath) {
         onDispose {
-            container.ebookTts.stop(savePos = false)
+            // Activity 被系统重建/回收（锁屏解锁、配置变化）时不要停朗读：
+            // 播放与进度都在 App 作用域，控制器的 onProgress 会继续按单位落盘；
+            // 解锁后 Activity 重建再从 DB/SavedState 恢复。用户主动离开阅读页才停。
+            val activity = context as? Activity
+            val systemRecreating = activity != null && !activity.isFinishing &&
+                (activity.isChangingConfigurations || activity.isDestroyed)
+            if (!systemRecreating) container.ebookTts.stop(savePos = false)
             // 离开阅读页即退出遥控/HDMI 投屏，并把方向交回手机（网页服务常驻，不关）
             cast.stop()
         }
@@ -689,30 +706,37 @@ internal fun ReaderBody(
         suspend fun pullForwardFromDb(): Boolean {
             if (!persistPages) return false
             val row = store.bookByPath(bookPath) ?: return false
+            // 内存里的朗读进度可能比 DB 新（IO 尚未落地/被单调保护短暂拒绝）。
+            // 锁屏暂停后解锁就靠它把窗口补到“真正停下的地方”。
+            val live = tts.lastProgress
+                ?.takeIf { it.path == bookPath && it.at > row.lastReadAt }
+            val tSpine = live?.chapter ?: row.spineIndex
+            val tBlock = live?.block ?: row.blockIndex
+            val tChar = live?.char ?: row.charOffset
             // 目标章还没分页（Activity 重建后布局高度/分页缓存尚未就绪）：先别抢跑。
             // 此时 jumpToChar 若退回第 0 页，下面还会把“章首”当成新进度写回 DB，
             // 解锁后就会永远停在本章开头。窗口自身会按 DB 锚点（rememberPageWindow）
             // 在分页就绪后落到正确页，这里直接跳过即可。
-            if (!hasPages(breaks, row.spineIndex)) {
-                win.paginateChapter?.invoke(row.spineIndex)
-                if (!hasPages(breaks, row.spineIndex)) return false
+            if (!hasPages(breaks, tSpine)) {
+                win.paginateChapter?.invoke(tSpine)
+                if (!hasPages(breaks, tSpine)) return false
             }
             val cur = win.center
             val curSl = breaks[cur.chapter]?.filter { it.isNotEmpty() }?.getOrNull(cur.page)?.firstOrNull()
             val ahead = cmpAnchor(
-                row.spineIndex, row.blockIndex, row.charOffset,
+                tSpine, tBlock, tChar,
                 cur.chapter, curSl?.block ?: 0, curSl?.start ?: 0,
             ) > 0
             if (!ahead) return false
-            if (!win.jumpToChar(row.spineIndex, row.blockIndex, row.charOffset)) return false
+            if (!win.jumpToChar(tSpine, tBlock, tChar)) return false
             // 眼睛此刻真的被更新到这里了：落盘时间戳要跟着走，否则会被 DB 当旧快照丢弃。
-            // 用 DB 里的精确块/字锚点回写（而不是页首块），否则同一页内的朗读字偏移会丢。
+            // 用精确的块/字锚点回写（而不是页首块），否则同一页内的朗读字偏移会丢。
             eyeAt = System.currentTimeMillis()
-            val pages = breaks[row.spineIndex]?.filter { it.isNotEmpty() }.orEmpty()
-            val page = pageForChar(pages, row.blockIndex, row.charOffset)
-            val chars = charsBeforeChapter(row.spineIndex) + charsOfPage(book, row.spineIndex, pages, page)
+            val pages = breaks[tSpine]?.filter { it.isNotEmpty() }.orEmpty()
+            val page = pageForChar(pages, tBlock, tChar)
+            val chars = charsBeforeChapter(tSpine) + charsOfPage(book, tSpine, pages, page)
             store.saveReadingPos(
-                bookPath, row.spineIndex, page, row.blockIndex, row.charOffset,
+                bookPath, tSpine, page, tBlock, tChar,
                 (chars.toFloat() / totalChars).coerceIn(0f, 1f), eyeAt,
             )
             return true
