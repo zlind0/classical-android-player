@@ -183,7 +183,14 @@ class EbookStore(context: Context, private val dao: EbookDao) {
         val md5 = row?.md5?.ifBlank { null } ?: fingerprintOf(file).ifBlank { null }
         if (md5 != null) {
             val cached = readParsedCache(md5)
-            if (cached != null) return@withContext cached
+            if (cached != null) {
+                // 解析缓存是按内容（md5）共享的：随机阅读的静默缓存可能已经替这本书
+                // 写好了 parsed 文件，但当时 registerIfMissing=false 没建 DB 行。
+                // 普通阅读若在这里直接返回，阅读进度全是 UPDATE 语句、永远命中 0 行，
+                // 退出再进就会回到章首。缓存命中也要把缺失的 DB 行补上。
+                if (row == null && registerIfMissing) registerBook(path, file, md5, cached)
+                return@withContext cached
+            }
         }
         val parsed = when (ebookFormatOf(path)) {
             EbookFormat.EPUB -> runCatching { EpubParser.parseFull(file) }.getOrNull()
@@ -193,21 +200,26 @@ class EbookStore(context: Context, private val dao: EbookDao) {
         } ?: return@withContext null
         if (md5 != null) writeParsedCache(md5, parsed)
         // 顺手补全 DB 元信息（文件夹浏览进来的书）；随机阅读的静默缓存不写库
-        if (row == null && registerIfMissing) {
-            val cover = extractCover(file, md5 ?: "")
-            dao.upsertBooks(
-                listOf(
-                    EbookRow(
-                        path = path, md5 = md5.orEmpty(), size = file.length(),
-                        lastModified = file.lastModified(),
-                        title = parsed.title, author = parsed.author, coverPath = cover,
-                        rootId = rootIdFor(path),
-                    ),
-                ),
-            )
-            refresh()
-        }
+        if (row == null && registerIfMissing) registerBook(path, file, md5.orEmpty(), parsed)
         parsed
+    }
+
+    /** 为已解析但库里没有的书补一行元信息；进度保存依赖这行存在（UPDATE 不会插入）。 */
+    private suspend fun registerBook(path: String, file: File, md5: String, parsed: ParsedEbook) {
+        // 并发打开同一本书时后到的一次不能盖掉已经写入的进度：再查一次，已有行就直接复用。
+        if (dao.bookByPath(path) != null) return
+        val cover = extractCover(file, md5)
+        dao.upsertBooks(
+            listOf(
+                EbookRow(
+                    path = path, md5 = md5, size = file.length(),
+                    lastModified = file.lastModified(),
+                    title = parsed.title, author = parsed.author, coverPath = cover,
+                    rootId = rootIdFor(path),
+                ),
+            ),
+        )
+        refresh()
     }
 
     private fun readParsedCache(md5: String): ParsedEbook? = runCatching {

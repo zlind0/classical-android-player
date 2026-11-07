@@ -71,6 +71,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -620,6 +621,14 @@ internal fun ReaderBody(
             store.saveReadingPos(bookPath, t.spine, t.page, t.block, t.char, t.pct, t.at)
         }
 
+        // 窗口会在首次测到高度/改字号时按 (bookKey, key) 重建。exit/onPause 的
+        // DisposableEffect 只按 bookPath 注册一次，若直接捕获当次 composition 的
+        // win/persist，退出的那一刻拿到的会是**第一个**窗口（还停在打开时的位置、
+        // breaks 甚至还没加载），于是把刚读到的页用当前时间戳盖回章首。
+        // 用 rememberUpdatedState 让这两个兜底 effect 永远读最新的窗口与落盘函数。
+        val latestWin = rememberUpdatedState(win)
+        val latestPersist = rememberUpdatedState<(GlobalPage) -> Unit> { gp -> persist(gp) }
+
         // 随机阅读：把眼睛当前位置（章 + 页首块/字）回给外层，切书/退出时作为恢复点。
         if (feed != null) {
             LaunchedEffect(win.center, win.slotAt(PAGE_WINDOW_CENTER)) {
@@ -666,7 +675,9 @@ internal fun ReaderBody(
         val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
         DisposableEffect(lifecycleOwner, bookPath) {
             val obs = androidx.lifecycle.LifecycleEventObserver { _, ev ->
-                if (ev == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) persist(win.center)
+                if (ev == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) {
+                    latestPersist.value(latestWin.value.center)
+                }
             }
             lifecycleOwner.lifecycle.addObserver(obs)
             onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
@@ -678,7 +689,7 @@ internal fun ReaderBody(
         DisposableEffect(bookPath) {
             onDispose {
                 if (lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
-                    persist(win.center)
+                    latestPersist.value(latestWin.value.center)
                 }
             }
         }

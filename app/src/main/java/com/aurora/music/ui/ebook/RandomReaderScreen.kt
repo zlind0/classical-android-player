@@ -262,11 +262,13 @@ fun RandomReaderScreen(
         }
     }
 
-    // 耳朵（TTS）推进时同步进内存位置表：锁屏/通知栏停止后仍能保存最后一次读到的位置。
+    // 耳朵（TTS）每前进一个单位（段落/句子）就落一次恢复点，而不是等停止/退出：
+    // 锁屏听书时进程被回收也能从最后读到的位置继续。
     LaunchedEffect(ttsPosition) {
         val p = ttsPosition ?: return@LaunchedEffect
         if (tts.bookPath == manager.state.value.current?.path) {
             manager.rememberPosition(tts.bookPath, p.chapter, p.block, p.startChar)
+            persistResume()
         }
     }
 
@@ -643,6 +645,8 @@ fun RandomReaderScreen(
         },
         onPositionChanged = { chapter, block, char ->
             manager.rememberPosition(currentBook.path, chapter, block, char)
+            // 每翻一页就落一次恢复点：不能只靠退出/停止时保存，进程被回收会丢页。
+            persistResume()
             // 始终记录眼睛位置：开始投屏时 start() 立刻用它定位大屏。
             // 只在投屏开启后才记录会让第一帧回退到空白的第 0 章。
             cast.setReaderAnchor(EbookCastAnchor(chapter, block, char))
