@@ -6,6 +6,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.aurora.music.data.AppContainer
+import com.aurora.music.data.ebook.EbookDebugLog
 import com.aurora.music.util.AppLocale
 
 class AuroraApplication : Application() {
@@ -18,6 +19,8 @@ class AuroraApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        EbookDebugLog.init(this)
+        EbookDebugLog.log("APP onCreate pid=${android.os.Process.myPid()}")
         container = AppContainer(this)
         // 切后台弹悬浮窗、回前台藏（播放前台服务不影响这里，只看 Activity 是否都在后台）
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {

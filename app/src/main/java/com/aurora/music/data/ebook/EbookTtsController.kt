@@ -206,6 +206,10 @@ class EbookTtsController(context: Context) {
     // ---- 书 ----
 
     fun setBook(md5: String, book: ParsedEbook, path: String = "", force: Boolean = false) {
+        EbookDebugLog.log(
+            "TTS setBook md5=${md5.take(8)} path=${path.substringAfterLast('/')} " +
+                "same=${bookMd5 == md5 && paras.isNotEmpty()} force=$force",
+        )
         if (!force && bookMd5 == md5 && paras.isNotEmpty()) {
             if (path.isNotBlank()) bookPath = path
             return
@@ -372,6 +376,11 @@ class EbookTtsController(context: Context) {
         // 下次打开靠这里的 DB 行。
         val cur = _position.value
         val bp = bookPath
+        EbookDebugLog.log(
+            "TTS stop savePos=$savePos userInitiated=$userInitiated " +
+                "cur=${cur?.let { "${it.chapter}:${it.block}:${it.startChar}" }} " +
+                "positionAt=$positionAt persist=$persistProgress book=${bp.substringAfterLast('/')}",
+        )
         if (savePos && cur != null && bp.isNotBlank()) {
             // 停在哪就按它被推进的那一刻落盘：比这更新的位置（用户手动翻页/后台已推进）不会被这次停播洗掉
             val at = positionAt.takeIf { it > 0 } ?: System.currentTimeMillis()
@@ -502,6 +511,10 @@ class EbookTtsController(context: Context) {
                 _position.value = para
                 positionAt = seenAt
                 positionIdx = idx
+                EbookDebugLog.log(
+                    "TTS unit ch=${para.chapter} block=${para.block} char=${para.startChar} " +
+                        "at=$seenAt persist=$persistProgress",
+                )
                 _sectionTitle.value = sectionTitleFor(para.chapter, para.block)
                 // 每推进一段/一句就直存章/块/字：锁屏后 UI 没了、pager 动不了时靠这行续命。
                 // 带观测时间戳，比它更旧的快照（比如阅读页手里冻结的旧位置）落盘时会被 DB 丢弃。

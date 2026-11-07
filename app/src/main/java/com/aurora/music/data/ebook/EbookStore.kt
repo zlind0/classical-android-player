@@ -442,6 +442,10 @@ class EbookStore(context: Context, private val dao: EbookDao) {
             progressLock.withLock {
                 runCatching {
                     val n = dao.saveProgress(path, spine, page, block, char, pct, EbookAnchorCode.encode(spine, block), at)
+                    EbookDebugLog.log(
+                        "DB saveReadingPos ${path.substringAfterLast('/')} " +
+                            "spine=$spine page=$page block=$block char=$char at=$at accepted=${n > 0}",
+                    )
                     if (n > 0) {
                         recordHistory(path, spine, block, at)
                         _recents.value = dao.recentBooks(MAX_RECENT_BOOKS).map { it.toBook() }
@@ -480,6 +484,10 @@ class EbookStore(context: Context, private val dao: EbookDao) {
             progressLock.withLock {
                 runCatching {
                     val n = dao.saveTtsPos(path, spine, block, char, EbookAnchorCode.encode(spine, block), at)
+                    EbookDebugLog.log(
+                        "DB saveTtsPos ${path.substringAfterLast('/')} " +
+                            "spine=$spine block=$block char=$char at=$at accepted=${n > 0}",
+                    )
                     if (n > 0) recordHistory(path, spine, block, at)
                 }
             }

@@ -17,6 +17,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.rememberTextMeasurer
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.ebook.EbookBlock
+import com.aurora.music.data.ebook.EbookDebugLog
 import com.aurora.music.data.ebook.EbookReadPrefs
 import com.aurora.music.data.ebook.ParsedEbook
 import kotlinx.coroutines.Dispatchers
@@ -438,6 +439,13 @@ fun rememberPageWindow(
         }
         // 首次建窗用 DB/调用方给的锚点；重建时用上一扇窗最后读到的块/字（按新布局重新换算成页）。
         val anchor = lastAnchor.value ?: (anchorBlock to anchorChar)
+        EbookDebugLog.log(
+            "WINDOW create key=${key?.take(24)} h=$heightPx w=$widthPx " +
+                "prevCenter=${prev?.let { "${it.chapter}:${it.page}" }} " +
+                "initial=${initial.chapter}:${initial.page} " +
+                "prevAnchor=${lastAnchor.value} callerAnchor=$anchorBlock:$anchorChar " +
+                "seed=${seed.chapter}:${seed.page} anchor=$anchor",
+        )
         PageWindow(
             chapterCount = book.chapters.size,
             initial = seed,
@@ -476,6 +484,10 @@ fun rememberPageWindow(
         win.slotAt(PAGE_WINDOW_CENTER)?.slices?.firstOrNull()?.let {
             lastAnchor.value = it.block.coerceAtLeast(0) to it.start.coerceAtLeast(0)
         }
+        EbookDebugLog.log(
+            "WINDOW lastCenter <- ${win.center.chapter}:${win.center.page} " +
+                "anchor=${lastAnchor.value}",
+        )
     }
     // 落盘串行化：预排循环与跳转并发写全书 JSON 时不互相覆盖丢章
     val saveMutex = remember(bookKey) { Mutex() }
@@ -493,9 +505,11 @@ fun rememberPageWindow(
             cacheBase = m
             win.breaks.clear()
             win.breaks.putAll(m)
+            EbookDebugLog.log("WINDOW cache hit key=${key.take(24)} chapters=${m.keys.sorted()}")
         } else {
             cacheBase = emptyMap()
             win.breaks.clear()
+            EbookDebugLog.log("WINDOW cache miss key=${key.take(24)}")
         }
         win.fullRewrite()
     }
@@ -504,12 +518,16 @@ fun rememberPageWindow(
         if (ci !in book.chapters.indices) return false
         if (hasPages(win.breaks, ci)) return true
         val k = cacheKey ?: key ?: return false
-        if (heightPx <= 100) return false
+        if (heightPx <= 100) {
+            EbookDebugLog.log("WINDOW paginate ch=$ci abort: height=$heightPx")
+            return false
+        }
         val blocks = chapterLoader?.invoke(ci) ?: book.chapters[ci].blocks
         if (blocks.isEmpty()) return false
         if (chapterLoader != null) win.chapterBlocks[ci] = blocks
         val paginator = ChapterPaginator(measurer, density, widthPx, heightPx, prefs.fontSizeSp, fontFamily)
         val nb = runCatching { paginator.paginate(blocks) }.getOrDefault(emptyList())
+        EbookDebugLog.log("WINDOW paginate ch=$ci h=$heightPx pages=${nb.size}")
         if (nb.isNotEmpty()) {
             win.breaks[ci] = nb
             if (!persistPages) {
@@ -582,12 +600,17 @@ fun rememberPageWindow(
                 anchorApplied = true
                 val p = pageForChar(pages, windowAnchor.first, windowAnchor.second)
                     .coerceIn(0, (pages.size - 1).coerceAtLeast(0))
+                EbookDebugLog.log(
+                    "WINDOW apply anchor=${windowAnchor.first}:${windowAnchor.second} " +
+                        "ch=${center.chapter} page=$p (was ${center.page})",
+                )
                 if (p != center.page) win.jumpTo(GlobalPage(center.chapter, p))
                 // 锚点已换算成页：解除“先不渲染”，一次性把 41 槽按新 center 重排。
                 win.anchorPending = false
                 win.fullRewrite()
             } else if (!hasPages(win.breaks, center.chapter)) {
                 // 本章确实排不出页（空章/解析失败）：别让 loader 永远转，退回第 0 页。
+                EbookDebugLog.log("WINDOW anchor fallback: ch=${center.chapter} has no pages")
                 anchorApplied = true
                 win.anchorPending = false
                 win.fullRewrite()

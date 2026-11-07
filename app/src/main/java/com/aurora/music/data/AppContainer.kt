@@ -159,6 +159,12 @@ class AppContainer(context: Context) {
     )
 
     init {
+        // 阅读进度调试日志开关（默认关）：设置页改完立即生效。
+        scope.launch {
+            ebookPrefs.debugLog.collect {
+                com.aurora.music.data.ebook.EbookDebugLog.setEnabled(it)
+            }
+        }
         // 网页服务在 App 启动后才异步起来；端口就绪后注册 mDNS
         scope.launch {
             while (true) {

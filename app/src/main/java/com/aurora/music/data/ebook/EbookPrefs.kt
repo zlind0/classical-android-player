@@ -88,6 +88,8 @@ class EbookPrefs(context: Context) {
         val FEED_CACHE_SIZE = intPreferencesKey("feed_cache_size")
         /** 随机阅读上次位置（JSON）。 */
         val FEED_RESUME = stringPreferencesKey("feed_resume")
+        /** 阅读进度调试日志开关（默认关）。 */
+        val DEBUG_LOG = booleanPreferencesKey("debug_log")
     }
 
     private val gson = Gson()
@@ -121,6 +123,10 @@ class EbookPrefs(context: Context) {
     /** 随机阅读上次位置；空/书已不在池时由调用方重新随机。 */
     private val _feedResume = MutableStateFlow(EbookFeedResume())
     val feedResume: StateFlow<EbookFeedResume> = _feedResume.asStateFlow()
+
+    /** 阅读进度调试日志开关（默认关）。 */
+    private val _debugLog = MutableStateFlow(false)
+    val debugLog: StateFlow<Boolean> = _debugLog.asStateFlow()
 
     init {
         scope.launch {
@@ -195,6 +201,11 @@ class EbookPrefs(context: Context) {
                     runCatching { gson.fromJson(json, EbookFeedResume::class.java) }.getOrNull()
                 } ?: EbookFeedResume()
             }.collect { _feedResume.value = it }
+        }
+        scope.launch {
+            appContext.ebookReadDataStore.data.map { p ->
+                p[Keys.DEBUG_LOG] ?: false
+            }.collect { _debugLog.value = it }
         }
     }
 
@@ -297,6 +308,11 @@ class EbookPrefs(context: Context) {
                 it[Keys.FEED_CACHE_SIZE] = value.coerceIn(MIN_FEED_CACHE, MAX_FEED_CACHE)
             }
         }
+    }
+
+    /** 阅读进度调试日志开关。 */
+    fun setDebugLog(enabled: Boolean) {
+        scope.launch { appContext.ebookReadDataStore.edit { it[Keys.DEBUG_LOG] = enabled } }
     }
 
     /**

@@ -112,6 +112,7 @@ import com.aurora.music.data.ebook.EbookAnchorCode
 import com.aurora.music.data.ebook.EbookBlock
 import com.aurora.music.data.ebook.EbookCastAnchor
 import com.aurora.music.data.ebook.EbookCastMode
+import com.aurora.music.data.ebook.EbookDebugLog
 import com.aurora.music.data.ebook.EbookReadPrefs
 import com.aurora.music.data.ebook.EbookStore
 import com.aurora.music.data.ebook.EbookTheme
@@ -154,6 +155,7 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -311,6 +313,12 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
         initBlock = row?.blockIndex ?: 0
         initChar = row?.charOffset ?: 0
         initAt = row?.lastReadAt ?: 0L
+        EbookDebugLog.log(
+            "READER load book=${bookPath.substringAfterLast('/')} " +
+                "db(spine=${row?.spineIndex} page=${row?.pageIndex} block=${row?.blockIndex} " +
+                "char=${row?.charOffset} at=${row?.lastReadAt}) " +
+                "lastProgress=${container.ebookTts.lastProgress}",
+        )
         val p = store.openBook(bookPath)
         if (p == null || p.chapters.isEmpty()) failed = true
         else {
@@ -330,7 +338,12 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
                     initBlock = lp.block
                     initChar = lp.char
                     initAt = lp.at
+                    EbookDebugLog.log("READER use lastProgress over DB -> $lp")
                 }
+            EbookDebugLog.log(
+                "READER init spine=${initPage.chapter} page=${initPage.page} " +
+                    "block=$initBlock char=$initChar at=$initAt",
+            )
             // 网页立刻落到“上次读到的地方”：不等分页完成，避免大书先在网页上闪一下第 1 章
             container.ebookCast.setReaderAnchor(
                 EbookCastAnchor(initPage.chapter, initBlock, initChar),
@@ -349,6 +362,11 @@ fun EbookReaderScreen(bookPath: String, onClose: () -> Unit) {
             val activity = context as? Activity
             val systemRecreating = activity != null && !activity.isFinishing &&
                 (activity.isChangingConfigurations || activity.isDestroyed)
+            EbookDebugLog.log(
+                "READER dispose systemRecreating=$systemRecreating " +
+                    "changingConfig=${activity?.isChangingConfigurations} " +
+                    "destroyed=${activity?.isDestroyed} finishing=${activity?.isFinishing}",
+            )
             if (!systemRecreating) container.ebookTts.stop(savePos = false)
             // 离开阅读页即退出遥控/HDMI 投屏，并把方向交回手机（网页服务常驻，不关）
             cast.stop()
@@ -580,6 +598,23 @@ internal fun ReaderBody(
     val fontFamily = remember(prefs.fontPath) { loadFontFamily(prefs.fontPath) }
 
     var pagerHeightPx by remember { mutableStateOf(0) }
+    // 高度防抖：解锁时系统栏动画会让 onSizeChanged 连续报 2072→2030→1966→1957→1956，
+    // 每次变化都会按 (bookKey, key) 重建分页窗口并重新应用锚点，肉眼就是连续闪。
+    // 第一次量到高度立即生效；之后只有稳定 200ms 才真正更新，最终高度没变就不会重建。
+    var pendingHeightPx by remember { mutableStateOf(0) }
+    LaunchedEffect(pendingHeightPx) {
+        val h = pendingHeightPx
+        if (h <= 0) return@LaunchedEffect
+        if (pagerHeightPx == 0) {
+            pagerHeightPx = h
+        } else {
+            delay(200)
+            pagerHeightPx = h
+        }
+    }
+    LaunchedEffect(pagerHeightPx) {
+        EbookDebugLog.log("BODY pagerHeight=$pagerHeightPx")
+    }
 
     // Activity 被系统回收/重建（锁屏后解锁是最常见的一种）时，DB 里的进度可能落后于
     // 屏幕最后一页：TTS 只写块锚点、页码归零，或落盘还在 IO 队列里就被杀。
@@ -594,6 +629,12 @@ internal fun ReaderBody(
     val startInitial = if (useSavedState) GlobalPage(savedChapter, savedPage) else initial
     val startBlock = if (useSavedState) savedBlock.coerceAtLeast(0) else initBlock
     val startChar = if (useSavedState) savedChar else initChar
+    EbookDebugLog.log(
+        "BODY restore useSaved=$useSavedState saved(ch=${savedChapter} page=${savedPage} " +
+            "block=$savedBlock char=$savedChar at=$savedAt) " +
+            "db(init=${initial.chapter}:${initial.page} block=$initBlock char=$initChar at=$initAt) " +
+            "-> start=${startInitial.chapter}:${startInitial.page} block=$startBlock char=$startChar",
+    )
 
     val ttsPos by tts.position.collectAsStateWithLifecycle()
     BoxWithConstraints(Modifier.fillMaxSize().background(th.bg)) {
@@ -659,6 +700,9 @@ internal fun ReaderBody(
             savedBlock = sl.block.coerceAtLeast(0)
             savedChar = sl.start.coerceAtLeast(0)
             savedAt = System.currentTimeMillis()
+            EbookDebugLog.log(
+                "BODY savedState <- ${c.chapter}:${c.page} block=${sl.block} char=${sl.start} at=$savedAt",
+            )
         }
 
         // 每翻一页立刻存档（无防抖）：进设置、进程被杀都不丢。
@@ -669,6 +713,11 @@ internal fun ReaderBody(
             if (!persistPages) return
             val ear = tts.position.value?.takeIf { tts.bookPath == bookPath }
             val t = persistTargetOf(book, breaks, chapterChars, totalChars, gp, ear, tts.positionAt, eyeAt)
+            EbookDebugLog.log(
+                "PERSIST eye=${gp.chapter}:${gp.page} eyeAt=$eyeAt " +
+                    "ear=${ear?.let { "${it.chapter}:${it.block}:${it.startChar}" }} earAt=${tts.positionAt} " +
+                    "-> spine=${t.spine} page=${t.page} block=${t.block} char=${t.char} at=${t.at}",
+            )
             store.saveReadingPos(bookPath, t.spine, t.page, t.block, t.char, t.pct, t.at)
         }
 
@@ -705,21 +754,36 @@ internal fun ReaderBody(
          */
         suspend fun pullForwardFromDb(): Boolean {
             if (!persistPages) return false
-            val row = store.bookByPath(bookPath) ?: return false
-            // 内存里的朗读进度可能比 DB 新（IO 尚未落地/被单调保护短暂拒绝）。
-            // 锁屏暂停后解锁就靠它把窗口补到“真正停下的地方”。
-            val live = tts.lastProgress
-                ?.takeIf { it.path == bookPath && it.at > row.lastReadAt }
-            val tSpine = live?.chapter ?: row.spineIndex
-            val tBlock = live?.block ?: row.blockIndex
-            val tChar = live?.char ?: row.charOffset
+            // 优先用内存里的朗读进度：锁屏暂停后它一定比眼睛新，而且不需要查 DB（不挂起）。
+            // 这样 ON_RESUME 用 UNDISPATCHED 调用时能在第一帧之前完成跳转，避免先闪旧页。
+            val live = tts.lastProgress?.takeIf { it.path == bookPath && it.at > eyeAt }
+            val row = if (live == null) store.bookByPath(bookPath) ?: return false else null
+            val tSpine = live?.chapter ?: row?.spineIndex ?: return false
+            val tBlock = live?.block ?: row?.blockIndex ?: 0
+            val tChar = live?.char ?: row?.charOffset ?: 0
+            EbookDebugLog.log(
+                "PULL start db(spine=${row?.spineIndex} block=${row?.blockIndex} char=${row?.charOffset} " +
+                    "at=${row?.lastReadAt}) live=$live target=$tSpine:$tBlock:$tChar " +
+                    "center=${win.center.chapter}:${win.center.page} hasPages=${hasPages(breaks, tSpine)}",
+            )
             // 目标章还没分页（Activity 重建后布局高度/分页缓存尚未就绪）：先别抢跑。
             // 此时 jumpToChar 若退回第 0 页，下面还会把“章首”当成新进度写回 DB，
             // 解锁后就会永远停在本章开头。窗口自身会按 DB 锚点（rememberPageWindow）
             // 在分页就绪后落到正确页，这里直接跳过即可。
             if (!hasPages(breaks, tSpine)) {
                 win.paginateChapter?.invoke(tSpine)
-                if (!hasPages(breaks, tSpine)) return false
+                // 布局高度可能还没量到（Activity 重建/窗口刚重建的第一帧）：
+                // 短暂等待后重试，别因为一次 paginate 失败就放弃，否则解锁会停在旧页。
+                var tries = 0
+                while (!hasPages(breaks, tSpine) && tries < 10) {
+                    tries++
+                    delay(100)
+                    win.paginateChapter?.invoke(tSpine)
+                }
+                if (!hasPages(breaks, tSpine)) {
+                    EbookDebugLog.log("PULL abort: chapter $tSpine still not paginated")
+                    return false
+                }
             }
             val cur = win.center
             val curSl = breaks[cur.chapter]?.filter { it.isNotEmpty() }?.getOrNull(cur.page)?.firstOrNull()
@@ -727,14 +791,22 @@ internal fun ReaderBody(
                 tSpine, tBlock, tChar,
                 cur.chapter, curSl?.block ?: 0, curSl?.start ?: 0,
             ) > 0
+            EbookDebugLog.log(
+                "PULL compare target=$tSpine:$tBlock:$tChar " +
+                    "cur=${cur.chapter}:${cur.page} curAnchor=${curSl?.block}:${curSl?.start} ahead=$ahead",
+            )
             if (!ahead) return false
-            if (!win.jumpToChar(tSpine, tBlock, tChar)) return false
+            if (!win.jumpToChar(tSpine, tBlock, tChar)) {
+                EbookDebugLog.log("PULL abort: jumpToChar failed")
+                return false
+            }
             // 眼睛此刻真的被更新到这里了：落盘时间戳要跟着走，否则会被 DB 当旧快照丢弃。
             // 用精确的块/字锚点回写（而不是页首块），否则同一页内的朗读字偏移会丢。
             eyeAt = System.currentTimeMillis()
             val pages = breaks[tSpine]?.filter { it.isNotEmpty() }.orEmpty()
             val page = pageForChar(pages, tBlock, tChar)
             val chars = charsBeforeChapter(tSpine) + charsOfPage(book, tSpine, pages, page)
+            EbookDebugLog.log("PULL jumped -> $tSpine:$page block=$tBlock char=$tChar")
             store.saveReadingPos(
                 bookPath, tSpine, page, tBlock, tChar,
                 (chars.toFloat() / totalChars).coerceIn(0f, 1f), eyeAt,
@@ -749,6 +821,9 @@ internal fun ReaderBody(
         DisposableEffect(lifecycleOwner, bookPath) {
             val obs = androidx.lifecycle.LifecycleEventObserver { _, ev ->
                 if (ev == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) {
+                    EbookDebugLog.log(
+                        "BODY ON_PAUSE persist center=${latestWin.value.center.chapter}:${latestWin.value.center.page}",
+                    )
                     latestPersist.value(latestWin.value.center)
                 }
             }
@@ -792,7 +867,7 @@ internal fun ReaderBody(
             // ---- 正文 ----
             Box(
                 Modifier.weight(1f).fillMaxWidth()
-                    .onSizeChanged { pagerHeightPx = it.height }
+                    .onSizeChanged { pendingHeightPx = it.height }
                     .padding(horizontal = 22.dp),
             ) {
                 // pager 只在换书时重建（固定 7 页、center 恒为 3，不跟分页回写走）；
@@ -865,11 +940,18 @@ internal fun ReaderBody(
 
                 // 解锁/回前台：本页的眼睛在 STOPPED 期间是冻结的（ttsPos/turnReq/paraTiming 都是
                 // collectAsStateWithLifecycle），而后台朗读已经把 DB 推进了。以 DB 为准往上追。
-                DisposableEffect(lifecycleOwner, bookPath) {
+                // key 里必须带 win：分页窗口会因高度/字号变化重建，若只按 lifecycleOwner/bookPath
+                // 注册，观察者会一直捕获第一帧那个 height=0 的旧窗口，解锁时 paginate 永远失败。
+                DisposableEffect(lifecycleOwner, bookPath, win) {
                     val obs = androidx.lifecycle.LifecycleEventObserver { _, ev ->
                         if (ev != androidx.lifecycle.Lifecycle.Event.ON_RESUME) return@LifecycleEventObserver
-                        scope.launch {
-                            if (pullForwardFromDb()) runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
+                        EbookDebugLog.log("BODY ON_RESUME pullForward")
+                        // UNDISPATCHED：常见情况下（同章、分页已缓存、lastProgress 可用）
+                        // pullForwardFromDb 不会挂起，会在第一帧之前完成跳转，避免先闪旧页。
+                        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                            val moved = pullForwardFromDb()
+                            EbookDebugLog.log("BODY ON_RESUME pullForward moved=$moved")
+                            if (moved) runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
                         }
                     }
                     lifecycleOwner.lifecycle.addObserver(obs)
@@ -879,7 +961,10 @@ internal fun ReaderBody(
                 // 投屏结束回到阅读页：大屏最后一页可能没追上（锚点丢失/跳页失败），同样按 DB 补一次
                 LaunchedEffect(castActive) {
                     if (castActive) return@LaunchedEffect
-                    if (pullForwardFromDb()) runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
+                    EbookDebugLog.log("BODY castActive=false pullForward")
+                    val moved = pullForwardFromDb()
+                    EbookDebugLog.log("BODY castActive=false pullForward moved=$moved")
+                    if (moved) runCatching { pager.scrollToPage(PAGE_WINDOW_CENTER) }
                 }
 
                 // 目录按块跳：与 TTS/链接同一调用，跨章也是它
@@ -941,6 +1026,10 @@ internal fun ReaderBody(
                             if (pos.chapter != win.center.chapter &&
                                 lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
                             ) return@LaunchedEffect
+                            EbookDebugLog.log(
+                                "BODY ttsPos ch=${pos.chapter} block=${pos.block} char=${pos.startChar} " +
+                                    "at=${tts.positionAt} center=${win.center.chapter}:${win.center.page}",
+                            )
                             // 观测时间取耳朵被推进的那一刻：后台推过很多段时，这里补写的
                             // 是一个旧快照，DB 的 lastReadAt 保护会按它丢弃，不会盖掉更新的进度
                             val at = tts.positionAt.takeIf { it > 0 } ?: System.currentTimeMillis()
@@ -975,6 +1064,10 @@ internal fun ReaderBody(
                             }
                             handledTurn = t
                             val (c, b, ch) = t
+                            EbookDebugLog.log(
+                                "BODY turnReq ch=$c block=$b char=$ch at=${tts.positionAt} " +
+                                    "center=${win.center.chapter}:${win.center.page}",
+                            )
                             // 同 ttsPos：这条 turn 可能是后台积压的旧请求，按它被推进的时刻落盘
                             val at = tts.positionAt.takeIf { it > 0 } ?: System.currentTimeMillis()
                             val cps = breaks[c]?.filter { it.isNotEmpty() }.orEmpty()
