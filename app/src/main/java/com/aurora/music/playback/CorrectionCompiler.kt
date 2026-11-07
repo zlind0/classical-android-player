@@ -12,8 +12,12 @@ import kotlin.math.pow
 // 128 log-spaced gains, then zero-phase FIR taps for the correction convolver.
 object CorrectionCompiler {
 
-    const val FIR_TAPS = 255
-    private const val FFT_N = 512
+    // 4095 taps at 48 kHz gives ~12 Hz resolution, enough to reproduce the
+    // 20-100 Hz shelf/peak shape of an AutoEq curve. The old 255-tap kernel
+    // (~188 Hz resolution) could not, so bass corrections came out several dB
+    // too weak compared with Wavelet's 4096-tap convolver.
+    const val FIR_TAPS = 4095
+    private const val FFT_N = 8192
 
     /** Parametric bands (bundled AutoEq presets / manual) evaluated with exact realtime math. */
     fun parametricToGains(bands: List<ParamBand>, fs: Int = 48000): FloatArray {
@@ -29,8 +33,8 @@ object CorrectionCompiler {
     }
 
     /**
-     * 128 log gains → linear-phase FIR. Desired magnitude is interpolated onto a
-     * 512-pt spectrum (log interp below Nyquist, hold last value above), inverse
+     * 128 log gains → linear-phase FIR. Desired magnitude is interpolated onto an
+     * 8192-pt spectrum (log interp below Nyquist, hold last value above), inverse
      * FFT gives zero-phase taps; circular-shift to causal linear phase, Hann
      * window, truncate to FIR_TAPS.
      */
