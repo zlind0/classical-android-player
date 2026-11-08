@@ -82,6 +82,8 @@ fun StandardCastOverlay() {
             CastNowPlayingScreen(
                 state = s,
                 onPlayPause = { if (s.playing) hub.pause() else hub.play() },
+                onNext = { hub.next() },
+                onPrevious = { hub.previous() },
                 onStop = { hub.stopSession() },
                 onSurface = { hub.setVideoSurface(it) },
             )
@@ -127,6 +129,8 @@ private fun ConnectingScreen(state: CastReceiverState.Connecting) {
 private fun CastNowPlayingScreen(
     state: CastReceiverState.Playing,
     onPlayPause: () -> Unit,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
     onStop: () -> Unit,
     onSurface: (android.view.Surface?) -> Unit,
 ) {
@@ -158,6 +162,8 @@ private fun CastNowPlayingScreen(
                 AudioContent(
                     state = state,
                     onPlayPause = onPlayPause,
+                    onNext = onNext,
+                    onPrevious = onPrevious,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -205,6 +211,8 @@ private fun TopBar(state: CastReceiverState.Playing, onStop: () -> Unit) {
 private fun AudioContent(
     state: CastReceiverState.Playing,
     onPlayPause: () -> Unit,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -270,11 +278,11 @@ private fun AudioContent(
         Progress(state)
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            ControlButton(Icons.Filled.SkipPrevious, "上一首", enabled = state.capabilities.canPrevious, onClick = {})
+            ControlButton(Icons.Filled.SkipPrevious, "上一首", enabled = state.capabilities.canPrevious, onClick = onPrevious)
             Spacer(Modifier.size(22.dp))
             PlayPauseButton(playing = state.playing, enabled = state.capabilities.canPlayPause, onClick = onPlayPause)
             Spacer(Modifier.size(22.dp))
-            ControlButton(Icons.Filled.SkipNext, "下一首", enabled = state.capabilities.canNext, onClick = {})
+            ControlButton(Icons.Filled.SkipNext, "下一首", enabled = state.capabilities.canNext, onClick = onNext)
         }
         Spacer(Modifier.weight(1f))
     }

@@ -84,30 +84,28 @@ LAuE4Pu13aKiJnfft7hIjbK+5kyb3TysZvoyDnb3HOKvInK7vXbKuU4ISgxB2bB3HcYzQMGsz1qJ
     }
 
     /**
-     * AirPlay video key derivation: SHA-256("AirPlayStreamKey" || id(8 bytes LE) || audioAesKey).
-     * The id is a raw 64-bit integer, not its decimal string.
+     * AirPlay video key derivation, matching UxPlay's `mirror_buffer_init_aes`:
+     * SHA-512("AirPlayStreamKey" + decimal streamConnectionID) then append the
+     * 16-byte audio AES key; the first 16 digest bytes are the AES-128 key.
      */
     fun deriveVideoKey(streamConnectionId: Long, audioAesKey: ByteArray): ByteArray =
-        sha256(
-            "AirPlayStreamKey".toByteArray(Charsets.US_ASCII) +
-                streamIdBytes(streamConnectionId) + audioAesKey,
-        )
+        sha512(
+            "AirPlayStreamKey${java.lang.Long.toUnsignedString(streamConnectionId)}"
+                .toByteArray(Charsets.US_ASCII) + audioAesKey,
+        ).copyOf(16)
 
-    /** AirPlay video IV derivation: SHA-256("AirPlayStreamIV" || id(8 bytes LE) || audioAesKey). */
+    /** AirPlay video IV derivation (same construction as [deriveVideoKey]). */
     fun deriveVideoIv(streamConnectionId: Long, audioAesKey: ByteArray): ByteArray =
-        sha256(
-            "AirPlayStreamIV".toByteArray(Charsets.US_ASCII) +
-                streamIdBytes(streamConnectionId) + audioAesKey,
-        )
-
-    private fun streamIdBytes(id: Long): ByteArray =
-        java.nio.ByteBuffer.allocate(8)
-            .order(java.nio.ByteOrder.LITTLE_ENDIAN)
-            .putLong(id)
-            .array()
+        sha512(
+            "AirPlayStreamIV${java.lang.Long.toUnsignedString(streamConnectionId)}"
+                .toByteArray(Charsets.US_ASCII) + audioAesKey,
+        ).copyOf(16)
 
     fun sha256(data: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256").digest(data)
+
+    fun sha512(data: ByteArray): ByteArray =
+        MessageDigest.getInstance("SHA-512").digest(data)
 
     fun decodeBase64(value: String): ByteArray? = runCatching {
         // Pure-Kotlin decoder: keeps SDP parsing testable on the JVM without
@@ -184,75 +182,62 @@ LAuE4Pu13aKiJnfft7hIjbK+5kyb3TysZvoyDnb3HOKvInK7vXbKuU4ISgxB2bB3HcYzQMGsz1qJ
 }
 
 /**
- * AES-CTR decryption state for AirPlay mirroring packets.
+ * AES-CTR decryption state for AirPlay mirroring packets (port of UxPlay
+ * `mirror_buffer_decrypt`).
  *
- * Every packet restarts the counter at the SDP-derived IV, except for a partial
- * 16-byte block carried over from the previous packet (uxplay mirror_buffer.c).
- * The tail bytes of a packet are XORed with the next keystream bytes so payloads
- * that are not a multiple of 16 still decode.
+ * The sender does not restart the counter for every packet. The keystream is
+ * continuous for the whole stream; at a packet boundary any unused bytes of the
+ * current 16-byte block are discarded (the next packet starts on a fresh block)
+ * but the counter itself keeps advancing. Resetting the IV per packet — which
+ * the old implementation did — only decrypted the first packet correctly.
  */
 class AirPlayVideoDecryptor(key: ByteArray, iv: ByteArray) {
 
-    private val keySpec = SecretKeySpec(key, "AES")
-    private val iv = iv.copyOf(16)
-    private var carry = ByteArray(0)
+    private val cipher = Cipher.getInstance("AES/ECB/NoPadding").apply {
+        init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"))
+    }
+    private val counter = iv.copyOf(16)
+    private var block: ByteArray? = null
+    private var offset = 0
 
     @Synchronized
-    fun decrypt(input: ByteArray, offset: Int = 0, length: Int = input.size - offset): ByteArray {
+    fun decrypt(input: ByteArray, inputOffset: Int = 0, length: Int = input.size - inputOffset): ByteArray {
+        // Consume the tail of the previous packet's 16-byte keystream block
+        // first (UxPlay mirror_buffer_decrypt's nextDecryptCount path), then
+        // continue with the following CTR blocks.
         val out = ByteArray(length)
-        var pos = offset
-        var remaining = length
         var written = 0
-
-        if (carry.isNotEmpty() && remaining > 0) {
-            val n = minOf(carry.size, remaining)
-            for (i in 0 until n) out[written + i] = (input[pos + i].toInt() xor carry[i].toInt()).toByte()
-            carry = if (n < carry.size) carry.copyOfRange(n, carry.size) else ByteArray(0)
-            pos += n
+        while (written < length) {
+            val b = ensureBlock()
+            val n = minOf(16 - offset, length - written)
+            for (i in 0 until n) {
+                out[written + i] = (input[inputOffset + written + i].toInt() xor b[offset + i].toInt()).toByte()
+            }
             written += n
-            remaining -= n
-        }
-        if (remaining <= 0) return out
-
-        val fullBlocks = remaining / 16 * 16
-        if (fullBlocks > 0) {
-            val keystream = ctrKeystream(fullBlocks)
-            for (i in 0 until fullBlocks) {
-                out[written + i] = (input[pos + i].toInt() xor keystream[i].toInt()).toByte()
+            offset += n
+            if (offset == 16) {
+                block = null
+                offset = 0
             }
-            pos += fullBlocks
-            written += fullBlocks
-            remaining -= fullBlocks
-        }
-
-        if (remaining > 0) {
-            val keystream = ctrKeystream(16)
-            for (i in 0 until remaining) {
-                out[written + i] = (input[pos + i].toInt() xor keystream[i].toInt()).toByte()
-            }
-            carry = keystream.copyOfRange(remaining, 16)
         }
         return out
     }
 
     @Synchronized
     fun reset() {
-        carry = ByteArray(0)
+        block = null
+        offset = 0
+        // Caller recreates the instance when a new stream starts; the IV is
+        // final, so nothing else to reset here.
     }
 
-    /** AES-ECB over increasing 128-bit big-endian counters starting at [iv]. */
-    private fun ctrKeystream(length: Int): ByteArray {
-        val cipher = Cipher.getInstance("AES/ECB/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, keySpec)
-        val blocks = (length + 15) / 16
-        val counter = iv.copyOf()
-        val result = ByteArray(blocks * 16)
-        for (b in 0 until blocks) {
-            val block = cipher.doFinal(counter)
-            System.arraycopy(block, 0, result, b * 16, 16)
-            incrementCounter(counter)
-        }
-        return result
+    private fun ensureBlock(): ByteArray {
+        block?.let { return it }
+        val generated = cipher.doFinal(counter)
+        incrementCounter(counter)
+        block = generated
+        offset = 0
+        return generated
     }
 
     private fun incrementCounter(counter: ByteArray) {

@@ -48,6 +48,7 @@ class PcmStreamPlayer(
     private var focusHeld = false
     private var focusRequest: AudioFocusRequest? = null
     private var firstWriteLogged = false
+    @Volatile private var bufferSizeMs = 2000
 
     /**
      * Media3's DefaultAudioSink captures `Looper.myLooper()` as its playback
@@ -93,6 +94,10 @@ class PcmStreamPlayer(
         }
     }
 
+    fun setBufferSizeMs(ms: Int) {
+        bufferSizeMs = ms.coerceIn(20, 4000)
+    }
+
     fun start(sampleRate: Int, channels: Int = 2) {
         if (started && this.sampleRate == sampleRate) return
         if (started) runCatching { onSink { sink.reset() } }
@@ -114,10 +119,10 @@ class PcmStreamPlayer(
                 )
             }
         }
-        // Two seconds of 16-bit PCM, computed from the actual stream format.
-        // A time-based buffer absorbs Wi-Fi jitter without hard-coding a byte
-        // count that becomes too small at higher sample rates.
-        val bufferBytes = this.sampleRate * channels * 2 * 2
+        // Buffer length is a time budget, not a byte count: the DSP sink is
+        // paced by AudioTrack, and the AirPlay timeline buffer already absorbs
+        // network jitter. Default is 2s; RTP callers set a lower value.
+        val bufferBytes = this.sampleRate * channels * 2 * bufferSizeMs.coerceAtLeast(20) / 1000
         onSink { sink.configure(format, bufferBytes, null) }
         onSink { sink.play() }
         started = true

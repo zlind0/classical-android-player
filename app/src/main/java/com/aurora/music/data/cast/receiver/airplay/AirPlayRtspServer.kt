@@ -38,6 +38,7 @@ class AirPlayRtspServer(
         fun onMetadata(nowPlaying: AirPlayNowPlaying)
         fun onVolume(volume: Float)
         fun onProgress(positionMs: Long, durationMs: Long)
+        fun onDacpId(dacpId: String, activeRemote: String)
     }
 
     private val running = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -232,6 +233,14 @@ class AirPlayRtspServer(
         }
 
         private fun handle(request: RtspRequest, output: OutputStream) {
+            // DACP-ID / Active-Remote are attached to the sender's SETUP (and
+            // sometimes later requests). They are the credentials for reverse
+            // control, so forward them as soon as they appear.
+            val dacpId = request.headers["dacp-id"]
+            val activeRemote = request.headers["active-remote"]
+            if (!dacpId.isNullOrBlank() && !activeRemote.isNullOrBlank()) {
+                listener.onDacpId(dacpId, activeRemote)
+            }
             when {
                 request.method == "GET" && request.url.startsWith("/info") -> respondInfo(request, output)
                 request.method == "POST" && request.url.startsWith("/fp-setup") -> respondFpSetup(request, output)

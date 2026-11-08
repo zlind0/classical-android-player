@@ -18,6 +18,9 @@ interface CastVideoSink {
     /** Raw (no start code) H.264 SPS/PPS from the sender. */
     fun setCodecConfig(spsNal: ByteArray, ppsNal: ByteArray)
 
+    /** Codec ("H.264"/"H.265") and stream size announced by the sender. */
+    fun setVideoFormat(codec: String, width: Int, height: Int) = Unit
+
     fun flush()
 
     fun release()

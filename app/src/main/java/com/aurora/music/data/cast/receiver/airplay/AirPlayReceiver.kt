@@ -18,7 +18,6 @@ import com.aurora.music.data.cast.receiver.CastSessionArbiter
 import com.aurora.music.data.cast.receiver.CastVideoInfo
 import com.aurora.music.data.cast.receiver.video.CastVideoListener
 import com.aurora.music.data.cast.receiver.video.MediaCodecVideoSink
-import com.aurora.music.playback.PcmStreamPlayer
 import java.io.File
 import java.net.DatagramSocket
 import java.util.concurrent.atomic.AtomicBoolean
@@ -32,8 +31,9 @@ import kotlinx.coroutines.launch
  * AirPlay 1 receiver: RAOP audio plus screen mirroring (H.264 + AAC-ELD/ALAC).
  *
  * The RTSP server owns protocol negotiation and hands sockets to this class;
- * audio is decoded into the shared [PcmStreamPlayer] DSP chain, video into
- * [MediaCodecVideoSink] which renders straight to a Surface.
+ * audio is decoded into the shared DSP chain via [AirPlayAudioOutput] (timeline
+ * jitter buffer + PcmStreamPlayer), video into [MediaCodecVideoSink] which
+ * renders straight to a Surface through a persistent GL pipeline.
  */
 @UnstableApi
 class AirPlayReceiver(
@@ -55,7 +55,8 @@ class AirPlayReceiver(
     private var server: AirPlayRtspServer? = null
     private var session: AirPlaySession? = null
     private var audioReceiver: AirPlayAudioReceiver? = null
-    private var player: PcmStreamPlayer? = null
+    private var audioOutput: AirPlayAudioOutput? = null
+    private var dacp: AirPlayDacp? = null
     private var videoReceiver: AirPlayVideoReceiver? = null
     private var videoSink: MediaCodecVideoSink? = null
     private var videoSurface: Surface? = null
@@ -63,6 +64,7 @@ class AirPlayReceiver(
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     @Volatile private var lastAudioPacketMs = 0L
+    @Volatile private var pausedByUser = false
     @Volatile private var hasVideo = false
     @Volatile private var mirroring = false
     @Volatile private var audioSampleRate = 44100
@@ -81,6 +83,11 @@ class AirPlayReceiver(
         server = rtsp
         val actualPort = rtsp.start()
         mdns = AirPlayMdns(appContext, deviceName, deviceId, actualPort).also { it.start() }
+        dacp = AirPlayDacp(appContext) { ready ->
+            val s = session
+            if (s != null) listener?.onCapabilities(s, s.capabilities)
+            Log.i(TAG, "DACP ready=$ready")
+        }
         registerNetworkCallback()
         startWatchdog()
         Log.i(TAG, "AirPlay receiver started on $actualPort")
@@ -93,6 +100,8 @@ class AirPlayReceiver(
         unregisterNetworkCallback()
         mdns?.stop()
         mdns = null
+        dacp?.release()
+        dacp = null
         endSessionInternal(notify = false)
         server?.stop()
         server = null
@@ -150,7 +159,7 @@ class AirPlayReceiver(
 
         override fun onFlush() {
             audioReceiver?.flush()
-            player?.resume()
+            audioOutput?.flush()
         }
 
         override fun onTeardown() {
@@ -181,7 +190,13 @@ class AirPlayReceiver(
         }
 
         override fun onVolume(volume: Float) {
-            player?.setVolume(volume)
+            audioOutput?.setVolume(volume)
+        }
+
+        override fun onDacpId(dacpId: String, activeRemote: String) {
+            dacp?.update(dacpId, activeRemote)
+            val s = session
+            if (s != null) listener?.onCapabilities(s, s.capabilities)
         }
 
         override fun onProgress(positionMs: Long, durationMs: Long) {
@@ -202,17 +217,18 @@ class AirPlayReceiver(
                 "key=${format.aesKey.hex()} iv=${format.aesIv.hex()}",
         )
         endAudio()
-        val p = PcmStreamPlayer(appContext, sinkFactory(), audioSessionId) {
+        pausedByUser = false
+        val output = AirPlayAudioOutput(appContext, sinkFactory(), audioSessionId) {
             // Audio focus lost: keep the session but stop output.
         }
-        p.start(format.sampleRate, format.channels)
-        player = p
+        output.start(format.sampleRate, format.channels)
+        audioOutput = output
         lastAudioPacketMs = System.currentTimeMillis()
         val receiver = AirPlayAudioReceiver(
             format = format,
-            onPcm = { pcm, length ->
+            onPcm = { pcm, length, ptsNs ->
                 lastAudioPacketMs = System.currentTimeMillis()
-                p.writePcm(pcm, length, format.channels)
+                output.writePcm(pcm, length, ptsNs)
             },
             onFirstPacket = {
                 session?.let { s ->
@@ -229,8 +245,8 @@ class AirPlayReceiver(
     private fun endAudio() {
         audioReceiver?.stop()
         audioReceiver = null
-        player?.release()
-        player = null
+        audioOutput?.stop()
+        audioOutput = null
     }
 
     // ---------------------------------------------------------------- video
@@ -238,7 +254,7 @@ class AirPlayReceiver(
     private fun startVideo(streamConnectionId: Long, aesKey: ByteArray) {
         endVideo()
         hasVideo = true
-        val sink = MediaCodecVideoSink(object : CastVideoListener {
+        val sink = MediaCodecVideoSink(appContext, object : CastVideoListener {
             override fun onVideoInfo(info: CastVideoInfo) {
                 val s = session ?: return
                 listener?.onVideo(s, info)
@@ -254,9 +270,7 @@ class AirPlayReceiver(
             audioAesKey = aesKey,
             sink = sink,
             onFrameSize = { width, height ->
-                session?.let { s ->
-                    listener?.onVideo(s, CastVideoInfo(codec = "H.264", width = width, height = height))
-                }
+                Log.i(TAG, "video size: ${width}x$height")
             },
             onError = { Log.w(TAG, "video stream error: $it") },
         )
@@ -280,12 +294,14 @@ class AirPlayReceiver(
         session = null
         endAudio()
         endVideo()
+        dacp?.reset()
         pendingInfoMs = 0
         pendingDurationMs = 0
         lastMedia = CastMediaInfo()
         artworkPath = ""
         senderLabel = ""
         mirroring = false
+        pausedByUser = false
         if (notify && current != null) listener?.onSessionEnded(current)
     }
 
@@ -305,6 +321,7 @@ class AirPlayReceiver(
             while (isActive && running.get()) {
                 delay(5_000)
                 if (session == null) continue
+                if (pausedByUser) continue
                 val last = lastAudioPacketMs
                 if (last > 0 && System.currentTimeMillis() - last > 45_000) {
                     Log.i(TAG, "no audio for 45s, ending AirPlay session")
@@ -350,29 +367,43 @@ class AirPlayReceiver(
         val mirroring: Boolean,
     ) : CastProtocolSession {
         override val protocol: CastProtocol = CastProtocol.AIRPLAY
-        override val capabilities = CastCapabilities(
-            canPlayPause = true,
-            canNext = false,
-            canPrevious = false,
-            canSeek = false,
-            canStop = true,
-        )
+        override val capabilities: CastCapabilities
+            get() = CastCapabilities(
+                canPlayPause = true,
+                // DACP is the reverse-control channel: only advertise
+                // next/previous once the sender's control endpoint resolved.
+                canNext = dacp?.isReady == true,
+                canPrevious = dacp?.isReady == true,
+                canSeek = false,
+                canStop = true,
+            )
 
         override fun play() {
-            player?.resume()
+            // Control the sender first so it resumes its timeline, then let the
+            // local sink jump to the newest packet.
+            dacp?.play()
+            pausedByUser = false
+            lastAudioPacketMs = System.currentTimeMillis()
+            audioOutput?.resume()
             listener?.onProgress(this, pendingInfoMs, pendingDurationMs, true)
         }
 
         override fun pause() {
-            player?.pause()
+            dacp?.pause()
+            pausedByUser = true
+            audioOutput?.pause()
             listener?.onProgress(this, pendingInfoMs, pendingDurationMs, false)
         }
 
         override fun seekTo(positionMs: Long) = Unit
 
-        override fun next() = Unit
+        override fun next() {
+            dacp?.nextItem()
+        }
 
-        override fun previous() = Unit
+        override fun previous() {
+            dacp?.previousItem()
+        }
 
         override fun stop() {
             this@AirPlayReceiver.stopSession()

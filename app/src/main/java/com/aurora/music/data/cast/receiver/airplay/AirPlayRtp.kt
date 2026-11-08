@@ -62,7 +62,7 @@ fun parseRtpPacket(buf: ByteArray, length: Int): RtpPacket? {
  */
 class AirPlayAudioReceiver(
     private val format: AirPlayAudioFormat,
-    private val onPcm: (ByteArray, Int) -> Unit,
+    private val onPcm: (ByteArray, Int, Long) -> Unit,
     private val onFirstPacket: () -> Unit,
     private val onError: (String) -> Unit,
 ) {
@@ -78,6 +78,7 @@ class AirPlayAudioReceiver(
     private var expectedSeq = -1
     private var lastTimestamp = -1L
     private var lastFrameCount = 0
+    private var firstRtpTimestamp = -1L
     private var lastArrivalMs = 0L
     private var firstPacketSeen = false
     private var firstDecodeLogged = false
@@ -135,6 +136,7 @@ class AirPlayAudioReceiver(
             expectedSeq = -1
             lastTimestamp = -1
             lastFrameCount = 0
+            firstRtpTimestamp = -1
             firstPacketSeen = false
         }
     }
@@ -227,9 +229,8 @@ class AirPlayAudioReceiver(
         val next = pending.firstEntry() ?: return
         val waited = System.currentTimeMillis() - lastArrivalMs
         if (!force && waited < 60) return
-        val delta = ((next.value.timestamp - lastTimestamp) and 0xFFFFFFFFL).toInt()
-        val gapFrames = (delta - lastFrameCount).coerceIn(0, format.sampleRate)
-        if (gapFrames > 0) emitSilence(gapFrames)
+        // The timeline buffer turns the PTS gap into silence, so just skip to
+        // the next available packet here.
         expectedSeq = next.key
         decodeAndEmit(next.value)
         expectedSeq = (expectedSeq + 1) and 0xFFFF
@@ -245,6 +246,7 @@ class AirPlayAudioReceiver(
             lastTimestamp == rtp.timestamp && lastFrameCount > 0
         lastTimestamp = rtp.timestamp
         if (duplicate) return
+        val ptsNs = ptsNs(rtp.timestamp)
         val decrypted = if (format.encrypted) {
             AirPlayCrypto.aesCbcDecrypt(
                 format.aesKey, format.aesIv, rtp.data, rtp.payloadOffset, payloadLength,
@@ -270,25 +272,33 @@ class AirPlayAudioReceiver(
                     firstDecodeLogged = true
                     Log.i(TAG, "first ALAC decode: frames=$frames payload=$payloadLength")
                 }
-                if (frames > 0) emitShorts(pcmScratch, frames * bridge.channels)
+                if (frames > 0) emitShorts(pcmScratch, frames * bridge.channels, ptsNs)
             }
             AirPlayCodec.AAC, AirPlayCodec.AAC_ELD -> {
                 var produced = 0
                 aac?.decode(decrypted, adts = format.codec == AirPlayCodec.AAC) { pcm, len ->
                     produced += len / 4
-                    onPcm(pcm, len)
+                    onPcm(pcm, len, ptsNs)
                 }
                 lastFrameCount = produced
             }
             AirPlayCodec.PCM -> {
                 lastFrameCount = decrypted.size / (2 * format.channels.coerceAtLeast(1))
-                onPcm(decrypted, decrypted.size)
+                onPcm(decrypted, decrypted.size, ptsNs)
             }
             else -> Unit
         }
     }
 
-    private fun emitShorts(shorts: ShortArray, count: Int) {
+    /** RTP 32-bit sample clock -> nanoseconds relative to the first packet. */
+    private fun ptsNs(timestamp: Long): Long {
+        if (firstRtpTimestamp < 0) firstRtpTimestamp = timestamp
+        var delta = (timestamp - firstRtpTimestamp) and 0xFFFFFFFFL
+        if (delta >= 0x80000000L) delta -= 0x100000000L
+        return delta * 1_000_000_000L / format.sampleRate.coerceAtLeast(1)
+    }
+
+    private fun emitShorts(shorts: ShortArray, count: Int, ptsNs: Long) {
         if (debugDecodes < 10) {
             debugDecodes++
             var nz = 0
@@ -302,13 +312,7 @@ class AirPlayAudioReceiver(
             bytes[j++] = (v and 0xFF).toByte()
             bytes[j++] = ((v shr 8) and 0xFF).toByte()
         }
-        onPcm(bytes, bytes.size)
-    }
-
-    private fun emitSilence(frames: Int) {
-        if (frames <= 0) return
-        val bytes = ByteArray(frames * 2 * 2)
-        onPcm(bytes, bytes.size)
+        onPcm(bytes, bytes.size, ptsNs)
     }
 
     companion object {
@@ -422,10 +426,11 @@ private class AacDecoder(
 /**
  * AirPlay screen-mirroring video stream (TCP).
  *
- * Header layout (128 bytes):
- *   [0:4]   big-endian payload size
- *   [4]     0x00 encrypted VCL NAL(s), 0x01 unencrypted SPS+PPS, 0x05 report
- *   [5]     0x10 marks an IDR
+ * Header layout (128 bytes), matching UxPlay's `raop_rtp_mirror.c`:
+ *   [0:4]   little-endian payload size
+ *   [4]     payload type: 0x00 VCL, 0x01 unencrypted codec config, 0x02 heartbeat, 0x05 report
+ *   [5]     flags (0x10 marks an IDR VCL packet)
+ *   [6]     VCL option (0x56/0x5e = stream suspended, 0x16/0x1e = active)
  *   [8:16]  NTP timestamp
  *   [16:64] float geometry (source width/height, offsets, display size)
  *
@@ -449,8 +454,9 @@ class AirPlayVideoReceiver(
         AirPlayCrypto.deriveVideoKey(streamConnectionId, audioAesKey),
         AirPlayCrypto.deriveVideoIv(streamConnectionId, audioAesKey),
     )
-    private var pendingSps: ByteArray? = null
-    private var pendingPps: ByteArray? = null
+    private var codec: String = ""
+    private var pendingPrefix: ByteArray? = null
+    private var pendingPrefixTimestamp = -1L
     private var firstTimestamp = -1L
     private var streamWidth = 0
     private var streamHeight = 0
@@ -458,6 +464,7 @@ class AirPlayVideoReceiver(
     private var firstVideoHeaderLogged = false
     private var firstVclLogged = false
     private var firstFrameLogged = false
+    private var suspended = false
 
     fun start(port: Int) {
         synchronized(lock) {
@@ -522,14 +529,17 @@ class AirPlayVideoReceiver(
         try {
             while (synchronized(lock) { running }) {
                 readFully(input, header, 128)
-                // Mirroring headers are little-endian: u32 payload size,
-                // u16 payload type (0=video, 1=codec data, 2=heartbeat).
+                // packet[0:3] is a little-endian payload size; packet[4] is the
+                // payload type and packet[5] carries the IDR flag. Do not read
+                // a little-endian u16 here: IDR packets are 0x00 0x10.
                 val payloadSize = readUInt32LE(header, 0).toInt()
+                val type = header[4].toInt() and 0xFF
                 if (!firstHeaderLogged) {
                     firstHeaderLogged = true
                     Log.i(
                         TAG,
-                        "first mirror header: size=$payloadSize type=${readUInt16LE(header, 4)} " +
+                        "first mirror header: size=$payloadSize type=$type " +
+                            "flags=${header[5].toInt() and 0xFF} opt=${header[6].toInt() and 0xFF} " +
                             "w=${readFloat(header, 56)} h=${readFloat(header, 60)}",
                     )
                 }
@@ -539,7 +549,6 @@ class AirPlayVideoReceiver(
                 }
                 val payload = ByteArray(payloadSize)
                 readFully(input, payload, payloadSize)
-                val type = readUInt16LE(header, 4)
                 if (type == 0 && !firstVideoHeaderLogged) {
                     firstVideoHeaderLogged = true
                     Log.i(
@@ -552,6 +561,7 @@ class AirPlayVideoReceiver(
                     0 -> handleVcl(header, payload)
                     1 -> handleCodecConfig(header, payload)
                     2 -> Unit // heartbeat
+                    5 -> Unit // streaming report
                     else -> Unit
                 }
             }
@@ -565,6 +575,27 @@ class AirPlayVideoReceiver(
     }
 
     private fun handleCodecConfig(header: ByteArray, payload: ByteArray) {
+        if (payload.isEmpty()) return
+        updateSize(header)
+        // HEVC codec data is marked by the 'hvc1' box. Layout follows UxPlay:
+        // VPS/SPS/PPS records start at 0x75, each with a 4-byte marker whose
+        // last two bytes are a big-endian length, then 5 bytes of header.
+        if (payload.size >= 0x7A && payload[4] == 'h'.code.toByte() &&
+            payload[5] == 'v'.code.toByte() && payload[6] == 'c'.code.toByte() &&
+            payload[7] == '1'.code.toByte()
+        ) {
+            val parsed = parseHevcConfig(payload)
+            if (parsed == null) {
+                onError("invalid HEVC VPS/SPS/PPS")
+                return
+            }
+            codec = "H.265"
+            pendingPrefix = parsed
+            pendingPrefixTimestamp = readNtpRaw(header)
+            sink.setVideoFormat(codec, streamWidth, streamHeight)
+            Log.i(TAG, "codec config: HEVC vps/sps/pps ${parsed.size} bytes")
+            return
+        }
         if (payload.size < 12) return
         val spsSize = readUInt16(payload, 6)
         if (spsSize <= 0 || 8 + spsSize + 3 > payload.size) return
@@ -572,15 +603,42 @@ class AirPlayVideoReceiver(
         val ppsSize = readUInt16(payload, spsSize + 9)
         if (ppsSize <= 0 || spsSize + 11 + ppsSize > payload.size) return
         val pps = payload.copyOfRange(spsSize + 11, spsSize + 11 + ppsSize)
-        pendingSps = annexB(sps)
-        pendingPps = annexB(pps)
-        updateSize(header)
-        Log.i(TAG, "codec config: sps=${sps.size} pps=${pps.size}")
-        // MediaCodec csd-0/csd-1 expect Annex-B NALs (start code included).
-        sink.setCodecConfig(pendingSps!!, pendingPps!!)
+        codec = "H.264"
+        pendingPrefix = annexB(sps) + annexB(pps)
+        pendingPrefixTimestamp = readNtpRaw(header)
+        sink.setVideoFormat(codec, streamWidth, streamHeight)
+        Log.i(TAG, "codec config: AVC sps=${sps.size} pps=${pps.size}")
+    }
+
+    /** UxPlay's `hvc1` config: VPS, SPS and PPS records after a 0x75 header. */
+    private fun parseHevcConfig(payload: ByteArray): ByteArray? {
+        var ptr = 0x75
+        if (ptr + 5 > payload.size) return null
+        val out = java.io.ByteArrayOutputStream()
+        val markers = intArrayOf(0xA0, 0xA1, 0xA2)
+        for (marker in markers) {
+            if (ptr + 5 > payload.size) return null
+            if ((payload[ptr].toInt() and 0xFF) != marker) return null
+            val size = readUInt16(payload, ptr + 3)
+            ptr += 5
+            if (size <= 0 || ptr + size > payload.size) return null
+            out.write(byteArrayOf(0, 0, 0, 1))
+            out.write(payload, ptr, size)
+            ptr += size
+        }
+        return out.toByteArray()
     }
 
     private fun handleVcl(header: ByteArray, payload: ByteArray) {
+        val option = header[6].toInt() and 0xFF
+        if (option == 0x56 || option == 0x5E) {
+            if (!suspended) {
+                suspended = true
+                Log.i(TAG, "video stream suspended by sender")
+            }
+        } else if (option == 0x16 || option == 0x1E) {
+            suspended = false
+        }
         val decrypted = decryptor.decrypt(payload)
         if (!firstVclLogged) {
             firstVclLogged = true
@@ -591,19 +649,15 @@ class AirPlayVideoReceiver(
                     "len0=${readUInt32(decrypted, 0)}",
             )
         }
-        val prefix = buildList<ByteArray> {
-            pendingSps?.let { add(it) }
-            pendingPps?.let { add(it) }
-        }
         val annexB = convertLengthPrefixedNals(decrypted) ?: return
-        pendingSps = null
-        pendingPps = null
-        val out = if (prefix.isEmpty()) annexB else {
-            val total = prefix.sumOf { it.size } + annexB.size
-            val merged = ByteArray(total)
-            var offset = 0
-            for (p in prefix) { System.arraycopy(p, 0, merged, offset, p.size); offset += p.size }
-            System.arraycopy(annexB, 0, merged, offset, annexB.size)
+        val timestamp = readNtpRaw(header)
+        val prefix = if (pendingPrefixTimestamp == timestamp) pendingPrefix else null
+        pendingPrefix = null
+        pendingPrefixTimestamp = -1
+        val out = if (prefix == null) annexB else {
+            val merged = ByteArray(prefix.size + annexB.size)
+            System.arraycopy(prefix, 0, merged, 0, prefix.size)
+            System.arraycopy(annexB, 0, merged, prefix.size, annexB.size)
             merged
         }
         val ptsUs = ntpToMicros(header)
@@ -611,7 +665,7 @@ class AirPlayVideoReceiver(
         updateSize(header)
         if (!firstFrameLogged) {
             firstFrameLogged = true
-            Log.i(TAG, "first video frame: ${out.size} bytes key=$keyFrame pts=$ptsUs")
+            Log.i(TAG, "first video frame: ${out.size} bytes codec=$codec key=$keyFrame pts=$ptsUs")
         }
         sink.submitAccessUnit(out, ptsUs, keyFrame)
     }
@@ -625,6 +679,9 @@ class AirPlayVideoReceiver(
             onFrameSize(width, height)
         }
     }
+
+    private fun readNtpRaw(header: ByteArray): Long =
+        (readUInt32(header, 8) shl 32) or readUInt32(header, 12)
 
     private fun ntpToMicros(header: ByteArray): Long {
         val seconds = readUInt32(header, 8)
@@ -640,7 +697,13 @@ class AirPlayVideoReceiver(
         while (pos + 4 <= data.size) {
             val len = readUInt32(data, pos).toInt()
             if (len <= 0 || pos + 4 + len > data.size) return false
-            if ((data[pos + 4].toInt() and 0x1F) == 5) return true
+            val header = data[pos + 4].toInt() and 0xFF
+            if (codec == "H.265") {
+                val type = (header shr 1) and 0x3F
+                if (type == 19 || type == 20 || type == 21) return true
+            } else {
+                if ((header and 0x1F) == 5) return true
+            }
             pos += 4 + len
         }
         return false
