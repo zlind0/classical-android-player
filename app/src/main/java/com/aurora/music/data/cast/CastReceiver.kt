@@ -65,6 +65,8 @@ sealed interface CastReceiveState {
 class CastReceiverController(
     context: Context,
     private val selfId: String,
+    /** 可选播放器工厂：投屏音频接入统一 DSP 链，与音乐参数一致。 */
+    var playerFactory: (() -> ExoPlayer)? = null,
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -198,9 +200,12 @@ class CastReceiverController(
 
     private fun ensurePlayer(): ExoPlayer {
         player?.let { return it }
-        val p = ExoPlayer.Builder(appContext).build()
-        p.setAudioAttributes(AudioAttributes.DEFAULT, true)
-        p.setHandleAudioBecomingNoisy(true)
+        val p = playerFactory?.invoke() ?: run {
+            val created = ExoPlayer.Builder(appContext).build()
+            created.setAudioAttributes(AudioAttributes.DEFAULT, true)
+            created.setHandleAudioBecomingNoisy(true)
+            created
+        }
         player = p
         return p
     }

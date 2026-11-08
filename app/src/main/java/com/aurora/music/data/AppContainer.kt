@@ -154,7 +154,10 @@ class AppContainer(context: Context) {
         ebookPrefs,
         castIdentity,
         onWebAudioMuted = { castMute.value = it },
-        onCastOffer = { castReceiver.onOffer(it) },
+        onCastOffer = {
+            castHub.onLocalPlaybackStarted()
+            castReceiver.onOffer(it)
+        },
         onCastStop = { castReceiver.onSenderStop() },
     )
 
@@ -361,6 +364,39 @@ class AppContainer(context: Context) {
 
     val visualizer = com.aurora.music.playback.VisualizerController(scope)
 
+    // 标准投屏接收（AirPlay）：状态、mDNS、RTSP、DSP 播放链都收在 Hub 里。
+    // 应用一启动就监听，不依赖任何页面；镜像视频走 MediaCodec + Surface。
+    private val castAudioChain = com.aurora.music.playback.DspAudioChain(
+        appContext, settingsStore, audioSessionId, visualizer, scope,
+    )
+    private val airPlayDeviceId: String = runCatching {
+        val hex = castIdentity.id.replace("-", "").lowercase().padEnd(12, '0').take(12)
+        hex.chunked(2).joinToString(":")
+    }.getOrDefault("02:00:00:00:00:01")
+    private val airPlayReceiver = com.aurora.music.data.cast.receiver.airplay.AirPlayReceiver(
+        appContext,
+        scope,
+        castIdentity.name.ifBlank { "nostalgiaPod" },
+        airPlayDeviceId,
+        audioSessionId,
+    ) { castAudioChain.createSink() }
+    // 旧协议投屏也走同一套 DSP 链（原来是无效果的独立 ExoPlayer）。
+    init {
+        castReceiver.playerFactory = { castAudioChain.createPlayer() }
+    }
+    val castHub = com.aurora.music.data.cast.receiver.CastReceiverHub(
+        scope,
+        airPlayReceiver,
+        onTakeover = { onCastTakeover() },
+    )
+
+    /** 标准投屏抢占本机播放：暂停音乐、停朗读、停旧协议投屏。 */
+    fun onCastTakeover() {
+        runCatching { com.aurora.music.playback.PlaybackService.pauseForCast(appContext) }
+        runCatching { ebookTts.stop(savePos = true, userInitiated = false) }
+        runCatching { castReceiver.stop(sendStop = true) }
+    }
+
     /**
      * 睡眠定时到点：暂停听书之外的媒体（站内音乐 + 站外系统媒体）。
      * 听书由 EbookTtsController 读完当前再停，不在这里动。幂等多调无害。
@@ -462,6 +498,37 @@ class AppContainer(context: Context) {
     }
 
     init {
+        // 标准投屏接收常驻监听（AirPlay）；失败只记录状态，不影响其它功能。
+        runCatching { castHub.start() }
+        scope.launch {
+            // 本机音乐或听书开始即抢占标准投屏，避免两边同时出声。
+            var musicWasPlaying = false
+            musicState.collect { st ->
+                if (st.playing && !musicWasPlaying) castHub.onLocalPlaybackStarted()
+                musicWasPlaying = st.playing
+            }
+        }
+        scope.launch {
+            var bookWasPlaying = false
+            ebookTts.playing.collect { playing ->
+                if (playing && !bookWasPlaying) castHub.onLocalPlaybackStarted()
+                bookWasPlaying = playing
+            }
+        }
+        scope.launch {
+            // 投屏会话进入 Playing 时拉起前台服务，结束后自动停止。
+            var serviceRunning = false
+            castHub.state.collect { s ->
+                val active = s !is com.aurora.music.data.cast.receiver.CastReceiverState.Idle
+                if (active && !serviceRunning) {
+                    com.aurora.music.playback.CastReceiveService.start(appContext)
+                    serviceRunning = true
+                } else if (!active && serviceRunning) {
+                    com.aurora.music.playback.CastReceiveService.stop(appContext)
+                    serviceRunning = false
+                }
+            }
+        }
         scope.launch {
             // 开关是唯一真相源：collect 首个值即当前开关，按源加载对应栈；切换同样走这里
             settingsStore.librarySource.collect { switchToSource(it) }

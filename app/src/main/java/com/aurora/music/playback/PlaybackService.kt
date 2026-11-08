@@ -1430,6 +1430,12 @@ class PlaybackService : MediaLibraryService() {
             ACTION_PREV -> neo?.previous()
             ACTION_ALARM -> startAlarmPlayback()
             ACTION_ALARM_DISMISS -> dismissAlarm()
+            // 标准投屏抢占：暂停音乐 + 停听书，不自动恢复（用户回来自己按播放）。
+            ACTION_CAST_TAKEOVER -> {
+                runCatching { if (::player.isInitialized) player.pause() }
+                runCatching { neo?.pause() }
+                runCatching { container.ebookTts.stop(savePos = true, userInitiated = false) }
+            }
             // 睡眠定时到点：音乐走淡出通道（渐弱后停），听书由 EbookTtsController 读完当前再停，不在这里动。
             ACTION_SLEEP_PAUSE -> {
                 if (runCatching { ::player.isInitialized && player.isPlaying }.getOrDefault(false)) {
@@ -1601,6 +1607,7 @@ class PlaybackService : MediaLibraryService() {
         const val ACTION_ALARM = "com.aurora.music.action.ALARM"
         const val ACTION_ALARM_DISMISS = "com.aurora.music.action.ALARM_DISMISS"
         const val ACTION_SLEEP_PAUSE = "com.aurora.music.action.SLEEP_PAUSE"
+        const val ACTION_CAST_TAKEOVER = "com.aurora.music.action.CAST_TAKEOVER"
         private const val ALARM_NOTIF_ID = 0xA1A
 
         // 书单播拉起统一服务的入口（占位前台防超时崩溃，见 startPlaceholderForeground）。
@@ -1627,6 +1634,12 @@ class PlaybackService : MediaLibraryService() {
          */
         fun pauseMusicForSleep(context: Context) {
             val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_SLEEP_PAUSE)
+            runCatching { context.startService(intent) }
+        }
+
+        /** AirPlay/标准投屏开始时由 Hub 调用：暂停本机音乐与听书。 */
+        fun pauseForCast(context: Context) {
+            val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_CAST_TAKEOVER)
             runCatching { context.startService(intent) }
         }
     }

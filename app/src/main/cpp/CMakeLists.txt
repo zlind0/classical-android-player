@@ -95,3 +95,41 @@ target_include_directories(aurora_aac PRIVATE
 target_compile_options(aurora_aac PRIVATE -O2)
 
 target_link_libraries(aurora_aac ${log-lib})
+
+# ---- AirPlay: vendored Apple ALAC decoder (Apache-2.0) ----
+# 16-bit stereo 44.1/48 kHz output; one decoder instance per RAOP session.
+set(ALAC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/alac)
+
+add_library(aurora_alac SHARED
+    alac_jni.cpp
+    ${ALAC_DIR}/ALACDecoder.cpp
+    ${ALAC_DIR}/ALACBitUtilities.c
+    ${ALAC_DIR}/ag_dec.c
+    ${ALAC_DIR}/dp_dec.c
+    ${ALAC_DIR}/matrix_dec.c
+    ${ALAC_DIR}/EndianPortable.c
+)
+
+target_include_directories(aurora_alac PRIVATE ${ALAC_DIR})
+# Apple's reference code uses Objective-C's nil in a couple of initializers.
+target_compile_options(aurora_alac PRIVATE -O2 -Dnil=0 -Wno-unused-parameter)
+target_link_libraries(aurora_alac ${log-lib})
+
+# ---- AirPlay screen mirroring: FairPlay handshake (shairplay/playfair) ----
+# GPLv3 data/algorithm; isolated in its own shared object. See playfair/LICENSE.md.
+set(PLAYFAIR_DIR ${CMAKE_CURRENT_SOURCE_DIR}/playfair)
+
+add_library(aurora_fairplay SHARED
+    fairplay_jni.c
+    ${PLAYFAIR_DIR}/fairplay.c
+    ${PLAYFAIR_DIR}/playfair.c
+    ${PLAYFAIR_DIR}/omg_hax.c
+    ${PLAYFAIR_DIR}/hand_garble.c
+    ${PLAYFAIR_DIR}/modified_md5.c
+    ${PLAYFAIR_DIR}/sap_hash.c
+)
+
+target_include_directories(aurora_fairplay PRIVATE ${PLAYFAIR_DIR})
+target_compile_options(aurora_fairplay PRIVATE -O2 -Wno-unused-parameter -Wno-shift-count-overflow)
+target_link_libraries(aurora_fairplay ${log-lib})
+

@@ -32,6 +32,7 @@ fun IntegrationsSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit
     val strLyricsSection = stringResource(R.string.integrations_section_lyrics)
     val strMetadataSection = stringResource(R.string.integrations_section_metadata)
     val strAcoustIdSection = stringResource(R.string.integrations_acoustid)
+    val strCastSection = stringResource(R.string.integrations_cast_section)
 
     Ios5SettingsPage(strTitle, onBack) {
         ios5Section(strLyricsSection) {
@@ -46,6 +47,33 @@ fun IntegrationsSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit
         }
         ios5Section(strAcoustIdSection) {
             AcoustIdRow(scope)
+        }
+        ios5Section(strCastSection) {
+            val castStatus by container.castHub.status.collectAsStateWithLifecycle()
+            Ios5NavRow(
+                stringResource(R.string.integrations_cast_airplay),
+                subtitle = if (castStatus.airPlayListening) {
+                    stringResource(R.string.integrations_cast_listening, castStatus.airPlayPort)
+                } else {
+                    stringResource(R.string.integrations_cast_off)
+                },
+                value = "",
+            ) {}
+            Ios5CellDivider()
+            val active = castStatus.activeProtocol
+            Ios5NavRow(
+                title = if (active != null) {
+                    stringResource(
+                        R.string.integrations_cast_active,
+                        active.label,
+                        castStatus.activeSender.ifBlank { active.label },
+                    )
+                } else {
+                    stringResource(R.string.integrations_cast_none)
+                },
+                subtitle = castStatus.activeTitle,
+                value = "",
+            ) {}
         }
     }
 }

@@ -441,6 +441,12 @@
     <string name="integrations_acoustid_on">Key set — Auto-identify enabled in tag editor</string>
     <string name="integrations_acoustid_off">Add your free key from acoustid.org/new-application</string>
     <string name="integrations_acoustid_label">AcoustID API key</string>
+    <string name="integrations_cast_section">Cast receiver</string>
+    <string name="integrations_cast_airplay">AirPlay</string>
+    <string name="integrations_cast_listening">Listening · port %1$d</string>
+    <string name="integrations_cast_off">Not listening</string>
+    <string name="integrations_cast_active">Now receiving: %1$s · %2$s</string>
+    <string name="integrations_cast_none">No active session</string>
 
     <!-- Permissions -->
     <string name="perms_title">Permissions</string>

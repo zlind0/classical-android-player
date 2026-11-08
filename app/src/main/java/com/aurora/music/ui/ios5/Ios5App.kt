@@ -303,8 +303,10 @@ fun Ios5App() {
     }
     // 本机正在接收别人的投屏：先停掉本地音乐，避免两边同时出声
     val receiveState by container.castReceiver.state.collectAsStateWithLifecycle()
+    val standardCastState by container.castHub.state.collectAsStateWithLifecycle()
     val receivingCast = receiveState is com.aurora.music.data.cast.CastReceiveState.Music ||
-        receiveState is com.aurora.music.data.cast.CastReceiveState.Ebook
+        receiveState is com.aurora.music.data.cast.CastReceiveState.Ebook ||
+        standardCastState !is com.aurora.music.data.cast.receiver.CastReceiverState.Idle
     LaunchedEffect(receivingCast) {
         if (receivingCast) playerVM.pause()
     }
@@ -1693,6 +1695,7 @@ fun Ios5App() {
 
             // 接收投屏的全屏浮层：不管当前在哪个 Tab / 阅读器 / 播放页，都盖在最上面
             com.aurora.music.ui.cast.CastReceiverOverlay()
+            com.aurora.music.ui.cast.StandardCastOverlay()
         }
       } // BoxWithConstraints 横竖屏分支结束
     }

@@ -12,6 +12,12 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="33" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
@@ -117,6 +123,12 @@
             android:name=".playback.LibraryScanService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- 标准投屏（AirPlay）接收期间保活：RTP/解码线程不能在后台被冻结 -->
+        <service
+            android:name=".playback.CastReceiveService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
 
         <!-- 电子书转有声书：逐段串行、段内分批并行合成，切界面/切后台都不停 -->
         <service
