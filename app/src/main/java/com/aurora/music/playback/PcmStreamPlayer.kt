@@ -42,7 +42,7 @@ class PcmStreamPlayer(
 
     private var sampleRate = 44100
     private var started = false
-    private var paused = false
+    @Volatile private var paused = false
     private var framesWritten = 0L
     private var directBuffer: ByteBuffer? = null
     private var focusHeld = false
@@ -114,9 +114,11 @@ class PcmStreamPlayer(
                 )
             }
         }
-        // A larger AudioTrack buffer absorbs Wi-Fi jitter; the default was
-        // underrunning on AirPlay mirroring and produced audible pops.
-        onSink { sink.configure(format, 256 * 1024, null) }
+        // Two seconds of 16-bit PCM, computed from the actual stream format.
+        // A time-based buffer absorbs Wi-Fi jitter without hard-coding a byte
+        // count that becomes too small at higher sample rates.
+        val bufferBytes = this.sampleRate * channels * 2 * 2
+        onSink { sink.configure(format, bufferBytes, null) }
         onSink { sink.play() }
         started = true
         paused = false
@@ -148,9 +150,19 @@ class PcmStreamPlayer(
             Log.i(TAG, "first PCM write: $length bytes, $frames frames, nonZeroSamples=$nonZero")
         }
         val ptsUs = framesWritten * 1_000_000L / sampleRate
-        runCatching { onSink { sink.handleBuffer(buffer, ptsUs, 1) } }
-            .onFailure { Log.w(TAG, "sink write failed: ${it.cause?.message ?: it.message}") }
-        framesWritten += frames
+        // DefaultAudioSink.handleBuffer is non-blocking: when the AudioTrack is
+        // full it returns false and keeps the same ByteBuffer. The contract
+        // requires resubmitting that exact buffer until it is fully consumed,
+        // so never overwrite it here. Overwriting used to drop the un-consumed
+        // tail and produced audible gaps whenever the sink was full.
+        var accepted = false
+        runCatching {
+            while (!accepted && !paused) {
+                accepted = onSink { sink.handleBuffer(buffer, ptsUs, 1) }
+                if (!accepted) Thread.sleep(1)
+            }
+        }.onFailure { Log.w(TAG, "sink write failed: ${it.cause?.message ?: it.message}") }
+        if (accepted) framesWritten += frames
     }
 
     fun writeSilence(frames: Int, channels: Int = 2) {
@@ -167,6 +179,7 @@ class PcmStreamPlayer(
         if (!started) return
         // AirPlay keeps pushing while we are paused: jump to the newest packet.
         runCatching { onSink { sink.flush() } }
+        framesWritten = 0L
         paused = false
         runCatching { onSink { sink.play() } }
         requestFocus()
@@ -181,7 +194,9 @@ class PcmStreamPlayer(
 
     fun stop() {
         started = false
-        paused = false
+        // Break any in-flight handleBuffer retry loop before pausing the sink;
+        // otherwise a paused AudioTrack never drains and the loop would spin.
+        paused = true
         runCatching { onSink { sink.pause() } }
         runCatching { onSink { sink.flush() } }
         runCatching { onSink { sink.reset() } }

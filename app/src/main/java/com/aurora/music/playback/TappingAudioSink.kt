@@ -19,10 +19,15 @@ class TappingAudioSink(
     private var sampleRate: Int = 48000
     private var channelCount: Int = 2
 
+    // handleBuffer may be called repeatedly with the same buffer until the
+    // delegate consumes it fully; tap each buffer only once.
+    private var pushedBuffer: ByteBuffer? = null
+
     override fun configure(inputFormat: Format, specifiedBufferSize: Int, outputChannels: IntArray?) {
         if (inputFormat.pcmEncoding != Format.NO_VALUE) encoding = inputFormat.pcmEncoding
         if (inputFormat.sampleRate != Format.NO_VALUE) sampleRate = inputFormat.sampleRate
         if (inputFormat.channelCount != Format.NO_VALUE) channelCount = inputFormat.channelCount
+        pushedBuffer = null
         super.configure(inputFormat, specifiedBufferSize, outputChannels)
     }
 
@@ -31,7 +36,12 @@ class TappingAudioSink(
         presentationTimeUs: Long,
         encodedAccessUnitCount: Int,
     ): Boolean {
-        if (controller.active) controller.pushPcm(buffer, encoding, channelCount, sampleRate)
-        return super.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+        if (controller.active && buffer !== pushedBuffer) {
+            controller.pushPcm(buffer, encoding, channelCount, sampleRate)
+            pushedBuffer = buffer
+        }
+        val handled = super.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+        if (handled) pushedBuffer = null
+        return handled
     }
 }

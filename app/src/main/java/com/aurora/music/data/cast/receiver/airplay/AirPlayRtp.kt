@@ -455,6 +455,8 @@ class AirPlayVideoReceiver(
     private var streamWidth = 0
     private var streamHeight = 0
     private var firstHeaderLogged = false
+    private var firstVideoHeaderLogged = false
+    private var firstVclLogged = false
     private var firstFrameLogged = false
 
     fun start(port: Int) {
@@ -537,7 +539,16 @@ class AirPlayVideoReceiver(
                 }
                 val payload = ByteArray(payloadSize)
                 readFully(input, payload, payloadSize)
-                when (readUInt16LE(header, 4)) {
+                val type = readUInt16LE(header, 4)
+                if (type == 0 && !firstVideoHeaderLogged) {
+                    firstVideoHeaderLogged = true
+                    Log.i(
+                        TAG,
+                        "first video header: size=$payloadSize " +
+                            "w=${readFloat(header, 56)} h=${readFloat(header, 60)}",
+                    )
+                }
+                when (type) {
                     0 -> handleVcl(header, payload)
                     1 -> handleCodecConfig(header, payload)
                     2 -> Unit // heartbeat
@@ -571,6 +582,15 @@ class AirPlayVideoReceiver(
 
     private fun handleVcl(header: ByteArray, payload: ByteArray) {
         val decrypted = decryptor.decrypt(payload)
+        if (!firstVclLogged) {
+            firstVclLogged = true
+            Log.i(
+                TAG,
+                "first VCL: payload=${payload.size} " +
+                    "dec=${hex(decrypted, minOf(32, decrypted.size))} " +
+                    "len0=${readUInt32(decrypted, 0)}",
+            )
+        }
         val prefix = buildList<ByteArray> {
             pendingSps?.let { add(it) }
             pendingPps?.let { add(it) }
@@ -683,5 +703,8 @@ class AirPlayVideoReceiver(
 
         private fun readFloat(data: ByteArray, offset: Int): Float =
             ByteBuffer.wrap(data, offset, 4).order(ByteOrder.BIG_ENDIAN).float
+
+        private fun hex(data: ByteArray, length: Int): String =
+            data.take(length).joinToString("") { "%02x".format(it) }
     }
 }

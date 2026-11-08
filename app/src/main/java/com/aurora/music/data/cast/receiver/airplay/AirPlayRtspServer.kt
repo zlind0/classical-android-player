@@ -4,6 +4,7 @@ import android.util.Log
 import java.io.BufferedInputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -111,6 +112,59 @@ class AirPlayRtspServer(
         }
     }
 
+    /**
+     * RAOP senders probe the timing port with NTP-style requests and will not
+     * start streaming until they get a reply. Echo the origin timestamp and
+     * fill receive/transmit with our current NTP time.
+     */
+    private fun startTimingResponder(socket: DatagramSocket) {
+        Thread({
+            val buf = ByteArray(64)
+            var logged = false
+            while (running.get() && !socket.isClosed) {
+                try {
+                    val packet = DatagramPacket(buf, buf.size)
+                    socket.receive(packet)
+                    if (!logged) {
+                        logged = true
+                        Log.i(TAG, "timing request: ${packet.length} bytes from ${packet.address}")
+                    }
+                    if (packet.length >= 32) {
+                        val reply = packet.data.copyOf(32)
+                        reply[0] = 0x80.toByte()
+                        val now = ntpNow()
+                        writeNtp(reply, 8, now)
+                        writeNtp(reply, 16, now)
+                        socket.send(DatagramPacket(reply, reply.size, packet.address, packet.port))
+                    }
+                } catch (_: Exception) {
+                    if (socket.isClosed) break
+                }
+            }
+        }, "AirPlayTiming").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun ntpNow(): Long {
+        val ms = System.currentTimeMillis()
+        val seconds = ms / 1000 + 2_208_988_800L
+        val fraction = ((ms % 1000) shl 32) / 1000
+        return (seconds shl 32) or (fraction and 0xFFFFFFFFL)
+    }
+
+    private fun writeNtp(data: ByteArray, offset: Int, value: Long) {
+        data[offset] = (value ushr 56).toByte()
+        data[offset + 1] = (value ushr 48).toByte()
+        data[offset + 2] = (value ushr 40).toByte()
+        data[offset + 3] = (value ushr 32).toByte()
+        data[offset + 4] = (value ushr 24).toByte()
+        data[offset + 5] = (value ushr 16).toByte()
+        data[offset + 6] = (value ushr 8).toByte()
+        data[offset + 7] = value.toByte()
+    }
+
     private fun sessionLocked(create: Boolean): Session? {
         session?.let { return it }
         if (!create) return null
@@ -194,10 +248,14 @@ class AirPlayRtspServer(
                         session.started = true
                         listener.onRecord()
                     }
+                    // Advertise one second of latency so the sender only runs
+                    // one second ahead; the 2s sink buffer then keeps ~1s of
+                    // headroom instead of sitting permanently full.
+                    val latencyFrames = session?.audioFormat?.sampleRate ?: 44100
                     respond(
                         request, output, 200, "OK", null, ByteArray(0),
                         extraHeaders = linkedMapOf(
-                            "Audio-Latency" to "11025",
+                            "Audio-Latency" to latencyFrames.toString(),
                             "Audio-Jack-Status" to "connected; type=analog",
                         ),
                     )
@@ -214,6 +272,10 @@ class AirPlayRtspServer(
                     respondEmpty(request, output, close = true)
                 }
                 request.method == "POST" && request.url.startsWith("/feedback") -> respondEmpty(request, output)
+                request.method == "POST" && request.url.startsWith("/audioMode") -> {
+                    Log.i(TAG, "audioMode: ${String(request.body, Charsets.UTF_8)}")
+                    respondEmpty(request, output)
+                }
                 request.method == "POST" && request.url.startsWith("/command") -> respondEmpty(request, output)
                 request.method == "POST" && request.url.startsWith("/photo") -> respondEmpty(request, output)
                 else -> {
@@ -284,6 +346,7 @@ class AirPlayRtspServer(
             val timingSocket = runCatching { DatagramSocket(0) }.getOrNull()
             active.timing?.let { runCatching { it.close() } }
             active.timing = timingSocket
+            timingSocket?.let { startTimingResponder(it) }
 
             var mirrorPort = 0
             val responseStreams = ArrayList<Any?>()
@@ -299,6 +362,11 @@ class AirPlayRtspServer(
                             if (key != null && iv != null) {
                                 active.mirroring = true
                                 active.streamConnectionId = id
+                                Log.i(
+                                    TAG,
+                                    "mirror stream: id=$id key=" +
+                                        key.joinToString("") { "%02x".format(it) },
+                                )
                                 mirrorPort = listener.onMirrorStream(id, key, iv)
                                 if (!active.announced) {
                                     active.announced = true
@@ -478,6 +546,7 @@ class AirPlayRtspServer(
             when {
                 contentType.contains("text/parameters", ignoreCase = true) -> {
                     val text = String(request.body, Charsets.UTF_8)
+                    Log.i(TAG, "SET_PARAMETER text: ${text.replace("\r", "\\r").replace("\n", "\\n")}")
                     val parsed = AirPlayMetadata.parseTextParameters(text)
                     if (parsed != null) {
                         var metadata = parsed

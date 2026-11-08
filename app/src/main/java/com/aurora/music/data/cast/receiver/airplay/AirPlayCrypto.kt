@@ -83,13 +83,28 @@ LAuE4Pu13aKiJnfft7hIjbK+5kyb3TysZvoyDnb3HOKvInK7vXbKuU4ISgxB2bB3HcYzQMGsz1qJ
         return out
     }
 
-    /** AirPlay video key derivation: SHA-256("AirPlayStreamKey"+id || audioAesKey). */
+    /**
+     * AirPlay video key derivation: SHA-256("AirPlayStreamKey" || id(8 bytes LE) || audioAesKey).
+     * The id is a raw 64-bit integer, not its decimal string.
+     */
     fun deriveVideoKey(streamConnectionId: Long, audioAesKey: ByteArray): ByteArray =
-        sha256("AirPlayStreamKey$streamConnectionId".toByteArray(Charsets.US_ASCII) + audioAesKey)
+        sha256(
+            "AirPlayStreamKey".toByteArray(Charsets.US_ASCII) +
+                streamIdBytes(streamConnectionId) + audioAesKey,
+        )
 
-    /** AirPlay video IV derivation: SHA-256("AirPlayStreamIV"+id || audioAesKey). */
+    /** AirPlay video IV derivation: SHA-256("AirPlayStreamIV" || id(8 bytes LE) || audioAesKey). */
     fun deriveVideoIv(streamConnectionId: Long, audioAesKey: ByteArray): ByteArray =
-        sha256("AirPlayStreamIV$streamConnectionId".toByteArray(Charsets.US_ASCII) + audioAesKey)
+        sha256(
+            "AirPlayStreamIV".toByteArray(Charsets.US_ASCII) +
+                streamIdBytes(streamConnectionId) + audioAesKey,
+        )
+
+    private fun streamIdBytes(id: Long): ByteArray =
+        java.nio.ByteBuffer.allocate(8)
+            .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            .putLong(id)
+            .array()
 
     fun sha256(data: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256").digest(data)
