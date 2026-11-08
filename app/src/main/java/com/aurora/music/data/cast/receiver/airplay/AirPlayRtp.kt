@@ -80,6 +80,9 @@ class AirPlayAudioReceiver(
     private var lastFrameCount = 0
     private var lastArrivalMs = 0L
     private var firstPacketSeen = false
+    private var firstDecodeLogged = false
+    private var debugPackets = 0
+    private var debugDecodes = 0
     private var pcmScratch = ShortArray(8192)
 
     init {
@@ -187,6 +190,7 @@ class AirPlayAudioReceiver(
             expectedSeq = rtp.sequence
             lastTimestamp = rtp.timestamp
             lastArrivalMs = System.currentTimeMillis()
+            Log.i(TAG, "first RTP packet: seq=${rtp.sequence} ts=${rtp.timestamp} payload=${rtp.payloadLength}")
             onFirstPacket()
         }
         val diff = (rtp.sequence - expectedSeq) and 0xFFFF
@@ -199,7 +203,13 @@ class AirPlayAudioReceiver(
             expectedSeq = (expectedSeq + 1) and 0xFFFF
             drainContiguous()
         } else {
-            pending[rtp.sequence] = rtp
+            // The receive loop reuses one DatagramPacket buffer, so a packet
+            // parked in the reorder window must own a copy of its payload.
+            val payload = rtp.data.copyOfRange(
+                rtp.payloadOffset,
+                rtp.payloadOffset + rtp.payloadLength,
+            )
+            pending[rtp.sequence] = rtp.copy(data = payload, payloadOffset = 0)
             lastArrivalMs = System.currentTimeMillis()
             if (pending.size > 24) advanceIfStarving(force = true)
         }
@@ -242,11 +252,24 @@ class AirPlayAudioReceiver(
         } else {
             rtp.data.copyOfRange(rtp.payloadOffset, rtp.payloadOffset + payloadLength)
         }
+        if (debugPackets < 5) {
+            debugPackets++
+            Log.i(
+                TAG,
+                "pkt#$debugPackets payload=$payloadLength enc=${format.encrypted} " +
+                    "in=${hex(rtp.data, rtp.payloadOffset, minOf(payloadLength, 32))} " +
+                    "out=${hex(decrypted, 0, minOf(decrypted.size, 32))}",
+            )
+        }
         when (format.codec) {
             AirPlayCodec.ALAC -> {
                 val bridge = alac ?: return
                 val frames = bridge.decode(decrypted, decrypted.size, pcmScratch)
                 lastFrameCount = frames
+                if (!firstDecodeLogged && frames > 0) {
+                    firstDecodeLogged = true
+                    Log.i(TAG, "first ALAC decode: frames=$frames payload=$payloadLength")
+                }
                 if (frames > 0) emitShorts(pcmScratch, frames * bridge.channels)
             }
             AirPlayCodec.AAC, AirPlayCodec.AAC_ELD -> {
@@ -266,6 +289,12 @@ class AirPlayAudioReceiver(
     }
 
     private fun emitShorts(shorts: ShortArray, count: Int) {
+        if (debugDecodes < 10) {
+            debugDecodes++
+            var nz = 0
+            for (i in 0 until count) if (shorts[i].toInt() != 0) nz++
+            Log.i(TAG, "decode#$debugDecodes shorts=$count nonZero=$nz")
+        }
         val bytes = ByteArray(count * 2)
         var j = 0
         for (i in 0 until count) {
@@ -284,6 +313,13 @@ class AirPlayAudioReceiver(
 
     companion object {
         private const val TAG = "AirPlayAudioRtp"
+
+        private fun hex(data: ByteArray, offset: Int, length: Int): String {
+            val sb = StringBuilder()
+            val end = minOf(offset + length, data.size)
+            for (i in offset until end) sb.append("%02x".format(data[i].toInt() and 0xFF))
+            return sb.toString()
+        }
     }
 }
 
@@ -418,6 +454,8 @@ class AirPlayVideoReceiver(
     private var firstTimestamp = -1L
     private var streamWidth = 0
     private var streamHeight = 0
+    private var firstHeaderLogged = false
+    private var firstFrameLogged = false
 
     fun start(port: Int) {
         synchronized(lock) {
@@ -466,6 +504,7 @@ class AirPlayVideoReceiver(
                 runCatching { client?.close() }
                 client = s
             }
+            Log.i(TAG, "video client connected from ${s.remoteSocketAddress}")
             readThread = Thread({ readLoop(s) }, "AirPlayMirrorRead").apply {
                 priority = Thread.NORM_PRIORITY + 2
                 isDaemon = true
@@ -481,17 +520,27 @@ class AirPlayVideoReceiver(
         try {
             while (synchronized(lock) { running }) {
                 readFully(input, header, 128)
-                val payloadSize = readUInt32(header, 0).toInt()
+                // Mirroring headers are little-endian: u32 payload size,
+                // u16 payload type (0=video, 1=codec data, 2=heartbeat).
+                val payloadSize = readUInt32LE(header, 0).toInt()
+                if (!firstHeaderLogged) {
+                    firstHeaderLogged = true
+                    Log.i(
+                        TAG,
+                        "first mirror header: size=$payloadSize type=${readUInt16LE(header, 4)} " +
+                            "w=${readFloat(header, 56)} h=${readFloat(header, 60)}",
+                    )
+                }
                 if (payloadSize < 0 || payloadSize > 8 * 1024 * 1024) {
                     onError("invalid mirroring payload size $payloadSize")
                     break
                 }
                 val payload = ByteArray(payloadSize)
                 readFully(input, payload, payloadSize)
-                when (header[4].toInt() and 0xFF) {
-                    0x00 -> handleVcl(header, payload)
-                    0x01 -> handleCodecConfig(header, payload)
-                    0x05 -> Unit // streaming report
+                when (readUInt16LE(header, 4)) {
+                    0 -> handleVcl(header, payload)
+                    1 -> handleCodecConfig(header, payload)
+                    2 -> Unit // heartbeat
                     else -> Unit
                 }
             }
@@ -515,7 +564,9 @@ class AirPlayVideoReceiver(
         pendingSps = annexB(sps)
         pendingPps = annexB(pps)
         updateSize(header)
-        sink.setCodecConfig(sps, pps)
+        Log.i(TAG, "codec config: sps=${sps.size} pps=${pps.size}")
+        // MediaCodec csd-0/csd-1 expect Annex-B NALs (start code included).
+        sink.setCodecConfig(pendingSps!!, pendingPps!!)
     }
 
     private fun handleVcl(header: ByteArray, payload: ByteArray) {
@@ -536,8 +587,12 @@ class AirPlayVideoReceiver(
             merged
         }
         val ptsUs = ntpToMicros(header)
-        val keyFrame = (header[5].toInt() and 0x10) != 0
+        val keyFrame = hasIdrNal(decrypted)
         updateSize(header)
+        if (!firstFrameLogged) {
+            firstFrameLogged = true
+            Log.i(TAG, "first video frame: ${out.size} bytes key=$keyFrame pts=$ptsUs")
+        }
         sink.submitAccessUnit(out, ptsUs, keyFrame)
     }
 
@@ -557,6 +612,18 @@ class AirPlayVideoReceiver(
         val micros = seconds * 1_000_000L + ((fraction.toLong() and 0xFFFFFFFFL) * 1_000_000L ushr 32)
         if (firstTimestamp < 0) firstTimestamp = micros
         return (micros - firstTimestamp).coerceAtLeast(0)
+    }
+
+    /** True when any length-prefixed NAL in the access unit is an IDR slice. */
+    private fun hasIdrNal(data: ByteArray): Boolean {
+        var pos = 0
+        while (pos + 4 <= data.size) {
+            val len = readUInt32(data, pos).toInt()
+            if (len <= 0 || pos + 4 + len > data.size) return false
+            if ((data[pos + 4].toInt() and 0x1F) == 5) return true
+            pos += 4 + len
+        }
+        return false
     }
 
     /** Replaces each 4-byte big-endian length with a start code. */
@@ -594,8 +661,19 @@ class AirPlayVideoReceiver(
     }
 
     companion object {
+        private const val TAG = "AirPlayVideo"
+
         private fun readUInt16(data: ByteArray, offset: Int): Int =
             ((data[offset].toInt() and 0xFF) shl 8) or (data[offset + 1].toInt() and 0xFF)
+
+        private fun readUInt16LE(data: ByteArray, offset: Int): Int =
+            (data[offset].toInt() and 0xFF) or ((data[offset + 1].toInt() and 0xFF) shl 8)
+
+        private fun readUInt32LE(data: ByteArray, offset: Int): Long =
+            (data[offset].toLong() and 0xFF) or
+                ((data[offset + 1].toLong() and 0xFF) shl 8) or
+                ((data[offset + 2].toLong() and 0xFF) shl 16) or
+                ((data[offset + 3].toLong() and 0xFF) shl 24)
 
         private fun readUInt32(data: ByteArray, offset: Int): Long =
             ((data[offset].toLong() and 0xFF) shl 24) or

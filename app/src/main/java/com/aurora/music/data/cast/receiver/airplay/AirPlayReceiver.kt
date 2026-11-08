@@ -195,6 +195,12 @@ class AirPlayReceiver(
     // ---------------------------------------------------------------- audio
 
     private fun startAudio(format: AirPlayAudioFormat, data: DatagramSocket, control: DatagramSocket) {
+        Log.i(
+            TAG,
+            "audio stream: codec=${format.codec} rate=${format.sampleRate} ch=${format.channels} " +
+                "encrypted=${format.encrypted} alac=${format.alacConfig} " +
+                "key=${format.aesKey.hex()} iv=${format.aesIv.hex()}",
+        )
         endAudio()
         val p = PcmStreamPlayer(appContext, sinkFactory(), audioSessionId) {
             // Audio focus lost: keep the session but stop output.
@@ -376,5 +382,7 @@ class AirPlayReceiver(
 
     companion object {
         private const val TAG = "AirPlayReceiver"
+
+        private fun ByteArray.hex(): String = joinToString("") { "%02x".format(it) }
     }
 }

@@ -4,6 +4,9 @@ import android.content.Context
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Looper
 import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -13,6 +16,9 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.audio.AudioSink
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.FutureTask
 
 /**
  * Direct PCM driver for RTP protocols (plan §5.4).
@@ -41,6 +47,27 @@ class PcmStreamPlayer(
     private var directBuffer: ByteBuffer? = null
     private var focusHeld = false
     private var focusRequest: AudioFocusRequest? = null
+    private var firstWriteLogged = false
+
+    /**
+     * Media3's DefaultAudioSink captures `Looper.myLooper()` as its playback
+     * looper in `configure()` and asserts that AudioCapabilities callbacks run
+     * on that same looper. The AirPlay RTP thread has no Looper, so the sink
+     * must be created/configured/driven on a dedicated looper thread.
+     */
+    private val sinkThread = HandlerThread("PcmSink").apply { start() }
+    private val sinkHandler = Handler(sinkThread.looper)
+
+    private fun <T> onSink(block: () -> T): T {
+        if (Looper.myLooper() === sinkThread.looper) return block()
+        val task = FutureTask(Callable { block() })
+        if (!sinkHandler.post(task)) throw IllegalStateException("PcmSink thread is not running")
+        return try {
+            task.get()
+        } catch (e: ExecutionException) {
+            throw e.cause ?: e
+        }
+    }
 
     private val sinkListener = object : AudioSink.Listener {
         override fun onPositionDiscontinuity() = Unit
@@ -49,7 +76,7 @@ class PcmStreamPlayer(
     }
 
     init {
-        runCatching { sink.setListener(sinkListener) }
+        runCatching { onSink { sink.setListener(sinkListener) } }
     }
 
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
@@ -58,7 +85,9 @@ class PcmStreamPlayer(
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
             -> {
                 paused = true
-                runCatching { sink.pause() }
+                // Focus callbacks arrive on the main thread; never block it on
+                // the sink thread, just queue the pause behind the current write.
+                sinkHandler.post { runCatching { sink.pause() } }
                 if (change == AudioManager.AUDIOFOCUS_LOSS) onFocusLoss()
             }
         }
@@ -66,7 +95,7 @@ class PcmStreamPlayer(
 
     fun start(sampleRate: Int, channels: Int = 2) {
         if (started && this.sampleRate == sampleRate) return
-        if (started) runCatching { sink.reset() }
+        if (started) runCatching { onSink { sink.reset() } }
         this.sampleRate = sampleRate.coerceAtLeast(8000)
         val format = Format.Builder()
             .setSampleMimeType(MimeTypes.AUDIO_RAW)
@@ -74,20 +103,26 @@ class PcmStreamPlayer(
             .setSampleRate(this.sampleRate)
             .setChannelCount(channels)
             .build()
-        runCatching { sink.setAudioSessionId(sessionId) }
+        runCatching { onSink { sink.setAudioSessionId(sessionId) } }
         runCatching {
-            sink.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                    .setUsage(C.USAGE_MEDIA)
-                    .build(),
-            )
+            onSink {
+                sink.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                        .setUsage(C.USAGE_MEDIA)
+                        .build(),
+                )
+            }
         }
-        sink.configure(format, 0, null)
-        sink.play()
+        // A larger AudioTrack buffer absorbs Wi-Fi jitter; the default was
+        // underrunning on AirPlay mirroring and produced audible pops.
+        onSink { sink.configure(format, 256 * 1024, null) }
+        onSink { sink.play() }
         started = true
         paused = false
         framesWritten = 0L
+        firstWriteLogged = false
+        Log.i(TAG, "sink started: rate=$sampleRate ch=$channels")
         requestFocus()
     }
 
@@ -102,9 +137,19 @@ class PcmStreamPlayer(
         buffer.clear()
         buffer.put(pcm, 0, length)
         buffer.flip()
+        if (!firstWriteLogged) {
+            firstWriteLogged = true
+            var nonZero = 0
+            var i = 0
+            while (i + 1 < length && i < 8192) {
+                if (pcm[i].toInt() != 0 || pcm[i + 1].toInt() != 0) nonZero++
+                i += 2
+            }
+            Log.i(TAG, "first PCM write: $length bytes, $frames frames, nonZeroSamples=$nonZero")
+        }
         val ptsUs = framesWritten * 1_000_000L / sampleRate
-        runCatching { sink.handleBuffer(buffer, ptsUs, 1) }
-            .onFailure { Log.w(TAG, "sink write failed: ${it.message}") }
+        runCatching { onSink { sink.handleBuffer(buffer, ptsUs, 1) } }
+            .onFailure { Log.w(TAG, "sink write failed: ${it.cause?.message ?: it.message}") }
         framesWritten += frames
     }
 
@@ -115,20 +160,21 @@ class PcmStreamPlayer(
 
     fun pause() {
         paused = true
-        runCatching { sink.pause() }
+        runCatching { onSink { sink.pause() } }
     }
 
     fun resume() {
         if (!started) return
         // AirPlay keeps pushing while we are paused: jump to the newest packet.
-        runCatching { sink.flush() }
+        runCatching { onSink { sink.flush() } }
         paused = false
-        runCatching { sink.play() }
+        runCatching { onSink { sink.play() } }
         requestFocus()
     }
 
     fun setVolume(volume: Float) {
-        runCatching { sink.setVolume(volume.coerceIn(0f, 1f)) }
+        Log.i(TAG, "setVolume: $volume")
+        runCatching { onSink { sink.setVolume(volume.coerceIn(0f, 1f)) } }
     }
 
     val isPaused: Boolean get() = paused
@@ -136,15 +182,16 @@ class PcmStreamPlayer(
     fun stop() {
         started = false
         paused = false
-        runCatching { sink.pause() }
-        runCatching { sink.flush() }
-        runCatching { sink.reset() }
+        runCatching { onSink { sink.pause() } }
+        runCatching { onSink { sink.flush() } }
+        runCatching { onSink { sink.reset() } }
         abandonFocus()
     }
 
     fun release() {
         stop()
-        runCatching { sink.release() }
+        runCatching { onSink { sink.release() } }
+        sinkThread.quitSafely()
     }
 
     private fun requestFocus() {

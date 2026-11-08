@@ -49,7 +49,10 @@ class AlacBridge(
     fun decode(packet: ByteArray, packetLength: Int, out: ShortArray): Int {
         val h = handle
         if (h == 0L) return 0
-        val maxSamples = out.size / channels.coerceAtLeast(1)
+        // The ALAC decoder's numSamples argument is the frame length, not the
+        // output buffer capacity. Passing the whole scratch buffer made it read
+        // past the 352-sample frame and emit silence.
+        val maxSamples = maxSamplesPerFrame.coerceAtMost(out.size / channels.coerceAtLeast(1))
         return runCatching { nativeDecode(h, packet, packetLength, out, maxSamples) }
             .getOrDefault(0)
     }

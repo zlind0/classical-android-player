@@ -312,6 +312,8 @@ class AirPlayRtspServer(
                                 plistDict(
                                     "type" to 110L,
                                     "dataPort" to mirrorPort.toLong(),
+                                    "controlPort" to mirrorPort.toLong(),
+                                    "streamConnectionID" to id,
                                 ),
                             )
                         }
@@ -485,7 +487,11 @@ class AirPlayRtspServer(
                             val key = line.substringBefore(':', "").trim()
                             val value = line.substringAfter(':', "").trim()
                             when (key) {
-                                "volume" -> value.toDoubleOrNull()?.let { listener.onVolume(AirPlayMetadata.dbToLinear(it)) }
+                                "volume" -> value.toDoubleOrNull()?.let {
+                                    val linear = AirPlayMetadata.dbToLinear(it)
+                                    Log.i(TAG, "volume: $it dB -> $linear")
+                                    listener.onVolume(linear)
+                                }
                                 "progress" -> {
                                     val parts = value.split('/')
                                     if (parts.size == 3) {
