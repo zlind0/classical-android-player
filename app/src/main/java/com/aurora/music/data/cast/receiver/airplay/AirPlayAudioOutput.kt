@@ -29,6 +29,9 @@ class AirPlayAudioOutput(
     @Volatile private var channels = 2
     private var scratch = ShortArray(0)
     private var bytes = ByteArray(0)
+    /** 发送端下发的音量与本地解说 duck 系数分开保存，避免互相覆盖。 */
+    @Volatile private var baseVolume = 1f
+    @Volatile private var duckFactor = 1f
 
     fun start(sampleRate: Int, channels: Int) {
         this.sampleRate = sampleRate.coerceAtLeast(8000)
@@ -72,7 +75,19 @@ class AirPlayAudioOutput(
     }
 
     fun setVolume(volume: Float) {
-        player.setVolume(volume)
+        baseVolume = volume.coerceIn(0f, 1f)
+        applyVolume()
+    }
+
+    /** 本地解说 TTS 期间压低发送端音频（25%），不暂停也不改发送端音量。 */
+    fun setDuckFactor(factor: Float) {
+        duckFactor = factor.coerceIn(0f, 1f)
+        player.setDuckHold(factor < 1f)
+        applyVolume()
+    }
+
+    private fun applyVolume() {
+        player.setVolume((baseVolume * duckFactor).coerceIn(0f, 1f))
     }
 
     val isPaused: Boolean get() = player.isPaused

@@ -95,6 +95,10 @@ import com.aurora.music.ui.browse.searchScopeFor
 import com.aurora.music.ui.player.Ios5MiniStrip
 import com.aurora.music.ui.player.Ios5AudiobookPlayerPage
 import com.aurora.music.ui.player.Ios5PlayerPage
+import com.aurora.music.ui.player.Ios5LandscapeAudiobookTransport
+import com.aurora.music.ui.player.Ios5LandscapeCastTransport
+import com.aurora.music.ui.player.NowPlayingMode
+import com.aurora.music.ui.player.toPlayerUiState
 import com.aurora.music.ui.search.Ios5SearchPage
 import com.aurora.music.ui.tabs.ArtistsTab
 import com.aurora.music.ui.tabs.AudiobooksTab
@@ -195,6 +199,27 @@ fun Ios5App() {
     val browseVM: Ios5BrowseViewModel = viewModel()
 
     val playerState by playerVM.state.collectAsStateWithLifecycle()
+    // 投屏接收：音频接收并入统一播放页；电子书接收和 AirPlay 视频镜像仍走各自浮层。
+    val receiveState by container.castReceiver.state.collectAsStateWithLifecycle()
+    val standardCastState by container.castHub.state.collectAsStateWithLifecycle()
+    val receivingCast = receiveState is com.aurora.music.data.cast.CastReceiveState.Music ||
+        receiveState is com.aurora.music.data.cast.CastReceiveState.Ebook ||
+        standardCastState !is com.aurora.music.data.cast.receiver.CastReceiverState.Idle
+    val podMusicReceive = receiveState as? com.aurora.music.data.cast.CastReceiveState.Music
+    val airPlayPlaying = standardCastState as? com.aurora.music.data.cast.receiver.CastReceiverState.Playing
+    val airPlayAudioReceive = airPlayPlaying?.takeIf { it.video == null }
+    val receiveUi = podMusicReceive?.toPlayerUiState() ?: airPlayAudioReceive?.toPlayerUiState()
+    val receiveActive = receiveUi != null
+    val nowPlayingMode = when {
+        podMusicReceive != null -> NowPlayingMode.POD_RECEIVE
+        airPlayAudioReceive != null -> NowPlayingMode.AIRPLAY_RECEIVE
+        else -> NowPlayingMode.MUSIC
+    }
+    val nowPlayingState = receiveUi ?: playerState
+    val receiveCaption = if (receiveActive) "Pod 局域网串流" else ""
+    LaunchedEffect(receivingCast) {
+        if (receivingCast) playerVM.pause()
+    }
     val browseState by browseVM.state.collectAsStateWithLifecycle()
     val abooks by container.audiobookStore.books.collectAsStateWithLifecycle()
     val abookPrefs by container.settingsStore.audiobookPrefs.collectAsStateWithLifecycle(
@@ -246,21 +271,56 @@ fun Ios5App() {
             snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Short)
         }
     }
+    fun currentNowPlayingSong(): com.aurora.music.model.Song {
+        val pod = container.castReceiver.state.value as? com.aurora.music.data.cast.CastReceiveState.Music
+        if (pod != null) return pod.song
+        val air = container.castHub.state.value as? com.aurora.music.data.cast.receiver.CastReceiverState.Playing
+        if (air != null && air.video == null) return air.toPlayerUiState().current
+        return playerState.current
+    }
     fun onIntroClick() {
-        val s = playerState.current
+        val s = currentNowPlayingSong()
         if (s.id.isNotEmpty()) container.songIntro.toggle(s)
     }
     val introState by container.songIntro.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) {
         container.songIntro.music = object : com.aurora.music.data.IntroMusicControl {
-            override fun isPlaying(): Boolean = playerVM.state.value.isPlaying
+            override fun isPlaying(): Boolean {
+                val air = container.castHub.state.value
+                if (air is com.aurora.music.data.cast.receiver.CastReceiverState.Playing && air.video == null) {
+                    return air.playing
+                }
+                val pod = container.castReceiver.state.value
+                if (pod is com.aurora.music.data.cast.CastReceiveState.Music) return pod.playing
+                return playerVM.state.value.isPlaying
+            }
+
             override fun pause() = playerVM.pauseForIntro()
             override fun resume() = playerVM.resumeForIntro()
+
+            override fun duckForIntro(): Boolean {
+                val air = container.castHub.state.value
+                if (air is com.aurora.music.data.cast.receiver.CastReceiverState.Playing && air.video == null) {
+                    container.castHub.setIntroDuck(true)
+                    return true
+                }
+                val pod = container.castReceiver.state.value
+                if (pod is com.aurora.music.data.cast.CastReceiveState.Music) {
+                    container.castReceiver.setIntroDuck(true)
+                    return true
+                }
+                return false
+            }
+
+            override fun unduckAfterIntro() {
+                container.castHub.setIntroDuck(false)
+                container.castReceiver.setIntroDuck(false)
+            }
         }
         container.songIntro.events.collect { confirm(it) }
     }
-    LaunchedEffect(playerState.current.id) {
-        container.songIntro.onSongChanged(playerState.current.id)
+    LaunchedEffect(nowPlayingState.current.id) {
+        container.songIntro.onSongChanged(currentNowPlayingSong().id)
     }
     // 网页投屏常驻（启动即开）：播放器状态与当前清单全局推给网页。
     // 放在 Ios5App 而不是阅读页，没开阅读页时网页也能显示“正在播放 + 当前清单”。
@@ -300,15 +360,6 @@ fun Ios5App() {
     // 投屏提示（对方拒绝 / 连接失败 / 已断开）
     LaunchedEffect(container) {
         container.ebookCast.events.collect { confirm(it) }
-    }
-    // 本机正在接收别人的投屏：先停掉本地音乐，避免两边同时出声
-    val receiveState by container.castReceiver.state.collectAsStateWithLifecycle()
-    val standardCastState by container.castHub.state.collectAsStateWithLifecycle()
-    val receivingCast = receiveState is com.aurora.music.data.cast.CastReceiveState.Music ||
-        receiveState is com.aurora.music.data.cast.CastReceiveState.Ebook ||
-        standardCastState !is com.aurora.music.data.cast.receiver.CastReceiverState.Idle
-    LaunchedEffect(receivingCast) {
-        if (receivingCast) playerVM.pause()
     }
     // 外部打开电子书（文件关联）：导入完成后跳阅读页；失败则提示
     val pendingEbook by container.ebookStore.openRequest.collectAsStateWithLifecycle()
@@ -435,6 +486,21 @@ fun Ios5App() {
     }
     // 播放页是全屏翻转页，属于页面现场的一部分
     var expandedRestored by remember { mutableStateOf(false) }
+    // 投屏接收页与普通播放页共用同一套翻转现场。投屏开始时自动展开，
+    // 退出时还原到投屏前的展开状态。
+    var castPageExpanded by rememberSaveable { mutableStateOf(false) }
+    var expandedBeforeCast by remember { mutableStateOf(false) }
+    LaunchedEffect(receiveActive) {
+        if (receiveActive) {
+            expandedBeforeCast = playerState.expanded
+            castPageExpanded = true
+        } else {
+            castPageExpanded = false
+            if (expandedBeforeCast) playerVM.setExpanded(true)
+        }
+    }
+    val nowPlayingExpanded = if (receiveActive) castPageExpanded else playerState.expanded
+    val nowPlayingAvailable = receiveActive || playerState.hasTrack
     LaunchedEffect(playerState.expanded) {
         if (expandedRestored) container.uiState.savePlayerExpanded(playerState.expanded)
     }
@@ -459,6 +525,13 @@ fun Ios5App() {
     }
 
     var showQueue by remember { mutableStateOf(false) }
+    // 横屏有声书/接收页的气泡宿主：气泡必须盖住整屏，不能只盖右栏。
+    var abookBubble by remember { mutableStateOf<com.aurora.music.ui.player.AbookBubble?>(null) }
+    var landscapeSleepBubble by remember { mutableStateOf(false) }
+    var castSeekFraction by remember { mutableStateOf(-1f) }
+    LaunchedEffect(receivingCast) {
+        if (receivingCast) showQueue = false
+    }
 
     // 横向合并顶栏的上报宿主：NavHost 内页面的 Ios5NavBar 把标题/返回/搜索交到这里统一渲染
     val topBarHost = remember { TopBarHost() }
@@ -643,7 +716,7 @@ fun Ios5App() {
         // iOS5 翻转：内容面 / 播放面，前半程内容转走，后半程播放页转入（仅竖屏）
         val flipDensity = LocalDensity.current
         val flip by animateFloatAsState(
-            targetValue = if (!landscape && playerState.expanded) 1f else 0f,
+            targetValue = if (!landscape && nowPlayingExpanded) 1f else 0f,
             animationSpec = tween(600, easing = FastOutSlowInEasing),
             label = "playerFlip",
         )
@@ -1313,15 +1386,30 @@ fun Ios5App() {
                         Modifier.fillMaxWidth()
                             .windowInsetsPadding(WindowInsets.navigationBars),
                     ) {
-                        if (playerState.hasTrack && faceFlip < 0.5f && showMiniStrip) {
+                        if (nowPlayingAvailable && faceFlip < 0.5f && showMiniStrip) {
                             Ios5MiniStrip(
-                                state = playerState,
-                                onExpand = { playerVM.setExpanded(true) },
-                                onTogglePlay = { playerVM.togglePlay() },
-                                // 有声书态 mini 条下一键 = 前进步长（与通知栏一致），音乐态切歌
+                                state = nowPlayingState,
+                                onExpand = {
+                                    if (receiveActive) castPageExpanded = true
+                                    else playerVM.setExpanded(true)
+                                },
+                                onTogglePlay = {
+                                    when {
+                                        podMusicReceive != null -> container.castReceiver.togglePlay()
+                                        airPlayAudioReceive != null ->
+                                            if (airPlayAudioReceive.playing) container.castHub.pause()
+                                            else container.castHub.play()
+                                        else -> playerVM.togglePlay()
+                                    }
+                                },
+                                // 有声书态 mini 条下一键 = 前进步长（与通知栏一致），音乐/接收态切歌
                                 onNext = {
-                                    if (playerState.abookId != null) playerVM.seekBySeconds(playerVM.abookStep())
-                                    else playerVM.next()
+                                    when {
+                                        podMusicReceive != null -> container.castReceiver.next()
+                                        airPlayAudioReceive != null -> container.castHub.next()
+                                        playerState.abookId != null -> playerVM.seekBySeconds(playerVM.abookStep())
+                                        else -> playerVM.next()
+                                    }
                                 },
                             )
                         }
@@ -1400,15 +1488,30 @@ fun Ios5App() {
                                 Modifier.width(panelWidth).fillMaxHeight().padding(horizontal = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                val song = playerState.current
-                                val merged = com.aurora.music.ui.player.rememberMergedTitle(song)
+                                val song = nowPlayingState.current
+                                val isAbook = !receiveActive && playerState.abookId != null
+                                val abookTitle = if (isAbook) {
+                                    abooks.firstOrNull { it.id == playerState.abookId }?.displayTitle
+                                        ?: container.remoteLibrary
+                                            .remoteAudiobookForPlayId(playerState.abookId)?.displayTitle
+                                        ?: ""
+                                } else ""
+                                val merged = if (!receiveActive && !isAbook) {
+                                    com.aurora.music.ui.player.rememberMergedTitle(song)
+                                } else null
                                 Column(
                                     Modifier.weight(1f).fillMaxHeight(),
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     verticalArrangement = Arrangement.Center,
                                 ) {
                                     Text(
-                                        song.artist.ifBlank { " " },
+                                        when {
+                                            receiveActive -> song.artist.ifBlank {
+                                                airPlayPlaying?.senderName.orEmpty().ifBlank { " " }
+                                            }
+                                            isAbook -> abookTitle.ifBlank { " " }
+                                            else -> song.artist.ifBlank { " " }
+                                        },
                                         color = Color(0xFF9AA0AB), fontSize = 10.sp, lineHeight = 12.sp,
                                         fontWeight = FontWeight.Bold,
                                         fontFamily = Ios5Sans,
@@ -1441,10 +1544,21 @@ fun Ios5App() {
                                         )
                                     }
                                 }
-                                Icon(
-                                    Icons.AutoMirrored.Filled.QueueMusic, "队列", tint = Color.White,
-                                    modifier = Modifier.size(30.dp).clip(CircleShape).clickable(onClick = { showQueue = true }).padding(5.dp),
-                                )
+                                if (receiveActive) {
+                                    com.aurora.music.ui.player.Ios5ExitCastButton(
+                                        onClick = {
+                                            when {
+                                                podMusicReceive != null -> container.castReceiver.stop()
+                                                airPlayAudioReceive != null -> container.castHub.stopSession()
+                                            }
+                                        },
+                                    )
+                                } else {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.QueueMusic, "队列", tint = Color.White,
+                                        modifier = Modifier.size(30.dp).clip(CircleShape).clickable(onClick = { showQueue = true }).padding(5.dp),
+                                    )
+                                }
                             }
                         }
                     }
@@ -1455,9 +1569,31 @@ fun Ios5App() {
                             }
                         }
                         com.aurora.music.ui.player.Ios5LandscapeSidePlayer(
-                            state = playerState,
-                            onSeek = { playerVM.seekTo(it) },
+                            state = nowPlayingState,
+                            onSeek = { f ->
+                                when {
+                                    podMusicReceive != null -> container.castReceiver.seekFraction(f, true)
+                                    airPlayAudioReceive != null -> Unit
+                                    else -> playerVM.seekTo(f)
+                                }
+                            },
                             panelWidth = panelWidth,
+                            mode = when {
+                                receiveActive -> nowPlayingMode
+                                playerState.abookId != null -> NowPlayingMode.AUDIOBOOK
+                                else -> NowPlayingMode.MUSIC
+                            },
+                            onSpeedClick = {
+                                if (!receiveActive && playerState.abookId != null) {
+                                    abookBubble = com.aurora.music.ui.player.AbookBubble.SPEED
+                                }
+                            },
+                            onVolumeClick = {
+                                if (!receiveActive && playerState.abookId != null) {
+                                    abookBubble = com.aurora.music.ui.player.AbookBubble.GAIN
+                                }
+                            },
+                            caption = receiveCaption,
                         )
                     }
                     // 整条底栏：左 Tab（自适应）+ 右走带键（340dp 与侧栏对齐），背后黑色。
@@ -1488,25 +1624,59 @@ fun Ios5App() {
                                 ),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                com.aurora.music.ui.player.Ios5LandscapeTransport(
-                                    state = playerState,
-                                    onTogglePlay = { playerVM.togglePlay() },
-                                    // 横屏有声书态：走带键切章节（系统键仍走 ±步长，由 service 拦截）
-                                    onNext = {
-                                        if (playerState.abookId != null) playerVM.abookChapter(+1)
-                                        else playerVM.next()
-                                    },
-                                    onPrevious = {
-                                        if (playerState.abookId != null) playerVM.abookChapter(-1)
-                                        else playerVM.previous()
-                                    },
-                                    onToggleLike = { if (playerState.abookId == null) playerVM.toggleLikeCurrent() },
-                                    onToggleShuffle = { playerVM.toggleShuffle() },
-                                    onCycleRepeat = { playerVM.cycleRepeat() },
-                                    modifier = Modifier.padding(vertical = 2.dp),
-                                    introActive = introState.active,
-                                    onIntroClick = { onIntroClick() },
-                                )
+                                when {
+                                    receiveActive -> com.aurora.music.ui.player.Ios5LandscapeCastTransport(
+                                        state = nowPlayingState,
+                                        introActive = introState.active,
+                                        onIntroClick = { onIntroClick() },
+                                        onTogglePlay = {
+                                            when {
+                                                podMusicReceive != null -> container.castReceiver.togglePlay()
+                                                airPlayAudioReceive != null ->
+                                                    if (airPlayAudioReceive.playing) container.castHub.pause()
+                                                    else container.castHub.play()
+                                            }
+                                        },
+                                        onNext = {
+                                            when {
+                                                podMusicReceive != null -> container.castReceiver.next()
+                                                airPlayAudioReceive != null -> container.castHub.next()
+                                            }
+                                        },
+                                        onPrevious = {
+                                            when {
+                                                podMusicReceive != null -> container.castReceiver.previous()
+                                                airPlayAudioReceive != null -> container.castHub.previous()
+                                            }
+                                        },
+                                        onSleep = { landscapeSleepBubble = true },
+                                        modifier = Modifier.padding(vertical = 2.dp),
+                                        canNext = podMusicReceive != null || airPlayPlaying?.capabilities?.canNext == true,
+                                        canPrevious = podMusicReceive != null || airPlayPlaying?.capabilities?.canPrevious == true,
+                                    )
+                                    playerState.abookId != null -> com.aurora.music.ui.player.Ios5LandscapeAudiobookTransport(
+                                        state = playerState,
+                                        stepSeconds = playerVM.abookStep(),
+                                        onSeekBy = { playerVM.seekBySeconds(it) },
+                                        onTogglePlay = { playerVM.togglePlay() },
+                                        onChapters = {
+                                            abookBubble = com.aurora.music.ui.player.AbookBubble.CHAPTERS
+                                        },
+                                        modifier = Modifier.padding(vertical = 2.dp),
+                                    )
+                                    else -> com.aurora.music.ui.player.Ios5LandscapeTransport(
+                                        state = playerState,
+                                        onTogglePlay = { playerVM.togglePlay() },
+                                        onNext = { playerVM.next() },
+                                        onPrevious = { playerVM.previous() },
+                                        onToggleLike = { playerVM.toggleLikeCurrent() },
+                                        onToggleShuffle = { playerVM.toggleShuffle() },
+                                        onCycleRepeat = { playerVM.cycleRepeat() },
+                                        modifier = Modifier.padding(vertical = 2.dp),
+                                        introActive = introState.active,
+                                        onIntroClick = { onIntroClick() },
+                                    )
+                                }
                             }
                         }
                     }
@@ -1518,7 +1688,7 @@ fun Ios5App() {
             // ---- 播放面（整页 iPod 播放器，翻转进入） ----
             // 播放页根自带空点按拦截触摸，漏不下去，不需要额外拦截层。
             // 动画结束后卸载，避免两棵树常驻耗性能。
-            if (playerState.expanded || flip > 0.02f) {
+            if (nowPlayingExpanded || flip > 0.02f) {
             Box(
                 Modifier.fillMaxSize()
                     .graphicsLayer {
@@ -1527,7 +1697,55 @@ fun Ios5App() {
                         alpha = if (flip >= 0.5f) 1f else 0f
                     },
             ) {
-                if (playerState.hasTrack) {
+                if (receiveActive) {
+                    Ios5PlayerPage(
+                        state = nowPlayingState,
+                        onCollapse = { castPageExpanded = false },
+                        onTogglePlay = {
+                            when {
+                                podMusicReceive != null -> container.castReceiver.togglePlay()
+                                airPlayAudioReceive != null ->
+                                    if (airPlayAudioReceive.playing) container.castHub.pause()
+                                    else container.castHub.play()
+                            }
+                        },
+                        onNext = {
+                            when {
+                                podMusicReceive != null -> container.castReceiver.next()
+                                airPlayAudioReceive != null -> container.castHub.next()
+                            }
+                        },
+                        onPrevious = {
+                            when {
+                                podMusicReceive != null -> container.castReceiver.previous()
+                                airPlayAudioReceive != null -> container.castHub.previous()
+                            }
+                        },
+                        onSeek = { f ->
+                            castSeekFraction = f
+                            if (podMusicReceive != null) container.castReceiver.seekFraction(f, false)
+                        },
+                        onSeekFinished = {
+                            if (podMusicReceive != null && castSeekFraction >= 0f) {
+                                container.castReceiver.seekFraction(castSeekFraction, true)
+                            }
+                        },
+                        onToggleLike = {},
+                        onToggleShuffle = {},
+                        onCycleRepeat = {},
+                        onOpenQueue = {},
+                        introActive = introState.active,
+                        onIntroClick = { onIntroClick() },
+                        mode = nowPlayingMode,
+                        sourceCaption = receiveCaption,
+                        onExitCast = {
+                            when {
+                                podMusicReceive != null -> container.castReceiver.stop()
+                                airPlayAudioReceive != null -> container.castHub.stopSession()
+                            }
+                        },
+                    )
+                } else if (playerState.hasTrack) {
                     val remoteAbookEntry = container.remoteLibrary.remoteAudiobookForPlayId(playerState.abookId)
                     val abook = abooks.firstOrNull { it.id == playerState.abookId }
                         ?: remoteAbookEntry?.let { e ->
@@ -1630,8 +1848,11 @@ fun Ios5App() {
             // 竖屏播放页开着时返回先关播放页，再按才作用于主页面。
             // 条件组合（而非常驻 enabled 开关），旋转后重开播放页时重新注册，
             // 保证永远排在 NavHost 的回调之后（最新注册最先收到返回键）。
-            if (!landscape && playerState.expanded && !isEbookReader) {
-                BackHandler { playerVM.setExpanded(false) }
+            if (!landscape && nowPlayingExpanded && (!isEbookReader || receiveActive)) {
+                BackHandler {
+                    if (receiveActive) castPageExpanded = false
+                    else playerVM.setExpanded(false)
+                }
             }
 
             // ---- 阅读器：全屏覆盖在内容页之上 ----
@@ -1639,7 +1860,7 @@ fun Ios5App() {
             // （NavHost、Tab、随机列表、滚动位置）一直留在组合里。关闭时只是这层
             // 黑色覆盖层淡出，直接露出原来的 UI，不会先退回再重新加载。
             AnimatedVisibility(
-                visible = isEbookReader,
+                visible = isEbookReader && !(receiveActive && castPageExpanded && !landscape),
                 enter = fadeIn(tween(260)),
                 exit = fadeOut(tween(260)),
             ) {
@@ -1696,6 +1917,73 @@ fun Ios5App() {
             // 接收投屏的全屏浮层：不管当前在哪个 Tab / 阅读器 / 播放页，都盖在最上面
             com.aurora.music.ui.cast.CastReceiverOverlay()
             com.aurora.music.ui.cast.StandardCastOverlay()
+
+            // 横屏有声书/接收页气泡：盖住整屏。竖屏播放页内部自己管理气泡。
+            val abookBubbleNow = abookBubble
+            if (abookBubbleNow != null) {
+                val remoteAbookEntry = container.remoteLibrary.remoteAudiobookForPlayId(playerState.abookId)
+                val abook = abooks.firstOrNull { it.id == playerState.abookId }
+                    ?: remoteAbookEntry?.let { e ->
+                        com.aurora.music.data.audiobook.AudiobookBook(
+                            id = container.remoteLibrary.abookPlayId(e),
+                            title = e.displayTitle,
+                            rootId = -1L,
+                            chapters = e.chapters.map { c ->
+                                com.aurora.music.data.audiobook.AudiobookChapter(
+                                    path = c.path,
+                                    title = c.title,
+                                    trackNumber = c.trackNumber,
+                                    durationSec = c.durationSec,
+                                    size = c.size,
+                                )
+                            },
+                            coverPath = e.coverUrl,
+                            currentPath = e.chapters.getOrNull(e.currentIndex)?.path.orEmpty(),
+                            positionMs = e.positionMs,
+                            lastPlayedAt = e.lastPlayedAt,
+                        )
+                    }
+                when (abookBubbleNow) {
+                    com.aurora.music.ui.player.AbookBubble.SPEED -> com.aurora.music.ui.player.SpeedBubble(
+                        speed = playerState.abookSpeed,
+                        onSpeed = { playerVM.setAbookSpeed(it) },
+                        onDismiss = { abookBubble = null },
+                    )
+                    com.aurora.music.ui.player.AbookBubble.GAIN -> com.aurora.music.ui.player.GainBubble(
+                        gain = playerState.abookGain,
+                        onGain = { playerVM.setAbookGain(it) },
+                        onDismiss = { abookBubble = null },
+                    )
+                    com.aurora.music.ui.player.AbookBubble.CHAPTERS -> if (abook != null) {
+                        com.aurora.music.ui.player.ChapterBubble(
+                            book = abook,
+                            currentIndex = playerState.currentIndex,
+                            chapterAvailable = { i ->
+                                if (remoteAbookEntry == null) true
+                                else {
+                                    val lib = remoteLibraries.firstOrNull { it.deviceId == remoteAbookEntry.deviceId }
+                                    lib?.online == true ||
+                                        container.remoteLibrary.chapterCached(
+                                            remoteAbookEntry.deviceId,
+                                            remoteAbookEntry.chapters.getOrNull(i)?.path.orEmpty(),
+                                        )
+                                }
+                            },
+                            onSelect = {
+                                playerVM.abookJumpToChapter(it)
+                                abookBubble = null
+                            },
+                            onDismiss = { abookBubble = null },
+                        )
+                    }
+                    com.aurora.music.ui.player.AbookBubble.SLEEP -> com.aurora.music.ui.player.SleepBubble(
+                        onDismiss = { abookBubble = null },
+                    )
+                }
+            }
+            if (landscapeSleepBubble) {
+                com.aurora.music.ui.player.SleepBubble(onDismiss = { landscapeSleepBubble = false })
+            }
         }
       } // BoxWithConstraints 横竖屏分支结束
     }

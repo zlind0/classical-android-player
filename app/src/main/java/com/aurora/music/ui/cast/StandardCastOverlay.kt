@@ -78,15 +78,15 @@ fun StandardCastOverlay() {
         CastReceiverState.Idle -> Unit
         is CastReceiverState.Connecting -> ConnectingScreen(s)
         is CastReceiverState.Playing -> {
-            BackHandler { /* modal: use the stop button */ }
-            CastNowPlayingScreen(
-                state = s,
-                onPlayPause = { if (s.playing) hub.pause() else hub.play() },
-                onNext = { hub.next() },
-                onPrevious = { hub.previous() },
-                onStop = { hub.stopSession() },
-                onSurface = { hub.setVideoSurface(it) },
-            )
+            // 音频接收已并入统一正在播放页；这里只保留 AirPlay 视频镜像。
+            if (s.video != null) {
+                BackHandler { /* modal: use the stop button */ }
+                CastNowPlayingScreen(
+                    state = s,
+                    onStop = { hub.stopSession() },
+                    onSurface = { hub.setVideoSurface(it) },
+                )
+            }
         }
     }
 }
@@ -128,9 +128,6 @@ private fun ConnectingScreen(state: CastReceiverState.Connecting) {
 @Composable
 private fun CastNowPlayingScreen(
     state: CastReceiverState.Playing,
-    onPlayPause: () -> Unit,
-    onNext: () -> Unit,
-    onPrevious: () -> Unit,
     onStop: () -> Unit,
     onSurface: (android.view.Surface?) -> Unit,
 ) {
@@ -139,8 +136,8 @@ private fun CastNowPlayingScreen(
     ) {
         Column(Modifier.fillMaxSize()) {
             TopBar(state, onStop)
-            if (state.video != null) {
-                val video = state.video
+            val video = state.video
+            if (video != null) {
                 val ratio = if (video.width > 0 && video.height > 0) {
                     video.width.toFloat() / video.height
                 } else {
@@ -158,14 +155,6 @@ private fun CastNowPlayingScreen(
                             .padding(horizontal = 12.dp),
                     )
                 }
-            } else {
-                AudioContent(
-                    state = state,
-                    onPlayPause = onPlayPause,
-                    onNext = onNext,
-                    onPrevious = onPrevious,
-                    modifier = Modifier.fillMaxSize(),
-                )
             }
         }
     }
@@ -208,163 +197,6 @@ private fun TopBar(state: CastReceiverState.Playing, onStop: () -> Unit) {
 }
 
 @Composable
-private fun AudioContent(
-    state: CastReceiverState.Playing,
-    onPlayPause: () -> Unit,
-    onNext: () -> Unit,
-    onPrevious: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier.padding(horizontal = 28.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Spacer(Modifier.weight(1f))
-        Box(
-            Modifier
-                .fillMaxWidth(0.72f)
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(20.dp))
-                .background(Color.White.copy(alpha = 0.06f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (state.media.artworkUri.isNotBlank()) {
-                SubcomposeAsyncImage(
-                    model = state.media.artworkUri,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                    loading = { },
-                    error = { ArtworkPlaceholder() },
-                )
-            } else {
-                ArtworkPlaceholder()
-            }
-        }
-        Spacer(Modifier.height(26.dp))
-        Text(
-            state.media.title.ifBlank { "投屏音频" },
-            color = Color.White,
-            fontSize = 22.sp,
-            fontWeight = FontWeight.SemiBold,
-            fontFamily = Ios5Sans,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-        )
-        if (state.media.artist.isNotBlank()) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                state.media.artist,
-                color = Color.White.copy(alpha = 0.7f),
-                fontSize = 15.sp,
-                fontFamily = Ios5Sans,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        if (state.media.album.isNotBlank()) {
-            Spacer(Modifier.height(2.dp))
-            Text(
-                state.media.album,
-                color = Color.White.copy(alpha = 0.45f),
-                fontSize = 13.sp,
-                fontFamily = Ios5Sans,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Spacer(Modifier.height(22.dp))
-        Progress(state)
-        Spacer(Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            ControlButton(Icons.Filled.SkipPrevious, "上一首", enabled = state.capabilities.canPrevious, onClick = onPrevious)
-            Spacer(Modifier.size(22.dp))
-            PlayPauseButton(playing = state.playing, enabled = state.capabilities.canPlayPause, onClick = onPlayPause)
-            Spacer(Modifier.size(22.dp))
-            ControlButton(Icons.Filled.SkipNext, "下一首", enabled = state.capabilities.canNext, onClick = onNext)
-        }
-        Spacer(Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun ArtworkPlaceholder() {
-    Icon(
-        Icons.Filled.Cast, null,
-        tint = Color.White.copy(alpha = 0.35f),
-        modifier = Modifier.size(72.dp),
-    )
-}
-
-@Composable
-private fun Progress(state: CastReceiverState.Playing) {
-    val duration = state.durationMs.coerceAtLeast(0)
-    var dragging by remember { mutableStateOf(false) }
-    var dragValue by remember { mutableFloatStateOf(0f) }
-    val fraction = if (duration > 0) {
-        (state.positionMs.toFloat() / duration).coerceIn(0f, 1f)
-    } else {
-        0f
-    }
-    Column(Modifier.fillMaxWidth()) {
-        Slider(
-            value = if (dragging) dragValue else fraction,
-            onValueChange = { if (state.capabilities.canSeek) { dragging = true; dragValue = it } },
-            onValueChangeFinished = { dragging = false },
-            enabled = state.capabilities.canSeek && duration > 0,
-            colors = SliderDefaults.colors(
-                thumbColor = Color.White,
-                activeTrackColor = Color.White.copy(alpha = 0.9f),
-                inactiveTrackColor = Color.White.copy(alpha = 0.2f),
-                disabledThumbColor = Color.White.copy(alpha = 0.7f),
-                disabledActiveTrackColor = Color.White.copy(alpha = 0.7f),
-                disabledInactiveTrackColor = Color.White.copy(alpha = 0.2f),
-            ),
-        )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(formatTime(if (dragging) (dragValue * duration).roundToLong() else state.positionMs), color = Color.White.copy(alpha = 0.55f), fontSize = 12.sp, fontFamily = Ios5Sans)
-            Text(formatTime(duration), color = Color.White.copy(alpha = 0.55f), fontSize = 12.sp, fontFamily = Ios5Sans)
-        }
-    }
-}
-
-@Composable
-private fun PlayPauseButton(playing: Boolean, enabled: Boolean, onClick: () -> Unit) {
-    IconButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier
-            .size(66.dp)
-            .clip(CircleShape)
-            .background(Color.White.copy(alpha = if (enabled) 0.14f else 0.06f)),
-    ) {
-        Icon(
-            if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-            if (playing) "暂停" else "播放",
-            tint = Color.White.copy(alpha = if (enabled) 0.95f else 0.3f),
-            modifier = Modifier.size(34.dp),
-        )
-    }
-}
-
-@Composable
-private fun ControlButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    description: String,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
-    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(48.dp)) {
-        Icon(
-            icon, description,
-            tint = Color.White.copy(alpha = if (enabled) 0.85f else 0.25f),
-            modifier = Modifier.size(30.dp),
-        )
-    }
-}
-
-@Composable
 private fun CastVideoSurface(
     onSurface: (android.view.Surface?) -> Unit,
     modifier: Modifier = Modifier,
@@ -390,11 +222,4 @@ private fun CastVideoSurface(
     DisposableEffect(Unit) {
         onDispose { onSurface(null) }
     }
-}
-
-private fun formatTime(ms: Long): String {
-    val total = (ms / 1000).coerceAtLeast(0)
-    val m = total / 60
-    val s = total % 60
-    return "%d:%02d".format(m, s)
 }

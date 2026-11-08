@@ -164,6 +164,11 @@ class CastReceiverHub(
         runCatching { airPlay.setVideoSurface(surface) }
     }
 
+    /** 本地解说 TTS 期间压低 AirPlay 音频（25%），不暂停发送端。 */
+    fun setIntroDuck(ducked: Boolean) {
+        runCatching { airPlay.setIntroDuck(ducked) }
+    }
+
     private fun publishPlaying() {
         val s = session ?: return
         _state.value = CastReceiverState.Playing(

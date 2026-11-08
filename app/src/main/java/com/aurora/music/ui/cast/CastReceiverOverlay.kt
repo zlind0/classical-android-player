@@ -70,7 +70,7 @@ fun CastReceiverOverlay() {
         CastReceiveState.Idle -> Unit
         is CastReceiveState.Incoming -> IncomingScreen(s, onAccept = { container.castReceiver.accept() }, onReject = { container.castReceiver.reject() })
         is CastReceiveState.Loading -> LoadingScreen(s)
-        is CastReceiveState.Music -> MusicScreen(s)
+        is CastReceiveState.Music -> Unit
         is CastReceiveState.Ebook -> EbookScreen(s)
     }
 }
@@ -159,51 +159,6 @@ private fun LoadingScreen(s: CastReceiveState.Loading) {
                 fontFamily = Ios5Sans,
             )
         }
-    }
-}
-
-@Composable
-private fun MusicScreen(s: CastReceiveState.Music) {
-    val context = LocalContext.current
-    val container = (context.applicationContext as AuroraApplication).container
-    val controller = container.castReceiver
-    BackHandler { controller.stop() }
-    var seekFrac by remember(s.song.id) { mutableFloatStateOf(-1f) }
-    val ui = PlayerUiState(
-        current = s.song,
-        queue = s.queue,
-        isPlaying = s.playing,
-        positionSec = s.positionMs / 1000f,
-        shuffle = s.shuffle,
-        repeat = when (s.repeat) {
-            "ONE" -> RepeatMode.ONE
-            "ALL" -> RepeatMode.ALL
-            else -> RepeatMode.OFF
-        },
-        likedIds = if (s.liked) setOf(s.song.id) else emptySet(),
-        currentIndex = s.index,
-    )
-    Box(Modifier.fillMaxSize()) {
-        Ios5PlayerPage(
-            state = ui,
-            onCollapse = { controller.stop() },
-            onTogglePlay = { controller.togglePlay() },
-            onNext = { controller.next() },
-            onPrevious = { controller.previous() },
-            onSeek = { f ->
-                seekFrac = f
-                controller.seekFraction(f, false)
-            },
-            onSeekFinished = {
-                if (seekFrac >= 0f) controller.seekFraction(seekFrac, true)
-            },
-            onToggleLike = { controller.toggleLike() },
-            onToggleShuffle = { controller.toggleShuffle() },
-            onCycleRepeat = { controller.cycleRepeat() },
-            onOpenQueue = {},
-            collapseLabel = "结束投屏",
-            remoteMode = true,
-        )
     }
 }
 

@@ -43,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,9 +65,11 @@ import com.aurora.music.ui.components.formatTime
 import com.aurora.music.ui.ios5.Ios5Sans
 import com.aurora.music.ui.ios5.Ios5Slider
 import com.aurora.music.ui.ios5.Ios5SliderRow
+import com.aurora.music.ui.ios5.Ios5Switch
 import com.aurora.music.viewmodel.PlayerUiState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 private val iPodBlack = Brush.verticalGradient(
     0f to Color(0xFF3D434C),
@@ -377,7 +380,7 @@ fun Ios5AudiobookPlayerPage(
     }
 }
 
-private enum class AbookBubble { SPEED, GAIN, CHAPTERS, SLEEP }
+internal enum class AbookBubble { SPEED, GAIN, CHAPTERS, SLEEP }
 
 @Composable
 private fun AbookCellButton(
@@ -396,7 +399,7 @@ private fun AbookCellButton(
 
 // ---- 速度气泡：0.5..4x step 0.25（不变调） ----
 @Composable
-private fun SpeedBubble(
+internal fun SpeedBubble(
     speed: Float,
     onSpeed: (Float) -> Unit,
     onDismiss: () -> Unit,
@@ -453,13 +456,18 @@ private fun SpeedBubble(
     }
 }
 
-// ---- 音量气泡：本书增益 50%..200% ----
+// ---- 音量气泡：本书增益 + 与其他应用共存/压低设置 ----
 @Composable
-private fun GainBubble(
+internal fun GainBubble(
     gain: Float,
     onGain: (Float) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val container = (LocalContext.current.applicationContext as AuroraApplication).container
+    val prefs by container.settingsStore.audiobookPrefs.collectAsStateWithLifecycle(
+        initialValue = com.aurora.music.data.SettingsStore.AudiobookPrefs(),
+    )
+    val scope = rememberCoroutineScope()
     var draft by remember(gain) { mutableFloatStateOf(gain) }
     Box(
         Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f))
@@ -508,25 +516,69 @@ private fun GainBubble(
             ) {
                 Text("恢复 100%", color = Color(0xFF0A60D6), fontSize = 15.sp, fontWeight = FontWeight.Bold)
             }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFD9DCE1)))
+            GainSwitchRow(
+                title = "允许其他 App 播放音乐",
+                subtitle = "开：其他应用可同时出声；关：听书独占音频焦点",
+                checked = prefs.allowMix,
+                onCheckedChange = { v -> scope.launch { container.settingsStore.setAbookAllowMix(v) } },
+            )
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFD9DCE1)))
+            GainSwitchRow(
+                title = "压低其他 App 的音量",
+                subtitle = if (prefs.allowMix) "共存时把站外音量压低" else "需先打开音乐共存",
+                checked = prefs.duckOthers && prefs.allowMix,
+                enabled = prefs.allowMix,
+                onCheckedChange = { v -> scope.launch { container.settingsStore.setAbookDuckOthers(v) } },
+            )
         }
+    }
+}
+
+@Composable
+private fun GainSwitchRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    enabled: Boolean = true,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clickable(enabled = enabled) { onCheckedChange(!checked) }
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                color = if (enabled) Color.Black else Color(0xFF8E8E93),
+                fontSize = 15.sp, fontWeight = FontWeight.Bold,
+            )
+            Text(subtitle, color = Color(0xFF8E8E93), fontSize = 12.sp)
+        }
+        Spacer(Modifier.width(10.dp))
+        Ios5Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
     }
 }
 
 // ---- 章节选择气泡 ----
 @Composable
-private fun ChapterBubble(
+internal fun ChapterBubble(
     book: AudiobookBook,
     currentIndex: Int,
     chapterAvailable: (Int) -> Boolean = { true },
     onSelect: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    // 在播章节默认居中：列表高 540，行高约 39，居中偏移 -(540/2-39/2) ≈ -250dp
+    // 在播章节默认居中：列表高度按当前屏幕取（横屏也不会超出），行高约 39。
     val listState = rememberLazyListState()
     val density = LocalDensity.current
-    androidx.compose.runtime.LaunchedEffect(book.id) {
+    val listH = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp * 0.66f)
+        .dp.coerceIn(180.dp, 540.dp)
+    androidx.compose.runtime.LaunchedEffect(book.id, listH) {
         val safe = currentIndex.coerceIn(0, (book.chapterCount - 1).coerceAtLeast(0))
-        val centerOffset = with(density) { (-250.dp).roundToPx() }
+        val centerOffset = with(density) { (-(listH / 2 - 20.dp)).roundToPx() }
         listState.scrollToItem(safe, centerOffset)
     }
     Box(
@@ -564,7 +616,7 @@ private fun ChapterBubble(
             }
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxWidth().height(540.dp),
+                modifier = Modifier.fillMaxWidth().height(listH),
             ) {
                 itemsIndexed(book.chapters, key = { i, c -> "$i:${c.path}" }) { i, c ->
                     val available = chapterAvailable(i)

@@ -35,6 +35,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Airplay
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -43,8 +44,11 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.FormatListNumbered
 import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -84,11 +88,10 @@ import com.aurora.music.ui.cast.CastPickerCard
 import com.aurora.music.ui.components.MarqueeText
 import com.aurora.music.ui.components.TrackArtwork
 import com.aurora.music.ui.components.formatTime
-import com.aurora.music.ui.ios5.Ios5ButtonTone
+import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5Sans
 import com.aurora.music.ui.ios5.Ios5Slider
 import com.aurora.music.ui.ios5.Ios5SliderRow
-import com.aurora.music.ui.ios5.Ios5SmallButton
 import com.aurora.music.viewmodel.PlayerUiState
 import com.aurora.music.viewmodel.RepeatMode
 import kotlin.math.roundToInt
@@ -196,10 +199,11 @@ fun Ios5PlayerPage(
     onOpenQueue: () -> Unit,
     introActive: Boolean = false,
     onIntroClick: () -> Unit = {},
-    /** 非空时左上角改成红底文字按钮（接收投屏用“结束投屏”）。 */
-    collapseLabel: String = "",
-    /** 接收端模式：隐藏投屏键/队列键，音量条直接调本机系统音量。 */
-    remoteMode: Boolean = false,
+    /** MUSIC 用完整控制；POD/AIRPLAY 接收只保留问号/月亮和音量，右上角变成退出投屏。 */
+    mode: NowPlayingMode = NowPlayingMode.MUSIC,
+    /** 接收模式底部居中的灰色来源说明。 */
+    sourceCaption: String = "",
+    onExitCast: (() -> Unit)? = null,
     onSeekFinished: (() -> Unit)? = null,
 ) {
     val song = state.current
@@ -224,11 +228,15 @@ fun Ios5PlayerPage(
     }
 
     val remaining = (state.durationSec - state.positionSec.toInt()).coerceAtLeast(0)
-    val posLabel = "${state.currentIndex + 1} of ${state.queue.size.coerceAtLeast(1)}"
+    val posLabel = if (mode == NowPlayingMode.AIRPLAY_RECEIVE) {
+        song.album.ifBlank { "AirPlay" }
+    } else {
+        "${state.currentIndex + 1} of ${state.queue.size.coerceAtLeast(1)}"
+    }
 
     // 合并标题：扫描预计算表 + 内存曲目表同步查出，无 IO、无协程、无分词；
     // 两栈各查各的表（MEDIastore 查 localLibrary，FILE 查 musicRoots），永不串台
-    val merged = rememberMergedTitle(song)
+    val merged = if (mode == NowPlayingMode.MUSIC) rememberMergedTitle(song) else null
 
     // 睡眠定时（全局后台，与电子书选项页共用）：月亮键开气泡设定
     val container = (context.applicationContext as AuroraApplication).container
@@ -263,7 +271,7 @@ fun Ios5PlayerPage(
         // 底栏最小高度必须和它真正的内容一致：上内边距 8 + 走带行 72 + 间隔 12 + 音量行 52
         // + 下内边距 18 = 162，再加 1dp 分割线。原来写 144 会少 19dp，而 Column 是"最后一个
         // 子项吃掉缺口"，被压扁的就是音量行里的 52dp airplay 键（图标只剩十几 dp）。
-        val bottomBase = 164.dp + navBottom
+        val bottomBase = 164.dp + navBottom + if (mode.isReceive) 18.dp else 0.dp
         val coverSide = minOf(maxWidth, maxHeight - topBase - grayBase - bottomBase).coerceAtLeast(0.dp)
         val leftover = (maxHeight - topBase - grayBase - coverSide - bottomBase).coerceAtLeast(0.dp)
         val topExtra = leftover * 0.4f
@@ -276,27 +284,18 @@ fun Ios5PlayerPage(
                 .background(iPodBlack)
                 .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + third),
         ) {
-            // 第一行：返回 | 艺人 | 队列（同高对齐，永远显示歌手；行高压到刚好包住 36dp 按钮）
+            // 第一行：返回 | 艺人 | 队列/退出投屏（同高对齐，永远显示歌手；行高压到刚好包住 36dp 按钮）
             Row(
                 Modifier.fillMaxWidth().height(36.dp + third).padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (collapseLabel.isNotBlank()) {
-                    Ios5SmallButton(
-                        text = collapseLabel,
-                        onClick = onCollapse,
-                        icon = Icons.Filled.Stop,
-                        tone = Ios5ButtonTone.Red,
+                IpodBarButton(onClick = onCollapse) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBackIos,
+                        "返回",
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp),
                     )
-                } else {
-                    IpodBarButton(onClick = onCollapse) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBackIos,
-                            "返回",
-                            tint = Color.White,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
                 }
                 Text(
                     song.artist.ifBlank { " " },
@@ -307,8 +306,8 @@ fun Ios5PlayerPage(
                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
                 )
-                if (remoteMode) {
-                    Spacer(Modifier.size(36.dp))
+                if (mode.isReceive) {
+                    Ios5ExitCastButton(onClick = { onExitCast?.invoke() })
                 } else {
                     IpodBarButton(onClick = onOpenQueue) {
                         Icon(Icons.AutoMirrored.Filled.QueueMusic, "队列", tint = Color.White, modifier = Modifier.size(20.dp))
@@ -394,20 +393,22 @@ fun Ios5PlayerPage(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
-                Icon(
-                    when (state.repeat) {
-                        RepeatMode.ONE -> Icons.Filled.RepeatOne
-                        else -> Icons.Filled.Repeat
-                    },
-                    "循环",
-                    tint = if (state.repeat == RepeatMode.OFF) Color(0xFF6B7280) else Color(0xFF0A60D6),
-                    modifier = Modifier.size(40.dp).clip(CircleShape)
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() },
-                            onClick = onCycleRepeat,
-                        ).padding(9.dp),
-                )
+                if (!mode.isReceive) {
+                    Icon(
+                        when (state.repeat) {
+                            RepeatMode.ONE -> Icons.Filled.RepeatOne
+                            else -> Icons.Filled.Repeat
+                        },
+                        "循环",
+                        tint = if (state.repeat == RepeatMode.OFF) Color(0xFF6B7280) else Color(0xFF0A60D6),
+                        modifier = Modifier.size(40.dp).clip(CircleShape)
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() },
+                                onClick = onCycleRepeat,
+                            ).padding(9.dp),
+                    )
+                }
                 Icon(
                     if (introActive) Icons.Filled.Stop else Icons.Outlined.HelpOutline,
                     if (introActive) "停止介绍" else "歌曲介绍",
@@ -419,27 +420,29 @@ fun Ios5PlayerPage(
                             onClick = onIntroClick,
                         ).padding(9.dp),
                 )
-                Icon(
-                    if (state.isCurrentLiked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                    "喜欢",
-                    tint = if (state.isCurrentLiked) Color(0xFFD63A3A) else Color(0xFF6B7280),
-                    modifier = Modifier.size(40.dp).clip(CircleShape)
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() },
-                            onClick = onToggleLike,
-                        ).padding(9.dp),
-                )
-                Icon(
-                    Icons.Filled.Shuffle, "随机",
-                    tint = if (state.shuffle) Color(0xFF0A60D6) else Color(0xFF6B7280),
-                    modifier = Modifier.size(40.dp).clip(CircleShape)
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() },
-                            onClick = onToggleShuffle,
-                        ).padding(9.dp),
-                )
+                if (!mode.isReceive) {
+                    Icon(
+                        if (state.isCurrentLiked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                        "喜欢",
+                        tint = if (state.isCurrentLiked) Color(0xFFD63A3A) else Color(0xFF6B7280),
+                        modifier = Modifier.size(40.dp).clip(CircleShape)
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() },
+                                onClick = onToggleLike,
+                            ).padding(9.dp),
+                    )
+                    Icon(
+                        Icons.Filled.Shuffle, "随机",
+                        tint = if (state.shuffle) Color(0xFF0A60D6) else Color(0xFF6B7280),
+                        modifier = Modifier.size(40.dp).clip(CircleShape)
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() },
+                                onClick = onToggleShuffle,
+                            ).padding(9.dp),
+                    )
+                }
                 Icon(
                     Icons.Filled.Bedtime, "睡眠定时",
                     tint = if (sleepState != null) Color(0xFF0A60D6) else Color(0xFF6B7280),
@@ -507,11 +510,11 @@ fun Ios5PlayerPage(
             val castAudio = castPrefs.musicOnCast(true)
             val castConnected = castState.clientsConnected
             // 网页投屏出声：音量条控制网页端的前置放大。
-            val castingWeb = !remoteMode && castAudio && castConnected
+            val castingWeb = !mode.isReceive && castAudio && castConnected
             val deviceCasting = sender.device != null && sender.connected
             // 设备投屏同样走前置放大：发送端只改远端播放器内的增益，不碰远端系统音量；
             // 本地音乐和远程音乐都经同一条 /state → 接收端 ExoPlayer 的路径生效。
-            val gainControl = castingWeb || (!remoteMode && deviceCasting)
+            val gainControl = castingWeb || (!mode.isReceive && deviceCasting)
             var preamp by remember(castPrefs.webPreamp) {
                 mutableFloatStateOf(castPrefs.webPreamp.coerceIn(0f, 1f))
             }
@@ -546,7 +549,7 @@ fun Ios5PlayerPage(
                 }
                 // 和上一首/下一首同尺寸。点按/长按都打开投屏选择卡（本机 / 浏览器 / 附近设备）。
                 // 接收端模式没有投屏键：这台设备正在播别人的内容，避免误开本地投屏。
-                if (!remoteMode) {
+                if (!mode.isReceive) {
                     Icon(
                         Icons.Filled.Airplay,
                         when {
@@ -558,7 +561,7 @@ fun Ios5PlayerPage(
                         },
                         tint = if (deviceCasting || castingWeb) Color(0xFF3B8CFA) else Color(0xFF9AA0AB),
                         modifier = Modifier.size(52.dp).clip(CircleShape)
-                            .pointerInput(remoteMode) {
+                            .pointerInput(mode) {
                                 detectTapGestures(
                                     onTap = { castBubble = true },
                                     onLongPress = { castBubble = true },
@@ -566,6 +569,18 @@ fun Ios5PlayerPage(
                             }.padding(8.dp),
                     )
                 }
+            }
+            if (mode.isReceive && sourceCaption.isNotBlank()) {
+                Text(
+                    sourceCaption,
+                    color = Color(0xFF8E9299),
+                    fontSize = 11.sp,
+                    lineHeight = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = Ios5Sans,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp),
+                )
             }
         }
     }
@@ -739,6 +754,26 @@ internal fun IpodBarButton(onClick: () -> Unit, content: @Composable () -> Unit)
     )
 }
 
+/** 接收投屏时的退出键：iOS5 红色圆形按钮 + 白色叉。 */
+@Composable
+internal fun Ios5ExitCastButton(onClick: () -> Unit) {
+    Box(
+        Modifier.size(36.dp)
+            .clip(CircleShape)
+            .background(Ios5Colors.buttonRedBrush)
+            .border(1.dp, Color.Black.copy(alpha = 0.55f), CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            Icons.Filled.Close,
+            "退出投屏",
+            tint = Color.White,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
 // 横向固定侧栏的宽度；内部封面按剩余高度自适应，上下紧凑无富余分配
 private val LandscapeSideWidth = 340.dp
 
@@ -752,6 +787,10 @@ fun Ios5LandscapeSidePlayer(
     modifier: Modifier = Modifier,
     // 调用方按中部可用高度传入，保证封面永远正方形（宽 = 高）
     panelWidth: Dp = LandscapeSideWidth,
+    mode: NowPlayingMode = NowPlayingMode.MUSIC,
+    onSpeedClick: (() -> Unit)? = null,
+    onVolumeClick: (() -> Unit)? = null,
+    caption: String = "",
 ) {
     val song = state.current
     val remaining = (state.durationSec - state.positionSec.toInt()).coerceAtLeast(0)
@@ -773,17 +812,33 @@ fun Ios5LandscapeSidePlayer(
                     contentAlignment = Alignment.Center,
                 ) {
                     TrackArtwork(song, Modifier.size(coverSide), corner = 0.dp, fullQuality = true)
+                    if (mode.isReceive && caption.isNotBlank()) {
+                        Text(
+                            caption,
+                            color = Color(0xFFB8BDC6),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = Ios5Sans,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                                .background(Color(0xFF14161B).copy(alpha = 0.55f))
+                                .padding(vertical = 3.dp),
+                        )
+                    }
                     Row(
                         Modifier.align(Alignment.TopCenter).fillMaxWidth()
                             .background(Color(0xFF14161B).copy(alpha = 0.62f))
-                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        if (mode == NowPlayingMode.AUDIOBOOK) {
+                            LandscapeScrubIcon(Icons.Filled.Speed, "速度", onSpeedClick)
+                        }
                         Text(
                             formatTime(state.positionSec.toInt()),
                             color = Color(0xFFD7DAE0), fontSize = 11.sp,
                             fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
-                            modifier = Modifier.width(40.dp),
+                            modifier = Modifier.width(36.dp),
                         )
                         Ios5Slider(
                             value = state.progress.coerceIn(0f, 1f),
@@ -795,8 +850,11 @@ fun Ios5LandscapeSidePlayer(
                             "-${formatTime(remaining)}",
                             color = Color(0xFFD7DAE0), fontSize = 11.sp,
                             fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
-                            textAlign = TextAlign.End, modifier = Modifier.width(40.dp),
+                            textAlign = TextAlign.End, modifier = Modifier.width(36.dp),
                         )
+                        if (mode == NowPlayingMode.AUDIOBOOK) {
+                            LandscapeScrubIcon(Icons.Filled.VolumeUp, "音量", onVolumeClick)
+                        }
                     }
                 }
             } else {
@@ -806,11 +864,14 @@ fun Ios5LandscapeSidePlayer(
                         .padding(horizontal = 10.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    if (mode == NowPlayingMode.AUDIOBOOK) {
+                        LandscapeScrubIcon(Icons.Filled.Speed, "速度", onSpeedClick)
+                    }
                     Text(
                         formatTime(state.positionSec.toInt()),
                         color = Color(0xFFD7DAE0), fontSize = 11.sp,
                         fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
-                        modifier = Modifier.width(40.dp),
+                        modifier = Modifier.width(36.dp),
                     )
                     Ios5Slider(
                         value = state.progress.coerceIn(0f, 1f),
@@ -822,13 +883,32 @@ fun Ios5LandscapeSidePlayer(
                         "-${formatTime(remaining)}",
                         color = Color(0xFFD7DAE0), fontSize = 11.sp,
                         fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
-                        textAlign = TextAlign.End, modifier = Modifier.width(40.dp),
+                        textAlign = TextAlign.End, modifier = Modifier.width(36.dp),
                     )
+                    if (mode == NowPlayingMode.AUDIOBOOK) {
+                        LandscapeScrubIcon(Icons.Filled.VolumeUp, "音量", onVolumeClick)
+                    }
                 }
             }
             Spacer(Modifier.weight(1f))
         }
     }
+}
+
+@Composable
+private fun LandscapeScrubIcon(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    onClick: (() -> Unit)?,
+) {
+    Icon(
+        icon,
+        description,
+        tint = Color(0xFFD7DAE0),
+        modifier = Modifier.size(24.dp).clip(CircleShape)
+            .clickable(enabled = onClick != null) { onClick?.invoke() }
+            .padding(3.dp),
+    )
 }
 
 // 横向底部整条栏右侧的走带键：喜欢在上一首左侧垂直居中，循环/随机在下一首右侧上下排列
@@ -949,4 +1029,103 @@ fun Ios5LandscapeTransport(
         introActive = introActive,
         onIntroClick = onIntroClick,
     )
+}
+
+/** 横屏有声书底栏：后退步长 | 播放暂停 | 章节 | 前进步长。 */
+@Composable
+fun Ios5LandscapeAudiobookTransport(
+    state: PlayerUiState,
+    stepSeconds: Int,
+    onSeekBy: (Int) -> Unit,
+    onTogglePlay: () -> Unit,
+    onChapters: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceEvenly,
+    ) {
+        Box(
+            Modifier.size(44.dp).clip(CircleShape)
+                .clickable { onSeekBy(-stepSeconds) },
+            contentAlignment = Alignment.Center,
+        ) {
+            SeekCircleIcon(seconds = stepSeconds, forward = false, modifier = Modifier.size(36.dp))
+        }
+        AbookPlayPauseIcon(
+            playing = state.isPlaying,
+            modifier = Modifier.size(50.dp).clip(CircleShape)
+                .clickable(onClick = onTogglePlay).padding(7.dp),
+        )
+        Icon(
+            Icons.Outlined.FormatListNumbered,
+            "章节",
+            tint = Color.White,
+            modifier = Modifier.size(44.dp).clip(CircleShape)
+                .clickable(onClick = onChapters).padding(7.dp),
+        )
+        Box(
+            Modifier.size(44.dp).clip(CircleShape)
+                .clickable { onSeekBy(stepSeconds) },
+            contentAlignment = Alignment.Center,
+        ) {
+            SeekCircleIcon(seconds = stepSeconds, forward = true, modifier = Modifier.size(36.dp))
+        }
+    }
+}
+
+/** 横屏投屏接收底栏：问号 | 上一首 | 播放暂停 | 下一首 | 月亮。 */
+@Composable
+fun Ios5LandscapeCastTransport(
+    state: PlayerUiState,
+    introActive: Boolean,
+    onIntroClick: () -> Unit,
+    onTogglePlay: () -> Unit,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
+    onSleep: () -> Unit,
+    modifier: Modifier = Modifier,
+    canNext: Boolean = true,
+    canPrevious: Boolean = true,
+) {
+    Row(
+        modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceEvenly,
+    ) {
+        Icon(
+            if (introActive) Icons.Filled.Stop else Icons.Outlined.HelpOutline,
+            if (introActive) "停止介绍" else "歌曲介绍",
+            tint = if (introActive) Color(0xFFD63A3A) else Color(0xFF8E8E93),
+            modifier = Modifier.size(36.dp).clip(CircleShape).clickable(onClick = onIntroClick).padding(6.dp),
+        )
+        Icon(
+            Icons.Filled.SkipPrevious,
+            "上一首",
+            tint = if (canPrevious) Color.White else Color(0xFF5A5F66),
+            modifier = Modifier.size(40.dp).clip(CircleShape)
+                .clickable(enabled = canPrevious, onClick = onPrevious).padding(6.dp),
+        )
+        Icon(
+            if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+            if (state.isPlaying) "暂停" else "播放",
+            tint = Color.White,
+            modifier = Modifier.size(50.dp).clip(CircleShape)
+                .clickable(onClick = onTogglePlay).padding(6.dp),
+        )
+        Icon(
+            Icons.Filled.SkipNext,
+            "下一首",
+            tint = if (canNext) Color.White else Color(0xFF5A5F66),
+            modifier = Modifier.size(40.dp).clip(CircleShape)
+                .clickable(enabled = canNext, onClick = onNext).padding(6.dp),
+        )
+        Icon(
+            Icons.Filled.Bedtime,
+            "睡眠定时",
+            tint = Color(0xFF8E8E93),
+            modifier = Modifier.size(36.dp).clip(CircleShape).clickable(onClick = onSleep).padding(6.dp),
+        )
+    }
 }

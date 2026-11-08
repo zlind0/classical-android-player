@@ -49,6 +49,8 @@ class PcmStreamPlayer(
     private var focusRequest: AudioFocusRequest? = null
     private var firstWriteLogged = false
     @Volatile private var bufferSizeMs = 2000
+    /** 本地解说 TTS 期间：即使 TTS 抢走音频焦点也继续出声，只靠外部 duck 压音量。 */
+    @Volatile private var duckHold = false
 
     /**
      * Media3's DefaultAudioSink captures `Looper.myLooper()` as its playback
@@ -81,6 +83,13 @@ class PcmStreamPlayer(
     }
 
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        if (duckHold && (change == AudioManager.AUDIOFOCUS_LOSS ||
+                change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ||
+                change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK)
+        ) {
+            // 解说 TTS 会短暂抢焦点；保持播放，音量由 AirPlayAudioOutput 压到 25%。
+            return@OnAudioFocusChangeListener
+        }
         when (change) {
             AudioManager.AUDIOFOCUS_LOSS,
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
@@ -193,6 +202,10 @@ class PcmStreamPlayer(
     fun setVolume(volume: Float) {
         Log.i(TAG, "setVolume: $volume")
         runCatching { onSink { sink.setVolume(volume.coerceIn(0f, 1f)) } }
+    }
+
+    fun setDuckHold(hold: Boolean) {
+        duckHold = hold
     }
 
     val isPaused: Boolean get() = paused

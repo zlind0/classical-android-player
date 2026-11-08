@@ -87,6 +87,9 @@ class CastReceiverController(
     private var lastTrackId = ""
     private var failures = 0
     private var lastSeekSentAt = 0L
+    /** 本地解说 TTS 期间把接收音频压到 25%；发送端 preamp 仍按原值保存。 */
+    @Volatile private var introDuck = 1f
+    @Volatile private var lastPreamp = 1f
 
     /** 收到投屏请求；正在等待用户确认/正在建立连接时返回 false（对方会提示“正忙”）。 */
     fun onOffer(offer: CastOffer): Boolean {
@@ -190,6 +193,17 @@ class CastReceiverController(
 
     fun toggleLike() = sendCommand("like")
 
+    /** 接收端本地解说 TTS 正在出声：压低接收音频，而不是暂停发送端。 */
+    fun setIntroDuck(ducked: Boolean) {
+        introDuck = if (ducked) 0.25f else 1f
+        player?.let {
+            // 解说 TTS 可能短暂抢走音频焦点；duck 期间先让接收播放器忽略焦点，
+            // 只靠本地增益压到 25%，结束后再恢复正常的焦点处理。
+            runCatching { it.setAudioAttributes(it.audioAttributes, !ducked) }
+            it.volume = (lastPreamp * introDuck).coerceIn(0f, 1f)
+        }
+    }
+
     private fun sendCommand(cmd: String, extra: String = "") {
         val base = baseUrl
         if (base.isBlank()) return
@@ -280,7 +294,8 @@ class CastReceiverController(
         val p = ensurePlayer()
         // 发送端的音量条以“前置放大”下发：只调本接收端播放器的增益，
         // 不动系统音量设置，也不会把接收端用户自己的音量改掉。
-        p.volume = rs.preamp.coerceIn(0f, 1f)
+        lastPreamp = rs.preamp.coerceIn(0f, 1f)
+        p.volume = (lastPreamp * introDuck).coerceIn(0f, 1f)
         val m = rs.music
         if (m.id.isBlank()) return
 
@@ -392,6 +407,8 @@ class CastReceiverController(
         lastTrackId = ""
         failures = 0
         lastSeekSentAt = 0L
+        introDuck = 1f
+        lastPreamp = 1f
         _state.value = CastReceiveState.Idle
     }
 

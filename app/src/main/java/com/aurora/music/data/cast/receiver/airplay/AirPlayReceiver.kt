@@ -69,6 +69,8 @@ class AirPlayReceiver(
     @Volatile private var mirroring = false
     @Volatile private var audioSampleRate = 44100
     @Volatile private var senderLabel = ""
+    /** 本地解说 TTS 正在出声：压低接收音频（0.25），而不是暂停。 */
+    @Volatile private var introDuck = 1f
     private var pendingInfoMs = 0L
     private var pendingDurationMs = 0L
     private var lastMedia = CastMediaInfo()
@@ -117,6 +119,12 @@ class AirPlayReceiver(
     override fun setVideoSurface(surface: Surface?) {
         videoSurface = surface
         videoSink?.setSurface(surface)
+    }
+
+    /** 本地解说 TTS 的压低开关；只影响音频输出，不改发送端音量。 */
+    fun setIntroDuck(ducked: Boolean) {
+        introDuck = if (ducked) 0.25f else 1f
+        audioOutput?.setDuckFactor(introDuck)
     }
 
     // ------------------------------------------------------------- RTSP events
@@ -222,6 +230,7 @@ class AirPlayReceiver(
             // Audio focus lost: keep the session but stop output.
         }
         output.start(format.sampleRate, format.channels)
+        output.setDuckFactor(introDuck)
         audioOutput = output
         lastAudioPacketMs = System.currentTimeMillis()
         val receiver = AirPlayAudioReceiver(
@@ -302,6 +311,7 @@ class AirPlayReceiver(
         senderLabel = ""
         mirroring = false
         pausedByUser = false
+        introDuck = 1f
         if (notify && current != null) listener?.onSessionEnded(current)
     }
 

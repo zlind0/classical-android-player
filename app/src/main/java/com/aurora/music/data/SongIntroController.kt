@@ -54,6 +54,14 @@ interface IntroMusicControl {
     fun isPlaying(): Boolean
     fun pause()
     fun resume()
+
+    /**
+     * 接收集成播放器时压低音频而不是暂停。返回 true 表示本次介绍期间由实现接管 duck，
+     * 结束时由 [unduckAfterIntro] 恢复；返回 false 走普通 pause/resume。
+     */
+    fun duckForIntro(): Boolean = false
+
+    fun unduckAfterIntro() {}
 }
 
 class SongIntroController(
@@ -116,8 +124,12 @@ class SongIntroController(
         _state.value = SongIntroState(active = true, speaking = false)
         val wasPlaying = music?.isPlaying() == true
         var pausedByIntro = false
-        suspend fun ensurePaused() {
-            if (!pausedByIntro && wasPlaying) {
+        var duckedByIntro = false
+        suspend fun ensureLowered() {
+            if (pausedByIntro || duckedByIntro || !wasPlaying) return
+            if (music?.duckForIntro() == true) {
+                duckedByIntro = true
+            } else {
                 music?.pause()
                 pausedByIntro = true
             }
@@ -163,7 +175,7 @@ class SongIntroController(
             try {
                 try {
                     for (s in sentences) {
-                        ensurePaused()
+                        ensureLowered()
                         _state.value = SongIntroState(active = true, speaking = true)
                         fullText.append(s)
                         lastPartial = fullText.toString()
@@ -225,7 +237,11 @@ class SongIntroController(
         } finally {
             _state.value = SongIntroState()
             // 用户在播报期间手动暂停过就不再抢播；仍在暂停态才恢复
-            if (pausedByIntro && wasPlaying && music?.isPlaying() == false) music?.resume()
+            if (duckedByIntro) {
+                music?.unduckAfterIntro()
+            } else if (pausedByIntro && wasPlaying && music?.isPlaying() == false) {
+                music?.resume()
+            }
         }
     }
 
