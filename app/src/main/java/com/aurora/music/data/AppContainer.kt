@@ -390,6 +390,12 @@ class AppContainer(context: Context) {
         onTakeover = { onCastTakeover() },
     )
 
+    /**
+     * 投屏接收的「正在播放」统一入口：悬浮窗、耳机/媒体键都经这里读状态、发控制，
+     * 不再让每个入口各自判断 Pod/AirPlay。
+     */
+    val receiveNowPlaying = com.aurora.music.data.cast.ReceiveNowPlayingController(castReceiver, castHub)
+
     /** 标准投屏抢占本机播放：暂停音乐、停朗读、停旧协议投屏。 */
     fun onCastTakeover() {
         runCatching { com.aurora.music.playback.PlaybackService.pauseForCast(appContext) }
@@ -516,10 +522,15 @@ class AppContainer(context: Context) {
             }
         }
         scope.launch {
-            // 投屏会话进入 Playing 时拉起前台服务，结束后自动停止。
+            // 任一路投屏接收活跃时拉起前台服务，全部结束后自动停止。
+            // 自有协议（Pod）也走这里：后台接收时音频线程同样不能被冻结；
+            // 该服务同时负责拉起 PlaybackService，让媒体通知/锁屏/耳机键
+            // 看到并控制接收端曲目。
             var serviceRunning = false
-            castHub.state.collect { s ->
-                val active = s !is com.aurora.music.data.cast.receiver.CastReceiverState.Idle
+            kotlinx.coroutines.flow.combine(castHub.state, castReceiver.state) { hub, pod ->
+                hub !is com.aurora.music.data.cast.receiver.CastReceiverState.Idle ||
+                    pod !is com.aurora.music.data.cast.CastReceiveState.Idle
+            }.collect { active ->
                 if (active && !serviceRunning) {
                     com.aurora.music.playback.CastReceiveService.start(appContext)
                     serviceRunning = true

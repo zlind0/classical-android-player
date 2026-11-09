@@ -114,9 +114,16 @@ class PlaybackService : MediaLibraryService() {
     // 上一次推送的音乐进度（单次 0 防抖：seek/缓冲瞬间不把进度推成 0）
     @Volatile private var lastMusicPosition: PositionState? = null
 
+    // 耳机/蓝牙的多击处理：部分设备只发两次 HEADSETHOOK，系统不帮我们转成
+    // MEDIA_NEXT，只能自己按时间窗识别双击（暂停→下一首）。
+    private val mediaClickHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var mediaClickCount = 0
+    private var pendingCastToggle: Runnable? = null
+
     // ---- 统一会话（单服务单会话）：音乐 + 听书共用一个系统会话 ----
     // 控制/状态仲裁全部收进 NeoUnifiedPlayer；这里只保留会话 player 的引用。
     private var unifiedPlayer: UnifiedPlayer? = null
+    private var castSessionPlayer: CastSessionPlayer? = null
     private var neo: NeoUnifiedPlayer? = null
     private var noisyReceiver: BroadcastReceiver? = null
 
@@ -371,6 +378,9 @@ class PlaybackService : MediaLibraryService() {
         val up = UnifiedPlayer(mainLooper, container)
         up.attach()
         unifiedPlayer = up
+        val castPlayer = CastSessionPlayer(mainLooper, container)
+        castPlayer.attach()
+        castSessionPlayer = castPlayer
         val setSessionPlayer: (Player) -> Unit = { target ->
             val session = mediaSession
             if (session != null && runCatching { session.player }.getOrNull() !== target) {
@@ -379,7 +389,7 @@ class PlaybackService : MediaLibraryService() {
                 else runCatching { session.setCustomLayout(emptyList()) }
             }
         }
-        val n = NeoUnifiedPlayer(container, player, up, setSessionPlayer, scope)
+        val n = NeoUnifiedPlayer(container, player, up, castPlayer, setSessionPlayer, scope)
         n.attach()
         neo = n
         // 阅读页底栏亲手停朗读：音乐一起暂停，两路都 arm，等全局播放双恢复。
@@ -890,6 +900,33 @@ class PlaybackService : MediaLibraryService() {
     private fun isAbookMedia(mediaId: String?): Boolean =
         mediaId?.startsWith(com.aurora.music.data.audiobook.ABOOK_ID_PREFIX) == true
 
+    /**
+     * 投屏接收的耳机单击/双击：单击延时一个窗口再播放/暂停，
+     * 窗口内第二击改为下一首（与系统音乐 App 的双击语义一致）。
+     */
+    private fun onCastMediaClick() {
+        mediaClickCount += 1
+        if (mediaClickCount >= 2) {
+            cancelPendingCastToggle()
+            mediaClickCount = 0
+            container.receiveNowPlaying.next()
+            return
+        }
+        val pending = Runnable {
+            pendingCastToggle = null
+            mediaClickCount = 0
+            container.receiveNowPlaying.togglePlay()
+        }
+        pendingCastToggle = pending
+        mediaClickHandler.postDelayed(pending, CAST_CLICK_WINDOW_MS)
+    }
+
+    private fun cancelPendingCastToggle() {
+        pendingCastToggle?.let { mediaClickHandler.removeCallbacks(it) }
+        pendingCastToggle = null
+        mediaClickCount = 0
+    }
+
     private fun driveSleepFade() {
         val ms = sleepFadeMs.coerceAtLeast(1)
         val t = ((android.os.SystemClock.elapsedRealtime() - sleepFadeStartMs).toFloat() / ms).coerceIn(0f, 1f)
@@ -1029,6 +1066,30 @@ class PlaybackService : MediaLibraryService() {
             controller: MediaSession.ControllerInfo,
             playerCommand: Int,
         ): Int {
+            // 投屏接收期间且会话还没切到投屏 player 的短暂窗口：把系统命令
+            // 直接转到接收端，避免落回本机音乐。正常情况下会话 player 就是
+            // CastSessionPlayer，由它自己处理 play/pause/上下曲。
+            val sessionPlayer = runCatching { session.player }.getOrNull()
+            if (sessionPlayer !== castSessionPlayer && container.receiveNowPlaying.snapshot() != null) {
+                when (playerCommand) {
+                    Player.COMMAND_PLAY_PAUSE -> {
+                        container.receiveNowPlaying.togglePlay()
+                        return Player.COMMAND_INVALID
+                    }
+                    Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> {
+                        container.receiveNowPlaying.next()
+                        return Player.COMMAND_INVALID
+                    }
+                    Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
+                        container.receiveNowPlaying.previous()
+                        return Player.COMMAND_INVALID
+                    }
+                    Player.COMMAND_STOP -> {
+                        container.receiveNowPlaying.setPlaying(false)
+                        return Player.COMMAND_INVALID
+                    }
+                }
+            }
             if (isAbookMedia(player.currentMediaItem?.mediaId)) {
                 when (playerCommand) {
                     Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
@@ -1057,6 +1118,49 @@ class PlaybackService : MediaLibraryService() {
             } else {
                 @Suppress("DEPRECATION")
                 intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT) as? android.view.KeyEvent
+            }
+            // 投屏接收：耳机线控/蓝牙按键直接控制接收端（播放/暂停/上下一首）。
+            // DOWN 执行、UP 一并吞掉，避免默认路径再触发一次播放/暂停。
+            if (container.receiveNowPlaying.snapshot() != null) {
+                val handled = when (event?.keyCode) {
+                    android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                    android.view.KeyEvent.KEYCODE_HEADSETHOOK,
+                    android.view.KeyEvent.KEYCODE_MEDIA_PLAY,
+                    android.view.KeyEvent.KEYCODE_MEDIA_PAUSE,
+                    android.view.KeyEvent.KEYCODE_MEDIA_NEXT,
+                    android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+                    android.view.KeyEvent.KEYCODE_MEDIA_STOP,
+                    -> true
+                    else -> false
+                }
+                if (handled) {
+                    if (event?.action == android.view.KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                        when (event.keyCode) {
+                            android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                            android.view.KeyEvent.KEYCODE_HEADSETHOOK,
+                            -> onCastMediaClick()
+                            android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                                cancelPendingCastToggle()
+                                container.receiveNowPlaying.setPlaying(true)
+                            }
+                            android.view.KeyEvent.KEYCODE_MEDIA_PAUSE,
+                            android.view.KeyEvent.KEYCODE_MEDIA_STOP,
+                            -> {
+                                cancelPendingCastToggle()
+                                container.receiveNowPlaying.setPlaying(false)
+                            }
+                            android.view.KeyEvent.KEYCODE_MEDIA_NEXT -> {
+                                cancelPendingCastToggle()
+                                container.receiveNowPlaying.next()
+                            }
+                            android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                                cancelPendingCastToggle()
+                                container.receiveNowPlaying.previous()
+                            }
+                        }
+                    }
+                    return true
+                }
             }
             if (event?.action == android.view.KeyEvent.ACTION_DOWN &&
                 isAbookMedia(player.currentMediaItem?.mediaId)
@@ -1314,6 +1418,11 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private fun updateCustomLayout() {
+        // 投屏接收用投屏 player 作为会话：它没有随机/循环，别把音乐的自定义按钮带过去。
+        if (container.receiveNowPlaying.snapshot() != null) {
+            runCatching { mediaSession?.setCustomLayout(emptyList()) }
+            return
+        }
         runCatching { mediaSession?.setCustomLayout(buildCustomLayout()) }
     }
 
@@ -1543,6 +1652,9 @@ class PlaybackService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = mediaSession
 
     override fun onTaskRemoved(rootIntent: android.content.Intent?) {
+        // 投屏接收期间划掉任务：接收由 CastReceiveService 前台保活，
+        // 统一媒体会话也必须留着，否则通知栏和耳机键会丢失。
+        if (container.receiveNowPlaying.snapshot() != null) return
         // swipe-away stops playback so music doesnt keep going
         // 但先记住“刚才在播”：下次启动要接着播（暂停事件随后可能把队列里的 wasPlaying 写成 false）
         val wasPlaying = runCatching { player.playWhenReady || player.isPlaying }.getOrDefault(false)
@@ -1561,6 +1673,9 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onDestroy() {
+        runCatching { mediaClickHandler.removeCallbacksAndMessages(null) }
+        pendingCastToggle = null
+        mediaClickCount = 0
         runCatching { noisyReceiver?.let { unregisterReceiver(it) } }
         noisyReceiver = null
         runCatching { container.ebookTtsPlayer.onAudioFocusChange = null }
@@ -1577,6 +1692,8 @@ class PlaybackService : MediaLibraryService() {
         neo = null
         runCatching { unifiedPlayer?.release() }
         unifiedPlayer = null
+        runCatching { castSessionPlayer?.release() }
+        castSessionPlayer = null
         runCatching { fadePlayer?.release() }
         fadePlayer = null
         runCatching { container.musicState.value = MusicPlaybackState() }
@@ -1609,6 +1726,8 @@ class PlaybackService : MediaLibraryService() {
         const val ACTION_SLEEP_PAUSE = "com.aurora.music.action.SLEEP_PAUSE"
         const val ACTION_CAST_TAKEOVER = "com.aurora.music.action.CAST_TAKEOVER"
         private const val ALARM_NOTIF_ID = 0xA1A
+        /** 耳机双击识别窗口：略大于常见 300~400ms。 */
+        private const val CAST_CLICK_WINDOW_MS = 450L
 
         // 书单播拉起统一服务的入口（占位前台防超时崩溃，见 startPlaceholderForeground）。
         const val ACTION_BOOK_START = "com.aurora.music.action.BOOK_START"

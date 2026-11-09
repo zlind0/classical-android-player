@@ -24,6 +24,8 @@ class NeoUnifiedPlayer(
     private val container: AppContainer,
     private val music: ExoPlayer,
     private val bookShadow: UnifiedPlayer,
+    /** 投屏接收期间接管会话 player：通知/锁屏显示接收端曲目。 */
+    private val cast: CastSessionPlayer,
     private val setSessionPlayer: (Player) -> Unit,
     private val scope: CoroutineScope,
 ) {
@@ -126,6 +128,13 @@ class NeoUnifiedPlayer(
             play()
             // 书由本协调器恢复，影子 player 不再自己续读，避免双恢复。
             false
+        }
+        // 投屏接收：开始/结束/切歌时把会话 player 切到投屏 player（通知栏跟随）。
+        scope.launch {
+            container.castReceiver.state.collect { refreshSession() }
+        }
+        scope.launch {
+            container.castHub.state.collect { refreshSession() }
         }
         publish()
         refreshSession()
@@ -456,6 +465,12 @@ class NeoUnifiedPlayer(
      */
     private fun refreshSession() {
         bookShadow.setDualMusicPlaying(musicPlaying)
+        // 投屏接收是当前唯一在播的内容：会话交给投屏 player，
+        // 系统通知/锁屏/耳机键都看到并控制接收端曲目。
+        if (container.receiveNowPlaying.snapshot() != null) {
+            setSessionPlayer(cast)
+            return
+        }
         val target: Player? = when {
             bookPlaying -> bookShadow
             musicPlaying -> music

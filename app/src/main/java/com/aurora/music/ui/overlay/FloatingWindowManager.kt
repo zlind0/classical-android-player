@@ -77,6 +77,8 @@ class FloatingWindowManager(
     private var lastPrefs = FloatingPrefs()
     private var liveSizePx = 0
     private var lastSongId = ""
+    /** 上一次看到的投屏接收态：只在 有↔无 变化时重试挂窗，避免轮询每 700ms 触发。 */
+    private var lastReceiveActive = false
 
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
@@ -98,13 +100,20 @@ class FloatingWindowManager(
             container.unifiedState.collect { us ->
                 _ui.update {
                     it.copy(
-                        bookActive = us.book.playing,
+                        bookActive = us.book.playing && container.receiveNowPlaying.snapshot() == null,
                         bookSentence = us.bookSentence,
                         bookCover = us.bookCover,
                     )
                 }
                 if (view != null) syncState()
             }
+        }
+        scope.launch {
+            // 投屏接收同样是「正在播放」：开始/结束/切歌/暂停都刷新悬浮窗。
+            container.castReceiver.state.collect { onReceiveChanged() }
+        }
+        scope.launch {
+            container.castHub.state.collect { onReceiveChanged() }
         }
         scope.launch {
             settings.floatingPrefs.collect { prefs ->
@@ -157,17 +166,19 @@ class FloatingWindowManager(
             )
             if (!inBackground || view != null || dismissed) return@launch
             if (!prefs.enabled || !canDrawOverlays(app)) return@launch
-            val c = ensureController()
+            // 投屏接收（Pod/AirPlay 音频）本身就是「正在播放」，不需要本机会话控制器。
+            val receiving = container.receiveNowPlaying.snapshot() != null
+            val c = if (receiving) controller else ensureController()
             android.util.Log.d(
                 "FloatingWindow",
-                "maybeShow: controller=${c != null} items=${c?.mediaItemCount} cur=${c?.currentMediaItem?.mediaId}",
+                "maybeShow: receiving=$receiving controller=${c != null} items=${c?.mediaItemCount} cur=${c?.currentMediaItem?.mediaId}",
             )
             if (!inBackground || view != null || dismissed) return@launch
-            if (c == null) return@launch
+            if (!receiving && c == null) return@launch
             // 以站内音乐 player 为准：停书粘滞时会话时间线是书，别把电子书当成正在播的歌。
             // 音乐已卸载但书在播时仍显示（背景用书封面）。
             val us = container.unifiedState.value
-            if (container.musicState.value.mediaId.isBlank() && !us.book.playing) return@launch
+            if (!receiving && container.musicState.value.mediaId.isBlank() && !us.book.playing) return@launch
             show(prefs)
         }
     }
@@ -198,8 +209,49 @@ class FloatingWindowManager(
         }
     }
 
+    private fun onReceiveChanged() {
+        val active = container.receiveNowPlaying.snapshot() != null
+        val changed = active != lastReceiveActive
+        lastReceiveActive = active
+        if (view != null) syncState()
+        else if (inBackground && changed) maybeShow()
+    }
+
     private fun syncState() {
-        val c = controller ?: return
+        // 投屏接收优先：Pod/AirPlay 音频是当前的「正在播放」，封面/信息/走带键都跟它走。
+        val receive = container.receiveNowPlaying.snapshot()
+        if (receive != null) {
+            val repeat = when (receive.repeat.uppercase()) {
+                "ONE" -> RepeatMode.ONE
+                "ALL" -> RepeatMode.ALL
+                else -> RepeatMode.OFF
+            }
+            _ui.update {
+                it.copy(
+                    title = receive.title.ifBlank { receive.source.label },
+                    artist = receive.artist.ifBlank { receive.senderName },
+                    artUri = receive.artUri,
+                    isPlaying = receive.isPlaying,
+                    shuffle = receive.shuffle,
+                    repeat = repeat,
+                    liked = receive.liked,
+                    hasTrack = true,
+                    bookActive = false,
+                    bookSentence = "",
+                )
+            }
+            // 远程曲目不在本地库，别用本地 like 状态覆盖发送端下发的值。
+            lastSongId = ""
+            return
+        }
+        val c = controller
+        if (c == null) {
+            // 投屏结束后控制器还没建（接收路径不依赖它）：先关窗，再按本机
+            // 音乐/听书是否仍在播放决定是否重新挂窗。
+            if (view != null) hide()
+            if (inBackground) maybeShow()
+            return
+        }
         // 双播/停书粘滞时会话 player 是 UnifiedPlayer（书），音乐信息以服务快照为准。
         val ms = container.musicState.value
         val us = container.unifiedState.value
@@ -259,6 +311,8 @@ class FloatingWindowManager(
 
     private fun show(prefs: FloatingPrefs) {
         if (view != null) return
+        // 挂窗之前先把当前来源（本机音乐/听书或投屏接收）刷进 UI 状态，避免首帧是上一首。
+        syncState()
         val sizePx = clampPx(dpToPx(prefs.sizeDp))
         liveSizePx = sizePx
         _sizeDp.value = sizePx / density
@@ -389,6 +443,11 @@ class FloatingWindowManager(
     // ---- 播放控制 ----
 
     private fun togglePlay() {
+        val receive = container.receiveNowPlaying
+        if (receive.snapshot() != null) {
+            receive.togglePlay()
+            return
+        }
         val c = controller ?: return
         // 与音乐选项卡同一语义：只动音乐，不停朗读（双播时书继续读）。
         c.sendCustomCommand(
@@ -398,6 +457,11 @@ class FloatingWindowManager(
     }
 
     private fun prev() {
+        val receive = container.receiveNowPlaying
+        if (receive.snapshot() != null) {
+            receive.previous()
+            return
+        }
         // 只动站内音乐：双播时会话 player 是书，直接 seekToPrevious 会跳朗读段落。
         controller?.sendCustomCommand(
             SessionCommand(PlaybackService.CMD_MUSIC_PREV, Bundle.EMPTY),
@@ -406,6 +470,11 @@ class FloatingWindowManager(
     }
 
     private fun next() {
+        val receive = container.receiveNowPlaying
+        if (receive.snapshot() != null) {
+            receive.next()
+            return
+        }
         controller?.sendCustomCommand(
             SessionCommand(PlaybackService.CMD_MUSIC_NEXT, Bundle.EMPTY),
             Bundle.EMPTY,
@@ -413,6 +482,11 @@ class FloatingWindowManager(
     }
 
     private fun toggleShuffle() {
+        val receive = container.receiveNowPlaying
+        if (receive.snapshot() != null) {
+            receive.toggleShuffle()
+            return
+        }
         controller?.sendCustomCommand(
             SessionCommand(PlaybackService.CMD_SHUFFLE, Bundle().apply { putInt("target", -1) }),
             Bundle.EMPTY,
@@ -420,10 +494,20 @@ class FloatingWindowManager(
     }
 
     private fun cycleRepeat() {
+        val receive = container.receiveNowPlaying
+        if (receive.snapshot() != null) {
+            receive.cycleRepeat()
+            return
+        }
         controller?.sendCustomCommand(SessionCommand(PlaybackService.CMD_REPEAT, Bundle.EMPTY), Bundle.EMPTY)
     }
 
     private fun toggleLike() {
+        val receive = container.receiveNowPlaying
+        if (receive.snapshot() != null) {
+            receive.toggleLike()
+            return
+        }
         val id = lastSongId
         if (id.isEmpty()) return
         val now = !_ui.value.liked
