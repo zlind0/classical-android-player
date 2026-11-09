@@ -168,6 +168,13 @@ class AppContainer(context: Context) {
                 com.aurora.music.data.ebook.EbookDebugLog.setEnabled(it)
             }
         }
+        // AirPlay 诊断日志开关（默认关）：实时计数器始终工作，日志/文件落盘由开关控制。
+        com.aurora.music.data.cast.receiver.airplay.AirPlayDiagnostics.init(appContext)
+        scope.launch {
+            settingsStore.airPlayDebugLog.collect {
+                com.aurora.music.data.cast.receiver.airplay.AirPlayDiagnostics.setLogEnabled(it)
+            }
+        }
         // 网页服务在 App 启动后才异步起来；端口就绪后注册 mDNS
         scope.launch {
             while (true) {
@@ -383,6 +390,13 @@ class AppContainer(context: Context) {
     // 旧协议投屏也走同一套 DSP 链（原来是无效果的独立 ExoPlayer）。
     init {
         castReceiver.playerFactory = { castAudioChain.createPlayer() }
+        // AirPlay 固定缓冲 / 重传 / PLC 参数：DataStore 是唯一真相源，实时同步到接收端。
+        scope.launch {
+            settingsStore.airPlayConfig.collect { config ->
+                com.aurora.music.data.cast.receiver.airplay.AirPlayTuning.config = config
+                airPlayReceiver.applyTuning()
+            }
+        }
     }
     val castHub = com.aurora.music.data.cast.receiver.CastReceiverHub(
         scope,
@@ -396,10 +410,12 @@ class AppContainer(context: Context) {
      */
     val receiveNowPlaying = com.aurora.music.data.cast.ReceiveNowPlayingController(castReceiver, castHub)
 
-    /** 标准投屏抢占本机播放：暂停音乐、停朗读、停旧协议投屏。 */
+    /**
+     * 标准投屏开始：只结束旧的 Pod 接收，避免两路投屏互相顶。
+     * 本机音乐由 NeoUnifiedPlayer 的投屏通道接管（暂停但保留断点）；
+     * 电子书听书不受影响，继续朗读。
+     */
     fun onCastTakeover() {
-        runCatching { com.aurora.music.playback.PlaybackService.pauseForCast(appContext) }
-        runCatching { ebookTts.stop(savePos = true, userInitiated = false) }
         runCatching { castReceiver.stop(sendStop = true) }
     }
 
@@ -514,13 +530,8 @@ class AppContainer(context: Context) {
                 musicWasPlaying = st.playing
             }
         }
-        scope.launch {
-            var bookWasPlaying = false
-            ebookTts.playing.collect { playing ->
-                if (playing && !bookWasPlaying) castHub.onLocalPlaybackStarted()
-                bookWasPlaying = playing
-            }
-        }
+        // 听书与投屏接收是并列通道：开始/结束朗读不再结束 AirPlay 会话，
+        // 两边互不打断；只有统一的暂停/播放才会同时作用于两者。
         scope.launch {
             // 任一路投屏接收活跃时拉起前台服务，全部结束后自动停止。
             // 自有协议（Pod）也走这里：后台接收时音频线程同样不能被冻结；

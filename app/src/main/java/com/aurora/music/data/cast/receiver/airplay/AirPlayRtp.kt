@@ -7,6 +7,7 @@ import java.io.EOFException
 import java.io.InputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
@@ -84,6 +85,21 @@ class AirPlayAudioReceiver(
     private var firstDecodeLogged = false
     private var debugPackets = 0
     private var debugDecodes = 0
+    private var lastDecodeMs = 0L
+    private var seqGapEvents = 0
+    /** Sender's control endpoint, learned from its first control packet. */
+    @Volatile private var controlTarget: InetSocketAddress? = null
+    private var controlSeq = 0
+
+    // Gap / retransmission state. gapSinceMs marks when the current missing
+    // sequence range was first noticed; retries are paced by the settings.
+    private var gapSinceMs = 0L
+    private var lastResendSentMs = 0L
+    private var resendAttempts = 0
+
+    // Decode-failure PLC: repeat the last good PCM instead of leaving a hole.
+    private var lastPcm: ByteArray? = null
+    private var consecutiveDecodeFailures = 0
     private var pcmScratch = ShortArray(8192)
 
     init {
@@ -138,6 +154,11 @@ class AirPlayAudioReceiver(
             lastFrameCount = 0
             firstRtpTimestamp = -1
             firstPacketSeen = false
+            lastDecodeMs = 0L
+            gapSinceMs = 0L
+            resendAttempts = 0
+            lastPcm = null
+            consecutiveDecodeFailures = 0
         }
     }
 
@@ -169,13 +190,18 @@ class AirPlayAudioReceiver(
                     val rtp = parseRtpPacket(packet.data, packet.length)
                     if (rtp != null) handleRtp(rtp)
                 } catch (_: SocketTimeoutException) {
-                    advanceIfStarving()
+                    serviceGap(System.currentTimeMillis())
                 }
-                // Drain the control socket so the sender's sync packets do not pile up.
+                // Drain the control socket: resend responses arrive here (RAOP
+                // sends retransmitted audio to the control port, not the data
+                // port). The sender address is also learned from this socket so
+                // gap recovery requests can be sent back.
                 val control = synchronized(lock) { controlSocket }
                 if (control != null) {
                     try {
-                        control.receive(DatagramPacket(controlBuf, controlBuf.size))
+                        val cp = DatagramPacket(controlBuf, controlBuf.size)
+                        control.receive(cp)
+                        handleControlPacket(cp)
                     } catch (_: SocketTimeoutException) {
                     } catch (_: Exception) {
                     }
@@ -186,24 +212,90 @@ class AirPlayAudioReceiver(
         }
     }
 
-    private fun handleRtp(rtp: RtpPacket) {
+    private fun handleControlPacket(packet: DatagramPacket) {
+        if (packet.length < 12) return
+        controlTarget = InetSocketAddress(packet.address, packet.port)
+        val type = packet.data[1].toInt() and 0x7F
+        if (type != 0x56) return
+        // Retransmitted audio: 4-byte control header followed by the original
+        // RTP packet (see UxPlay's raop_rtp.c).
+        val copied = packet.data.copyOfRange(4, packet.length)
+        val rtp = parseRtpPacket(copied, copied.size) ?: return
+        AirPlayDiagnostics.recordResendReceived()
+        handleRtp(rtp, resend = true)
+    }
+
+    /**
+     * Ask the sender to retransmit a missing range on the control socket.
+     * Without this every Wi-Fi packet loss becomes a hole in the buffer, which
+     * is the usual cause of the intermittent "卡顿".
+     */
+    private fun requestResend(seq: Int, count: Int) {
+        val target = controlTarget ?: return
+        val socket = synchronized(lock) { controlSocket } ?: return
+        val n = count.coerceIn(1, 64)
+        val request = ByteArray(8)
+        request[0] = 0x80.toByte()
+        request[1] = 0xD5.toByte()
+        val ourSeq = controlSeq++
+        request[2] = (ourSeq shr 8).toByte()
+        request[3] = ourSeq.toByte()
+        request[4] = (seq shr 8).toByte()
+        request[5] = seq.toByte()
+        request[6] = (n shr 8).toByte()
+        request[7] = n.toByte()
+        runCatching { socket.send(DatagramPacket(request, request.size, target)) }
+            .onFailure {
+                AirPlayDiagnostics.log(
+                    AirPlayDiagnostics.Level.WARN,
+                    TAG,
+                    "resend request failed: ${it.message}",
+                )
+            }
+        AirPlayDiagnostics.recordResendRequest()
+        if (seqGapEvents < 5) {
+            AirPlayDiagnostics.log(
+                AirPlayDiagnostics.Level.DEBUG,
+                TAG,
+                "request resend seq=$seq count=$n",
+            )
+        }
+    }
+
+    private fun handleRtp(rtp: RtpPacket, resend: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!resend) AirPlayDiagnostics.recordPacket(rtp.payloadLength)
         if (!firstPacketSeen) {
             firstPacketSeen = true
             expectedSeq = rtp.sequence
             lastTimestamp = rtp.timestamp
-            lastArrivalMs = System.currentTimeMillis()
-            Log.i(TAG, "first RTP packet: seq=${rtp.sequence} ts=${rtp.timestamp} payload=${rtp.payloadLength}")
+            lastArrivalMs = now
+            AirPlayDiagnostics.log(
+                AirPlayDiagnostics.Level.INFO,
+                TAG,
+                "first RTP packet: seq=${rtp.sequence} ts=${rtp.timestamp} payload=${rtp.payloadLength}",
+            )
             onFirstPacket()
         }
         val diff = (rtp.sequence - expectedSeq) and 0xFFFF
         if (diff >= 0x8000) {
-            // Late packet outside the window.
+            // A packet older than the current window. If nothing has decoded for
+            // a while, this is not a late retransmit but the sender restarting its
+            // sequence numbers (e.g. after a network hiccup) — resync instead of
+            // silently dropping every packet forever. That was one source of
+            // "artwork arrives, session looks fine, but there is no sound".
+            if (lastDecodeMs > 0 && now - lastDecodeMs >= RESYNC_AFTER_MS) {
+                resyncTo(rtp, now)
+                return
+            }
+            AirPlayDiagnostics.recordLate()
             return
         }
         if (expectedSeq == rtp.sequence) {
             decodeAndEmit(rtp)
             expectedSeq = (expectedSeq + 1) and 0xFFFF
             drainContiguous()
+            if (pending.isEmpty()) resetGapTracking()
         } else {
             // The receive loop reuses one DatagramPacket buffer, so a packet
             // parked in the reorder window must own a copy of its payload.
@@ -212,9 +304,77 @@ class AirPlayAudioReceiver(
                 rtp.payloadOffset + rtp.payloadLength,
             )
             pending[rtp.sequence] = rtp.copy(data = payload, payloadOffset = 0)
-            lastArrivalMs = System.currentTimeMillis()
-            if (pending.size > 24) advanceIfStarving(force = true)
+            lastArrivalMs = now
+            AirPlayDiagnostics.recordReordered()
+            if (gapSinceMs == 0L) {
+                gapSinceMs = now
+                resendAttempts = 0
+                lastResendSentMs = 0L
+            }
+            serviceGap(now)
         }
+    }
+
+    /**
+     * Pace retransmission requests and decide when to give up on a gap.
+     * The wait budget comes from the settings page (or follows the buffer in
+     * auto mode), so 2.4G Wi-Fi gets enough time for the resend to come back.
+     */
+    private fun serviceGap(now: Long) {
+        if (gapSinceMs == 0L) return
+        val first = pending.firstEntry() ?: run {
+            resetGapTracking()
+            return
+        }
+        val gap = (first.key - expectedSeq) and 0xFFFF
+        if (gap <= 0) {
+            resetGapTracking()
+            return
+        }
+        val config = AirPlayTuning.config
+        val maxAttempts = config.resendMaxRetries + 1
+        if (controlTarget != null &&
+            resendAttempts < maxAttempts &&
+            (resendAttempts == 0 || now - lastResendSentMs >= config.resendRetryMs)
+        ) {
+            requestResend(expectedSeq, gap)
+            resendAttempts++
+            lastResendSentMs = now
+        }
+        if (now - gapSinceMs >= config.effectiveResendWaitMs || pending.size > MAX_PENDING) {
+            advanceIfStarving()
+        }
+    }
+
+    private fun resetGapTracking() {
+        gapSinceMs = 0L
+        resendAttempts = 0
+        lastResendSentMs = 0L
+    }
+
+    /**
+     * Sender restarted its RTP sequence/timestamp clock. Jump straight to the
+     * newest packet and restart the PTS origin so the timeline buffer treats it
+     * as a fresh stream instead of dropping everything as "late".
+     */
+    private fun resyncTo(rtp: RtpPacket, now: Long) {
+        val silentMs = if (lastDecodeMs > 0) now - lastDecodeMs else 0L
+        expectedSeq = rtp.sequence
+        pending.clear()
+        resetGapTracking()
+        firstRtpTimestamp = rtp.timestamp
+        lastTimestamp = rtp.timestamp
+        lastFrameCount = 0
+        lastArrivalMs = now
+        AirPlayDiagnostics.recordSequenceResync()
+        AirPlayDiagnostics.log(
+            AirPlayDiagnostics.Level.WARN,
+            TAG,
+            "RTP sequence resync after ${silentMs}ms without decode: seq=${rtp.sequence} ts=${rtp.timestamp}",
+        )
+        decodeAndEmit(rtp)
+        expectedSeq = (expectedSeq + 1) and 0xFFFF
+        drainContiguous()
     }
 
     private fun drainContiguous() {
@@ -225,17 +385,35 @@ class AirPlayAudioReceiver(
         }
     }
 
-    private fun advanceIfStarving(force: Boolean = false) {
+    private fun advanceIfStarving() {
         val next = pending.firstEntry() ?: return
-        val waited = System.currentTimeMillis() - lastArrivalMs
-        if (!force && waited < 60) return
-        // The timeline buffer turns the PTS gap into silence, so just skip to
-        // the next available packet here.
+        val now = System.currentTimeMillis()
+        val waited = if (gapSinceMs > 0) now - gapSinceMs else 0L
+        // A real gap: tell the diagnostics page how many packets the sender
+        // skipped, and log it at most once per few events so the audio thread
+        // does not spend its time formatting strings.
+        val gap = (next.key - expectedSeq) and 0xFFFF
+        if (gap > 0) {
+            AirPlayDiagnostics.recordLost(gap.toLong())
+            seqGapEvents++
+            if (seqGapEvents <= 5 || seqGapEvents % 20 == 0) {
+                AirPlayDiagnostics.log(
+                    AirPlayDiagnostics.Level.WARN,
+                    TAG,
+                    "RTP gap: expected=$expectedSeq got=${next.key} lost=$gap waited=${waited}ms " +
+                        "requests=$resendAttempts",
+                )
+            }
+        }
+        // The timeline buffer turns the PTS gap into silence/PLC, so just skip
+        // to the next available packet here.
         expectedSeq = next.key
         decodeAndEmit(next.value)
         expectedSeq = (expectedSeq + 1) and 0xFFFF
         pending.remove(next.key)
+        resetGapTracking()
         drainContiguous()
+        if (pending.isEmpty()) resetGapTracking()
     }
 
     private fun decodeAndEmit(rtp: RtpPacket) {
@@ -245,7 +423,10 @@ class AirPlayAudioReceiver(
         val duplicate = format.codec == AirPlayCodec.AAC_ELD &&
             lastTimestamp == rtp.timestamp && lastFrameCount > 0
         lastTimestamp = rtp.timestamp
-        if (duplicate) return
+        if (duplicate) {
+            AirPlayDiagnostics.recordDuplicate()
+            return
+        }
         val ptsNs = ptsNs(rtp.timestamp)
         val decrypted = if (format.encrypted) {
             AirPlayCrypto.aesCbcDecrypt(
@@ -256,7 +437,8 @@ class AirPlayAudioReceiver(
         }
         if (debugPackets < 5) {
             debugPackets++
-            Log.i(
+            AirPlayDiagnostics.log(
+                AirPlayDiagnostics.Level.DEBUG,
                 TAG,
                 "pkt#$debugPackets payload=$payloadLength enc=${format.encrypted} " +
                     "in=${hex(rtp.data, rtp.payloadOffset, minOf(payloadLength, 32))} " +
@@ -265,14 +447,49 @@ class AirPlayAudioReceiver(
         }
         when (format.codec) {
             AirPlayCodec.ALAC -> {
+                // UxPlay: a 4-byte "no data marker" replaces the payload for
+                // packets that carry no audio (e.g. the first packet after SDP).
+                if (decrypted.size == 4 &&
+                    decrypted[0] == 0x00.toByte() && decrypted[1] == 0x68.toByte() &&
+                    decrypted[2] == 0x34.toByte() && decrypted[3] == 0x00.toByte()
+                ) {
+                    return
+                }
                 val bridge = alac ?: return
                 val frames = bridge.decode(decrypted, decrypted.size, pcmScratch)
                 lastFrameCount = frames
                 if (!firstDecodeLogged && frames > 0) {
                     firstDecodeLogged = true
-                    Log.i(TAG, "first ALAC decode: frames=$frames payload=$payloadLength")
+                    AirPlayDiagnostics.log(
+                        AirPlayDiagnostics.Level.INFO,
+                        TAG,
+                        "first ALAC decode: frames=$frames payload=$payloadLength",
+                    )
                 }
-                if (frames > 0) emitShorts(pcmScratch, frames * bridge.channels, ptsNs)
+                if (frames > 0) {
+                    lastDecodeMs = System.currentTimeMillis()
+                    consecutiveDecodeFailures = 0
+                    AirPlayDiagnostics.recordDecoded(frames.toLong())
+                    emitShorts(pcmScratch, frames * bridge.channels, ptsNs)
+                } else {
+                    AirPlayDiagnostics.recordDecodeError()
+                    AirPlayDiagnostics.log(
+                        AirPlayDiagnostics.Level.WARN,
+                        TAG,
+                        "ALAC decode failed: seq=${rtp.sequence} payload=$payloadLength " +
+                            "first=${hex(decrypted, 0, minOf(8, decrypted.size))}",
+                    )
+                    // 解码失败不要留下 PTS 洞：用上一块正常 PCM 顶一帧，
+                    // 最多连续 3 帧，避免解码器彻底坏掉时一直重复。
+                    val previous = lastPcm
+                    if (AirPlayTuning.config.plcEnabled &&
+                        previous != null &&
+                        consecutiveDecodeFailures < 3
+                    ) {
+                        consecutiveDecodeFailures++
+                        onPcm(previous, previous.size, ptsNs)
+                    }
+                }
             }
             AirPlayCodec.AAC, AirPlayCodec.AAC_ELD -> {
                 var produced = 0
@@ -281,10 +498,22 @@ class AirPlayAudioReceiver(
                     onPcm(pcm, len, ptsNs)
                 }
                 lastFrameCount = produced
+                if (produced > 0) {
+                    lastDecodeMs = System.currentTimeMillis()
+                    consecutiveDecodeFailures = 0
+                    AirPlayDiagnostics.recordDecoded(produced.toLong())
+                } else {
+                    AirPlayDiagnostics.recordDecodeError()
+                }
             }
             AirPlayCodec.PCM -> {
                 lastFrameCount = decrypted.size / (2 * format.channels.coerceAtLeast(1))
-                onPcm(decrypted, decrypted.size, ptsNs)
+                if (lastFrameCount > 0) {
+                    lastDecodeMs = System.currentTimeMillis()
+                    consecutiveDecodeFailures = 0
+                    AirPlayDiagnostics.recordDecoded(lastFrameCount.toLong())
+                    onPcm(decrypted, decrypted.size, ptsNs)
+                }
             }
             else -> Unit
         }
@@ -303,7 +532,11 @@ class AirPlayAudioReceiver(
             debugDecodes++
             var nz = 0
             for (i in 0 until count) if (shorts[i].toInt() != 0) nz++
-            Log.i(TAG, "decode#$debugDecodes shorts=$count nonZero=$nz")
+            AirPlayDiagnostics.log(
+                AirPlayDiagnostics.Level.DEBUG,
+                TAG,
+                "decode#$debugDecodes shorts=$count nonZero=$nz",
+            )
         }
         val bytes = ByteArray(count * 2)
         var j = 0
@@ -312,11 +545,21 @@ class AirPlayAudioReceiver(
             bytes[j++] = (v and 0xFF).toByte()
             bytes[j++] = ((v shr 8) and 0xFF).toByte()
         }
+        lastPcm = bytes
         onPcm(bytes, bytes.size, ptsNs)
     }
 
     companion object {
         private const val TAG = "AirPlayAudioRtp"
+
+        /**
+         * 连续这么久没有解码出任何音频后，若收到一个「旧」序列号，就认为
+         * 发送端重启了序列号而不是迟到的重传，直接重新对齐。
+         */
+        private const val RESYNC_AFTER_MS = 1_500L
+
+        /** Safety cap only; the real limit is the configured wait time. */
+        private const val MAX_PENDING = 128
 
         private fun hex(data: ByteArray, offset: Int, length: Int): String {
             val sb = StringBuilder()

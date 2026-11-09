@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 /**
@@ -40,6 +41,11 @@ class NeoUnifiedPlayer(
     private var musicArmed = false
     private var bookPlaying = false
     private var bookArmed = false
+    // 投屏接收音乐（Pod / AirPlay 音频）。它是和音乐、听书并列的第三个通道：
+    // 开始/结束只切换自己，全局暂停/恢复才一起动。
+    private var castActive = false
+    private var castPlaying = false
+    private var castArmed = false
     private var autoResume = false
     private var interrupted = false
     private var introPausedMusic = false
@@ -129,13 +135,19 @@ class NeoUnifiedPlayer(
             // 书由本协调器恢复，影子 player 不再自己续读，避免双恢复。
             false
         }
-        // 投屏接收：开始/结束/切歌时把会话 player 切到投屏 player（通知栏跟随）。
+        // 投屏接收：作为一个独立通道纳入统一控制。开始/结束不影响听书，
+        // 只有全局暂停/恢复会同时作用于两者。
         scope.launch {
-            container.castReceiver.state.collect { refreshSession() }
+            combine(container.castReceiver.state, container.castHub.state) { _, _ ->
+                container.receiveNowPlaying.snapshot()
+            }.collect { onCastChanged(it) }
         }
-        scope.launch {
-            container.castHub.state.collect { refreshSession() }
-        }
+        // 投屏会话 player 上的系统走带键也回到统一控制层：
+        // 暂停要把听书/音乐一起暂停，播放则一起恢复。
+        cast.onSetPlayingRequest = { want -> if (want) play() else pause() }
+        cast.onStopRequest = { pause() }
+        cast.onNextRequest = { next() }
+        cast.onPreviousRequest = { previous() }
         publish()
         refreshSession()
     }
@@ -146,6 +158,11 @@ class NeoUnifiedPlayer(
         autoResume = false
         interrupted = false
         var did = false
+        if (castArmed && castActive) {
+            castArmed = false
+            runCatching { container.receiveNowPlaying.setPlaying(true) }
+            did = true
+        }
         val para = lastPara
         if (bookArmed && para != null) {
             bookArmed = false
@@ -172,6 +189,10 @@ class NeoUnifiedPlayer(
     fun pause() {
         autoResume = false
         interrupted = false
+        if (castPlaying) {
+            castArmed = true
+            runCatching { container.receiveNowPlaying.setPlaying(false) }
+        }
         if (musicEffectivelyPlaying()) {
             musicArmed = true
             runCatching { music.pause() }
@@ -184,18 +205,26 @@ class NeoUnifiedPlayer(
         refreshSession()
     }
 
+    /** 统一播放键：任一路在播就全部暂停，否则把暂停前在播的通道一起恢复。 */
+    fun toggle() {
+        if (isAnyPlaying()) pause() else play()
+    }
+
     fun next() {
-        if (bookPlaying) runCatching { tts.next() }
-        else runCatching { music.seekToNextMediaItem() }
+        when {
+            castActive -> runCatching { container.receiveNowPlaying.next() }
+            bookPlaying -> runCatching { tts.next() }
+            else -> runCatching { music.seekToNextMediaItem() }
+        }
         publish()
         refreshSession()
     }
 
     fun previous() {
-        if (bookPlaying) {
-            runCatching { tts.prev() }
-        } else {
-            runCatching {
+        when {
+            castActive -> runCatching { container.receiveNowPlaying.previous() }
+            bookPlaying -> runCatching { tts.prev() }
+            else -> runCatching {
                 if (music.currentPosition > 4000) music.seekTo(0) else music.seekToPreviousMediaItem()
             }
         }
@@ -203,7 +232,7 @@ class NeoUnifiedPlayer(
         refreshSession()
     }
 
-    fun isAnyPlaying(): Boolean = musicEffectivelyPlaying() || bookPlaying
+    fun isAnyPlaying(): Boolean = castPlaying || musicEffectivelyPlaying() || bookPlaying
 
     /** 缓冲中且 playWhenReady 也算“在播”，与 UI/服务快照同口径。 */
     private fun musicEffectivelyPlaying(): Boolean =
@@ -383,9 +412,13 @@ class NeoUnifiedPlayer(
      */
     fun onExternalInterruption(autoResume: Boolean, pauseMusic: Boolean) {
         if (interrupted) return
-        if (!musicEffectivelyPlaying() && !bookPlaying) return
+        if (!castPlaying && !musicEffectivelyPlaying() && !bookPlaying) return
         interrupted = true
         this.autoResume = autoResume
+        if (castPlaying) {
+            castArmed = true
+            runCatching { container.receiveNowPlaying.setPlaying(false) }
+        }
         if (musicEffectivelyPlaying()) {
             musicArmed = true
             if (pauseMusic) runCatching { music.pause() }
@@ -427,6 +460,9 @@ class NeoUnifiedPlayer(
         musicArmed = false
         bookPlaying = false
         bookArmed = false
+        castActive = false
+        castPlaying = false
+        castArmed = false
         autoResume = false
         introPausedMusic = false
         snapshot = null
@@ -440,10 +476,38 @@ class NeoUnifiedPlayer(
 
     // ---- 内部 ----
 
+    /**
+     * 投屏接收状态变化：
+     * - 开始投屏只接管“音乐”这一路（避免两份音乐同时出声），听书继续读；
+     * - 结束投屏不自动恢复音乐，也不碰听书，避免开始/结束互相打扰；
+     * - 全局暂停时记下 castArmed，恢复时和听书/音乐一起回来。
+     */
+    private fun onCastChanged(snapshot: com.aurora.music.data.cast.ReceiveNowPlaying?) {
+        val wasActive = castActive
+        castActive = snapshot != null
+        castPlaying = snapshot?.isPlaying == true
+        if (castActive && !wasActive) {
+            castArmed = false
+            if (musicEffectivelyPlaying()) {
+                musicArmed = true
+                runCatching { music.pause() }
+            }
+            if (!bookPlaying) foreground = UnifiedChannel.CAST
+        } else if (!castActive) {
+            castArmed = false
+            if (foreground == UnifiedChannel.CAST) {
+                foreground = if (bookPlaying) UnifiedChannel.BOOK else UnifiedChannel.MUSIC
+            }
+        }
+        publish()
+        refreshSession()
+    }
+
     private fun publish() {
         val s = UnifiedState(
             music = ChannelState(musicLoaded, musicPlaying, musicArmed),
             book = ChannelState(true, bookPlaying, bookArmed),
+            cast = ChannelState(castActive, castPlaying, castArmed),
             foreground = foreground,
             musicTitle = musicTitle,
             musicArtist = musicArtist,

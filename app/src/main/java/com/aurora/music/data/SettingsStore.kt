@@ -348,6 +348,14 @@ class SettingsStore(private val context: Context) {
         val SONIC_AUTO_ANALYZE = booleanPreferencesKey("sonic_auto_analyze")
         val AUTOPLAY_RADIO = booleanPreferencesKey("autoplay_radio")
         val LRCLIB = booleanPreferencesKey("lrclib_enabled")
+        val AIRPLAY_DEBUG_LOG = booleanPreferencesKey("airplay_debug_log")
+        val AIRPLAY_BUFFER_MS = intPreferencesKey("airplay_buffer_ms")
+        val AIRPLAY_RESEND_AUTO = booleanPreferencesKey("airplay_resend_auto")
+        val AIRPLAY_RESEND_WAIT_MS = intPreferencesKey("airplay_resend_wait_ms")
+        val AIRPLAY_RESEND_RETRY_MS = intPreferencesKey("airplay_resend_retry_ms")
+        val AIRPLAY_RESEND_MAX_RETRIES = intPreferencesKey("airplay_resend_max_retries")
+        val AIRPLAY_PLC_ENABLED = booleanPreferencesKey("airplay_plc_enabled")
+        val AIRPLAY_PLC_MAX_MS = intPreferencesKey("airplay_plc_max_ms")
         val LIBRARY_SOURCE = stringPreferencesKey("library_source")
         val GESTURE_SWIPE_ART = booleanPreferencesKey("gesture_swipe_art")
         val GESTURE_SWIPE_DISMISS = booleanPreferencesKey("gesture_swipe_dismiss")
@@ -552,6 +560,28 @@ class SettingsStore(private val context: Context) {
     }
 
     val lrclibEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.LRCLIB] ?: true }
+
+    /** AirPlay 诊断日志开关（默认关，排查「有封面没声音」时手动打开）。 */
+    val airPlayDebugLog: Flow<Boolean> = context.dataStore.data.map { it[Keys.AIRPLAY_DEBUG_LOG] ?: false }
+
+    /** AirPlay 音频参数：固定缓冲、重传、PLC。 */
+    val airPlayConfig: Flow<com.aurora.music.data.cast.receiver.airplay.AirPlayConfig> =
+        context.dataStore.data.map { p ->
+            com.aurora.music.data.cast.receiver.airplay.AirPlayConfig(
+                bufferMs = p[Keys.AIRPLAY_BUFFER_MS]
+                    ?: com.aurora.music.data.cast.receiver.airplay.AirPlayConfig.DEFAULT_BUFFER_MS,
+                resendAuto = p[Keys.AIRPLAY_RESEND_AUTO] ?: true,
+                resendWaitMs = p[Keys.AIRPLAY_RESEND_WAIT_MS]
+                    ?: com.aurora.music.data.cast.receiver.airplay.AirPlayConfig.DEFAULT_RESEND_WAIT_MS,
+                resendRetryMs = p[Keys.AIRPLAY_RESEND_RETRY_MS]
+                    ?: com.aurora.music.data.cast.receiver.airplay.AirPlayConfig.DEFAULT_RESEND_RETRY_MS,
+                resendMaxRetries = p[Keys.AIRPLAY_RESEND_MAX_RETRIES]
+                    ?: com.aurora.music.data.cast.receiver.airplay.AirPlayConfig.DEFAULT_RESEND_MAX_RETRIES,
+                plcEnabled = p[Keys.AIRPLAY_PLC_ENABLED] ?: true,
+                plcMaxMs = p[Keys.AIRPLAY_PLC_MAX_MS]
+                    ?: com.aurora.music.data.cast.receiver.airplay.AirPlayConfig.DEFAULT_PLC_MAX_MS,
+            ).sanitized()
+        }.distinctUntilChanged()
 
     val librarySource: Flow<LibrarySource> =
         context.dataStore.data.map { librarySourceOf(it[Keys.LIBRARY_SOURCE]) }.distinctUntilChanged()
@@ -820,6 +850,20 @@ class SettingsStore(private val context: Context) {
     suspend fun setBitPerfectUsb(v: Boolean) = context.dataStore.edit { it[Keys.BIT_PERFECT_USB] = v }
     suspend fun setIndependentOutput(v: Boolean) = context.dataStore.edit { it[Keys.INDEPENDENT_OUTPUT] = v }
     suspend fun setLrclibEnabled(v: Boolean) = context.dataStore.edit { it[Keys.LRCLIB] = v }
+    suspend fun setAirPlayDebugLog(v: Boolean) = context.dataStore.edit { it[Keys.AIRPLAY_DEBUG_LOG] = v }
+
+    suspend fun setAirPlayConfig(config: com.aurora.music.data.cast.receiver.airplay.AirPlayConfig) {
+        val c = config.sanitized()
+        context.dataStore.edit { p ->
+            p[Keys.AIRPLAY_BUFFER_MS] = c.bufferMs
+            p[Keys.AIRPLAY_RESEND_AUTO] = c.resendAuto
+            p[Keys.AIRPLAY_RESEND_WAIT_MS] = c.resendWaitMs
+            p[Keys.AIRPLAY_RESEND_RETRY_MS] = c.resendRetryMs
+            p[Keys.AIRPLAY_RESEND_MAX_RETRIES] = c.resendMaxRetries
+            p[Keys.AIRPLAY_PLC_ENABLED] = c.plcEnabled
+            p[Keys.AIRPLAY_PLC_MAX_MS] = c.plcMaxMs
+        }
+    }
     suspend fun setGestureSwipeArtwork(v: Boolean) = context.dataStore.edit { it[Keys.GESTURE_SWIPE_ART] = v }
     suspend fun setGestureSwipeDismiss(v: Boolean) = context.dataStore.edit { it[Keys.GESTURE_SWIPE_DISMISS] = v }
     suspend fun setGestureDoubleTap(v: Boolean) = context.dataStore.edit { it[Keys.GESTURE_DOUBLE_TAP] = v }

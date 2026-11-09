@@ -22,7 +22,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 @Composable
-fun IntegrationsSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
+fun IntegrationsSettingsScreen(
+    contentPadding: PaddingValues,
+    onBack: () -> Unit,
+) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val lrclib by container.settingsStore.lrclibEnabled.collectAsStateWithLifecycle(initialValue = true)
     val artistEnrichment by container.settingsStore.artistEnrichment.collectAsStateWithLifecycle(initialValue = true)
@@ -32,7 +35,6 @@ fun IntegrationsSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit
     val strLyricsSection = stringResource(R.string.integrations_section_lyrics)
     val strMetadataSection = stringResource(R.string.integrations_section_metadata)
     val strAcoustIdSection = stringResource(R.string.integrations_acoustid)
-    val strCastSection = stringResource(R.string.integrations_cast_section)
 
     Ios5SettingsPage(strTitle, onBack) {
         ios5Section(strLyricsSection) {
@@ -47,33 +49,6 @@ fun IntegrationsSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit
         }
         ios5Section(strAcoustIdSection) {
             AcoustIdRow(scope)
-        }
-        ios5Section(strCastSection) {
-            val castStatus by container.castHub.status.collectAsStateWithLifecycle()
-            Ios5NavRow(
-                stringResource(R.string.integrations_cast_airplay),
-                subtitle = if (castStatus.airPlayListening) {
-                    stringResource(R.string.integrations_cast_listening, castStatus.airPlayPort)
-                } else {
-                    stringResource(R.string.integrations_cast_off)
-                },
-                value = "",
-            ) {}
-            Ios5CellDivider()
-            val active = castStatus.activeProtocol
-            Ios5NavRow(
-                title = if (active != null) {
-                    stringResource(
-                        R.string.integrations_cast_active,
-                        active.label,
-                        castStatus.activeSender.ifBlank { active.label },
-                    )
-                } else {
-                    stringResource(R.string.integrations_cast_none)
-                },
-                subtitle = castStatus.activeTitle,
-                value = "",
-            ) {}
         }
     }
 }

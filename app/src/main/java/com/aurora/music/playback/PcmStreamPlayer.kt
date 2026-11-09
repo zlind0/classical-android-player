@@ -36,6 +36,8 @@ class PcmStreamPlayer(
     private val sink: AudioSink,
     private val sessionId: Int,
     private val onFocusLoss: () -> Unit = {},
+    /** true = 重新拿到焦点，false = 被其它应用抢走（诊断/UI 用来解释“没声音”）。 */
+    private val onFocusChanged: (Boolean) -> Unit = {},
 ) {
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -43,9 +45,19 @@ class PcmStreamPlayer(
     private var sampleRate = 44100
     private var started = false
     @Volatile private var paused = false
-    private var framesWritten = 0L
+    /** 用户显式暂停：焦点恢复时不要自动播放。 */
+    @Volatile private var userPaused = false
+    /** 因音频焦点丢失而暂停：焦点回来后自动恢复，避免“状态正常但永远不出声”。 */
+    @Volatile private var focusPaused = false
+    @Volatile private var framesWritten = 0L
+    @Volatile private var writeCount = 0L
+    @Volatile private var lastWriteAtMs = 0L
+    @Volatile private var sinkBlockedWrites = 0L
+    @Volatile private var sinkBlockedRetries = 0L
+    @Volatile private var sinkBlockedNanos = 0L
+    @Volatile private var sinkUnderruns = 0L
     private var directBuffer: ByteBuffer? = null
-    private var focusHeld = false
+    @Volatile private var focusHeld = false
     private var focusRequest: AudioFocusRequest? = null
     private var firstWriteLogged = false
     @Volatile private var bufferSizeMs = 2000
@@ -74,7 +86,12 @@ class PcmStreamPlayer(
 
     private val sinkListener = object : AudioSink.Listener {
         override fun onPositionDiscontinuity() = Unit
-        override fun onUnderrun(bufferSize: Int, bufferSizeMs: Long, elapsedSinceLastFeedMs: Long) = Unit
+        override fun onUnderrun(bufferSize: Int, bufferSizeMs: Long, elapsedSinceLastFeedMs: Long) {
+            sinkUnderruns++
+            if (sinkUnderruns <= 3 || sinkUnderruns % 20L == 0L) {
+                Log.w(TAG, "sink underrun #$sinkUnderruns (buffered=${bufferSize}B/${bufferSizeMs}ms)")
+            }
+        }
         override fun onSkipSilenceEnabledChanged(skipSilenceEnabled: Boolean) = Unit
     }
 
@@ -91,14 +108,29 @@ class PcmStreamPlayer(
             return@OnAudioFocusChangeListener
         }
         when (change) {
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                // 电话 / 通知 / 其它 App 播放结束后，系统会把焦点还回来。
+                // 以前这里什么都不做，paused 永远为 true，于是 AirPlay 有封面、
+                // 会话一切正常，却一直没声音，只能手动暂停再播放。
+                if (focusPaused && !userPaused) {
+                    focusPaused = false
+                    Log.i(TAG, "audio focus regained, resuming output")
+                    resume()
+                    onFocusChanged(true)
+                }
+            }
             AudioManager.AUDIOFOCUS_LOSS,
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
             -> {
-                paused = true
-                // Focus callbacks arrive on the main thread; never block it on
-                // the sink thread, just queue the pause behind the current write.
-                sinkHandler.post { runCatching { sink.pause() } }
-                if (change == AudioManager.AUDIOFOCUS_LOSS) onFocusLoss()
+                if (!userPaused) {
+                    focusPaused = true
+                    paused = true
+                    // Focus callbacks arrive on the main thread; never block it on
+                    // the sink thread, just queue the pause behind the current write.
+                    sinkHandler.post { runCatching { sink.pause() } }
+                    onFocusChanged(false)
+                    if (change == AudioManager.AUDIOFOCUS_LOSS) onFocusLoss()
+                }
             }
         }
     }
@@ -136,7 +168,15 @@ class PcmStreamPlayer(
         onSink { sink.play() }
         started = true
         paused = false
+        userPaused = false
+        focusPaused = false
         framesWritten = 0L
+        writeCount = 0L
+        lastWriteAtMs = 0L
+        sinkBlockedWrites = 0L
+        sinkBlockedRetries = 0L
+        sinkBlockedNanos = 0L
+        sinkUnderruns = 0L
         firstWriteLogged = false
         Log.i(TAG, "sink started: rate=$sampleRate ch=$channels")
         requestFocus()
@@ -170,13 +210,29 @@ class PcmStreamPlayer(
         // so never overwrite it here. Overwriting used to drop the un-consumed
         // tail and produced audible gaps whenever the sink was full.
         var accepted = false
+        var blockedIters = 0
+        val waitStartNs = System.nanoTime()
         runCatching {
             while (!accepted && !paused) {
                 accepted = onSink { sink.handleBuffer(buffer, ptsUs, 1) }
-                if (!accepted) Thread.sleep(1)
+                if (!accepted) {
+                    blockedIters++
+                    Thread.sleep(1)
+                }
             }
         }.onFailure { Log.w(TAG, "sink write failed: ${it.cause?.message ?: it.message}") }
-        if (accepted) framesWritten += frames
+        if (accepted) {
+            if (blockedIters > 0) {
+                // 一次 write 可能重试很多次；诊断页展示的是“被反压的写入次数”，
+                // 不是 1ms 重试次数，否则数值会大到误导。
+                sinkBlockedWrites++
+                sinkBlockedRetries += blockedIters
+                sinkBlockedNanos += System.nanoTime() - waitStartNs
+            }
+            framesWritten += frames
+            writeCount++
+            lastWriteAtMs = System.currentTimeMillis()
+        }
     }
 
     fun writeSilence(frames: Int, channels: Int = 2) {
@@ -185,12 +241,16 @@ class PcmStreamPlayer(
     }
 
     fun pause() {
+        userPaused = true
+        focusPaused = false
         paused = true
         runCatching { onSink { sink.pause() } }
     }
 
     fun resume() {
         if (!started) return
+        userPaused = false
+        focusPaused = false
         // AirPlay keeps pushing while we are paused: jump to the newest packet.
         runCatching { onSink { sink.flush() } }
         framesWritten = 0L
@@ -209,6 +269,38 @@ class PcmStreamPlayer(
     }
 
     val isPaused: Boolean get() = paused
+
+    fun debugState(): Debug = Debug(
+        started = started,
+        paused = paused,
+        userPaused = userPaused,
+        focusPaused = focusPaused,
+        focusHeld = focusHeld,
+        framesWritten = framesWritten,
+        bufferSizeMs = bufferSizeMs,
+        sinkBlockedWrites = sinkBlockedWrites,
+        sinkBlockedRetries = sinkBlockedRetries,
+        sinkBlockedMs = sinkBlockedNanos / 1_000_000L,
+        sinkUnderruns = sinkUnderruns,
+        writes = writeCount,
+        lastWriteAtMs = lastWriteAtMs,
+    )
+
+    data class Debug(
+        val started: Boolean,
+        val paused: Boolean,
+        val userPaused: Boolean,
+        val focusPaused: Boolean,
+        val focusHeld: Boolean,
+        val framesWritten: Long,
+        val bufferSizeMs: Int,
+        val sinkBlockedWrites: Long,
+        val sinkBlockedRetries: Long,
+        val sinkBlockedMs: Long,
+        val sinkUnderruns: Long,
+        val writes: Long,
+        val lastWriteAtMs: Long,
+    )
 
     fun stop() {
         started = false

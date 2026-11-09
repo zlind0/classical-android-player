@@ -257,10 +257,10 @@ class AirPlayRtspServer(
                         session.started = true
                         listener.onRecord()
                     }
-                    // Advertise one second of latency so the sender only runs
-                    // one second ahead; the 2s sink buffer then keeps ~1s of
-                    // headroom instead of sitting permanently full.
-                    val latencyFrames = session?.audioFormat?.sampleRate ?: 44100
+                    // 上报的 Audio-Latency 与设置页的固定缓冲保持一致，发送端
+                    // 按同样的提前量安排音频，镜像时音画才有机会对齐。
+                    val latencyFrames = (session?.audioFormat?.sampleRate ?: 44100) *
+                        AirPlayTuning.config.bufferMs / 1000
                     respond(
                         request, output, 200, "OK", null, ByteArray(0),
                         extraHeaders = linkedMapOf(
@@ -303,6 +303,16 @@ class AirPlayRtspServer(
         private fun handleAnnounce(request: RtspRequest, output: OutputStream) {
             val sdp = String(request.body, Charsets.UTF_8)
             val format = AirPlaySdp.parse(sdp)
+            AirPlayDiagnostics.log(
+                AirPlayDiagnostics.Level.INFO,
+                TAG,
+                "ANNOUNCE: " + if (format == null) {
+                    "unparsed SDP (${request.body.size} bytes)"
+                } else {
+                    "codec=${format.codec} rate=${format.sampleRate} ch=${format.channels} " +
+                        "encrypted=${format.encrypted}"
+                },
+            )
             val existing = sessionLocked(create = false)
             if (existing != null && (existing.started || existing.mirroring || existing.announced)) {
                 // A new sender replaces the previous session.
@@ -325,6 +335,11 @@ class AirPlayRtspServer(
             val active = sessionLocked(create = true)!!
             active.owner = this
             val body = request.body
+            AirPlayDiagnostics.log(
+                AirPlayDiagnostics.Level.INFO,
+                TAG,
+                "SETUP: body=${body.size} bytes transport=${request.headers["transport"] ?: "-"}",
+            )
             val root = if (body.isNotEmpty()) {
                 runCatching { AppleBinaryPlist.decode(body) as? Map<*, *> }.getOrNull()
             } else {
@@ -556,6 +571,11 @@ class AirPlayRtspServer(
                 contentType.contains("text/parameters", ignoreCase = true) -> {
                     val text = String(request.body, Charsets.UTF_8)
                     Log.i(TAG, "SET_PARAMETER text: ${text.replace("\r", "\\r").replace("\n", "\\n")}")
+                    AirPlayDiagnostics.log(
+                        AirPlayDiagnostics.Level.DEBUG,
+                        TAG,
+                        "SET_PARAMETER: ${text.replace("\r", "\\r").replace("\n", "\\n")}",
+                    )
                     val parsed = AirPlayMetadata.parseTextParameters(text)
                     if (parsed != null) {
                         var metadata = parsed

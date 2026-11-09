@@ -1173,6 +1173,40 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /**
+     * 统一走带键（阅读页音乐气泡在投屏态使用）：
+     * 暂停/播放同时作用于投屏接收和听书，上下曲/进度只动当前正在呈现的通道。
+     */
+    fun togglePlayback() {
+        controller?.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_UNIFIED_TOGGLE, android.os.Bundle.EMPTY),
+            android.os.Bundle.EMPTY,
+        )
+    }
+
+    fun nextPlayback() {
+        controller?.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_UNIFIED_NEXT, android.os.Bundle.EMPTY),
+            android.os.Bundle.EMPTY,
+        )
+    }
+
+    fun previousPlayback() {
+        controller?.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_UNIFIED_PREV, android.os.Bundle.EMPTY),
+            android.os.Bundle.EMPTY,
+        )
+    }
+
+    fun seekPlayback(fraction: Float) {
+        controller?.sendCustomCommand(
+            SessionCommand(PlaybackService.CMD_UNIFIED_SEEK, android.os.Bundle().apply {
+                putFloat("fraction", fraction.coerceIn(0f, 1f))
+            }),
+            android.os.Bundle.EMPTY,
+        )
+    }
+
     /** 阅读页起播朗读后通知服务：把 armed 的音乐一起带起来（两者都 arm 时双恢复）。 */
     fun onBookStartedFromApp() {
         controller?.sendCustomCommand(

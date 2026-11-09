@@ -217,9 +217,8 @@ fun Ios5App() {
     }
     val nowPlayingState = receiveUi ?: playerState
     val receiveCaption = if (receiveActive) "Pod 局域网串流" else ""
-    LaunchedEffect(receivingCast) {
-        if (receivingCast) playerVM.pause()
-    }
+    // 投屏开始不再暂停本机音乐/听书：音乐由统一控制层让位（保留断点），
+    // 听书继续朗读。屏幕也不因为接收开始而跳转。
     val browseState by browseVM.state.collectAsStateWithLifecycle()
     val abooks by container.audiobookStore.books.collectAsStateWithLifecycle()
     val abookPrefs by container.settingsStore.audiobookPrefs.collectAsStateWithLifecycle(
@@ -486,14 +485,16 @@ fun Ios5App() {
     }
     // 播放页是全屏翻转页，属于页面现场的一部分
     var expandedRestored by remember { mutableStateOf(false) }
-    // 投屏接收页与普通播放页共用同一套翻转现场。投屏开始时自动展开，
-    // 退出时还原到投屏前的展开状态。
+    // 投屏接收页与普通播放页共用同一套翻转现场。
+    // 投屏开始时只沿用当前播放页的展开状态，不强制翻页/弹出全屏页，
+    // 这样在阅读页听书时开始投屏，屏幕不会闪一下跳到接收页。
     var castPageExpanded by rememberSaveable { mutableStateOf(false) }
     var expandedBeforeCast by remember { mutableStateOf(false) }
-    LaunchedEffect(receiveActive) {
+    LaunchedEffect(receiveActive, isEbookReader) {
         if (receiveActive) {
             expandedBeforeCast = playerState.expanded
-            castPageExpanded = true
+            // 阅读页里永远不自动展开接收页：否则投屏一开始阅读页会被淡出，看起来像闪屏。
+            castPageExpanded = !isEbookReader && playerState.expanded
         } else {
             castPageExpanded = false
             if (expandedBeforeCast) playerVM.setExpanded(true)
@@ -1250,6 +1251,12 @@ fun Ios5App() {
                         }
                         composable(Ios5Routes.SETTINGS_INTEGRATIONS) {
                             com.aurora.music.ui.screens.settings.IntegrationsSettingsScreen(
+                                contentPadding = PaddingValues(0.dp),
+                                onBack = { navController.popBackStack() },
+                            )
+                        }
+                        composable(Ios5Routes.SETTINGS_AIRPLAY_DIAGNOSTICS) {
+                            com.aurora.music.ui.screens.settings.AirPlayDiagnosticsScreen(
                                 contentPadding = PaddingValues(0.dp),
                                 onBack = { navController.popBackStack() },
                             )

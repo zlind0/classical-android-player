@@ -909,13 +909,15 @@ class PlaybackService : MediaLibraryService() {
         if (mediaClickCount >= 2) {
             cancelPendingCastToggle()
             mediaClickCount = 0
-            container.receiveNowPlaying.next()
+            val n = neo
+            if (n != null) n.next() else container.receiveNowPlaying.next()
             return
         }
         val pending = Runnable {
             pendingCastToggle = null
             mediaClickCount = 0
-            container.receiveNowPlaying.togglePlay()
+            val n = neo
+            if (n != null) n.toggle() else container.receiveNowPlaying.togglePlay()
         }
         pendingCastToggle = pending
         mediaClickHandler.postDelayed(pending, CAST_CLICK_WINDOW_MS)
@@ -1071,21 +1073,22 @@ class PlaybackService : MediaLibraryService() {
             // CastSessionPlayer，由它自己处理 play/pause/上下曲。
             val sessionPlayer = runCatching { session.player }.getOrNull()
             if (sessionPlayer !== castSessionPlayer && container.receiveNowPlaying.snapshot() != null) {
+                val n = neo
                 when (playerCommand) {
                     Player.COMMAND_PLAY_PAUSE -> {
-                        container.receiveNowPlaying.togglePlay()
+                        if (n != null) n.toggle() else container.receiveNowPlaying.togglePlay()
                         return Player.COMMAND_INVALID
                     }
                     Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> {
-                        container.receiveNowPlaying.next()
+                        if (n != null) n.next() else container.receiveNowPlaying.next()
                         return Player.COMMAND_INVALID
                     }
                     Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
-                        container.receiveNowPlaying.previous()
+                        if (n != null) n.previous() else container.receiveNowPlaying.previous()
                         return Player.COMMAND_INVALID
                     }
                     Player.COMMAND_STOP -> {
-                        container.receiveNowPlaying.setPlaying(false)
+                        if (n != null) n.pause() else container.receiveNowPlaying.setPlaying(false)
                         return Player.COMMAND_INVALID
                     }
                 }
@@ -1141,21 +1144,25 @@ class PlaybackService : MediaLibraryService() {
                             -> onCastMediaClick()
                             android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
                                 cancelPendingCastToggle()
-                                container.receiveNowPlaying.setPlaying(true)
+                                val n = neo
+                                if (n != null) n.play() else container.receiveNowPlaying.setPlaying(true)
                             }
                             android.view.KeyEvent.KEYCODE_MEDIA_PAUSE,
                             android.view.KeyEvent.KEYCODE_MEDIA_STOP,
                             -> {
                                 cancelPendingCastToggle()
-                                container.receiveNowPlaying.setPlaying(false)
+                                val n = neo
+                                if (n != null) n.pause() else container.receiveNowPlaying.setPlaying(false)
                             }
                             android.view.KeyEvent.KEYCODE_MEDIA_NEXT -> {
                                 cancelPendingCastToggle()
-                                container.receiveNowPlaying.next()
+                                val n = neo
+                                if (n != null) n.next() else container.receiveNowPlaying.next()
                             }
                             android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
                                 cancelPendingCastToggle()
-                                container.receiveNowPlaying.previous()
+                                val n = neo
+                                if (n != null) n.previous() else container.receiveNowPlaying.previous()
                             }
                         }
                     }
@@ -1199,6 +1206,10 @@ class PlaybackService : MediaLibraryService() {
                 .add(SessionCommand(CMD_MUSIC_PAUSE_TEMP, Bundle.EMPTY))
                 .add(SessionCommand(CMD_MUSIC_RESUME_TEMP, Bundle.EMPTY))
                 .add(SessionCommand(CMD_BOOK_STARTED, Bundle.EMPTY))
+                .add(SessionCommand(CMD_UNIFIED_TOGGLE, Bundle.EMPTY))
+                .add(SessionCommand(CMD_UNIFIED_NEXT, Bundle.EMPTY))
+                .add(SessionCommand(CMD_UNIFIED_PREV, Bundle.EMPTY))
+                .add(SessionCommand(CMD_UNIFIED_SEEK, Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(sessionCommands)
@@ -1224,6 +1235,20 @@ class PlaybackService : MediaLibraryService() {
                 CMD_MUSIC_PAUSE_TEMP -> neo?.pauseMusicForIntro()
                 CMD_MUSIC_RESUME_TEMP -> neo?.resumeMusicForIntro()
                 CMD_BOOK_STARTED -> neo?.onBookStartedFromApp()
+                // 统一语义（阅读页音乐气泡在投屏态）：暂停/播放同时作用于投屏与听书。
+                CMD_UNIFIED_TOGGLE -> neo?.toggle()
+                CMD_UNIFIED_NEXT -> neo?.next()
+                CMD_UNIFIED_PREV -> neo?.previous()
+                CMD_UNIFIED_SEEK -> {
+                    val fraction = customCommand.customExtras.getFloat("fraction", -1f)
+                    if (fraction >= 0f) {
+                        if (container.receiveNowPlaying.snapshot() != null) {
+                            container.receiveNowPlaying.seekFraction(fraction)
+                        } else {
+                            musicSeekTo(fraction)
+                        }
+                    }
+                }
                 CMD_MUSIC_JUMP ->
                     musicJumpTo(customCommand.customExtras.getInt("index", -1))
                 CMD_MUSIC_NEXT -> musicNext()
@@ -1540,10 +1565,9 @@ class PlaybackService : MediaLibraryService() {
             ACTION_ALARM -> startAlarmPlayback()
             ACTION_ALARM_DISMISS -> dismissAlarm()
             // 标准投屏抢占：暂停音乐 + 停听书，不自动恢复（用户回来自己按播放）。
+            // 投屏接管只让出本地音乐输出；听书继续朗读，由统一控制层决定两路的关系。
             ACTION_CAST_TAKEOVER -> {
                 runCatching { if (::player.isInitialized) player.pause() }
-                runCatching { neo?.pause() }
-                runCatching { container.ebookTts.stop(savePos = true, userInitiated = false) }
             }
             // 睡眠定时到点：音乐走淡出通道（渐弱后停），听书由 EbookTtsController 读完当前再停，不在这里动。
             ACTION_SLEEP_PAUSE -> {
@@ -1718,6 +1742,10 @@ class PlaybackService : MediaLibraryService() {
         const val CMD_MUSIC_PAUSE_TEMP = "com.aurora.music.MUSIC_PAUSE_TEMP"
         const val CMD_MUSIC_RESUME_TEMP = "com.aurora.music.MUSIC_RESUME_TEMP"
         const val CMD_BOOK_STARTED = "com.aurora.music.BOOK_STARTED"
+        const val CMD_UNIFIED_TOGGLE = "com.aurora.music.UNIFIED_TOGGLE"
+        const val CMD_UNIFIED_NEXT = "com.aurora.music.UNIFIED_NEXT"
+        const val CMD_UNIFIED_PREV = "com.aurora.music.UNIFIED_PREV"
+        const val CMD_UNIFIED_SEEK = "com.aurora.music.UNIFIED_SEEK"
         const val ACTION_PLAY_PAUSE = "com.aurora.music.action.PLAY_PAUSE"
         const val ACTION_NEXT = "com.aurora.music.action.NEXT"
         const val ACTION_PREV = "com.aurora.music.action.PREV"

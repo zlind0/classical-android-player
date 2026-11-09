@@ -11,9 +11,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -60,13 +62,17 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.UnifiedTtsPrefs
 import com.aurora.music.model.Song
+import com.aurora.music.ui.components.TrackArtwork
 import com.aurora.music.ui.components.formatTime
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5Slider
+import com.aurora.music.ui.player.toPlayerUiState
 import com.aurora.music.viewmodel.PlayerUiState
+import com.aurora.music.viewmodel.PlayerViewModel
 import com.aurora.music.viewmodel.RepeatMode
 import com.aurora.titlemerge.MergeInput
 import com.aurora.titlemerge.MergedRow
@@ -191,6 +197,13 @@ internal fun EbookMusicPanel(
     focusThird: Boolean = false,
     showList: Boolean = true,
     onHeaderHeight: ((Dp) -> Unit)? = null,
+    /**
+     * 投屏接收正在工作：原本的“正在播放列表”整块换成这张专辑封面，
+     * 循环/随机键隐藏；其余标题、进度、走带键、音量都不变。
+     */
+    castCoverSong: Song? = null,
+    /** 封面铺满面板宽度，并保持正方形（阅读页气泡投屏态用）。 */
+    squareCover: Boolean = false,
 ) {
     val density = LocalDensity.current
     val listState = rememberLazyListState()
@@ -265,7 +278,34 @@ internal fun EbookMusicPanel(
                 onSeek = onSeek,
                 onToggleShuffle = onToggleShuffle,
                 onCycleRepeat = onCycleRepeat,
+                showOptions = castCoverSong == null,
             )
+        }
+
+        if (castCoverSong != null) {
+            // 投屏接收态：列表位置换成正在接收的专辑封面，其它区域保持原样。
+            // squareCover 时封面铺满整块宽度并保持 1:1，外层气泡据此把中间区域做成正方形。
+            Box(
+                modifier = if (fillList && !squareCover) {
+                    Modifier.weight(1f).fillMaxWidth()
+                } else {
+                    Modifier.fillMaxWidth()
+                },
+                contentAlignment = Alignment.Center,
+            ) {
+                TrackArtwork(
+                    song = castCoverSong,
+                    modifier = if (squareCover) {
+                        Modifier.fillMaxWidth().aspectRatio(1f)
+                    } else {
+                        Modifier.fillMaxWidth(0.68f).aspectRatio(1f)
+                    },
+                    // 投屏气泡里的封面不做圆角：整块就是正方形。
+                    corner = if (squareCover) 0.dp else 8.dp,
+                    fullQuality = true,
+                )
+            }
+            return@Column
         }
 
         // ---- 中部：正在播放的总列表（紧凑行，按专辑视图合并大曲目） ----
@@ -365,17 +405,20 @@ private fun MusicProgressRow(
     onSeek: (Float) -> Unit,
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
+    showOptions: Boolean = true,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(
-            when (state.repeat) {
-                RepeatMode.ONE -> Icons.Filled.RepeatOne
-                else -> Icons.Filled.Repeat
-            },
-            "循环", tint = if (state.repeat == RepeatMode.OFF) Color(0xFF8E8E93) else Ios5Colors.IosBlueBright,
-            modifier = Modifier.size(34.dp).clip(RoundedCornerShape(17.dp))
-                .clickable(onClick = onCycleRepeat).padding(7.dp),
-        )
+        if (showOptions) {
+            Icon(
+                when (state.repeat) {
+                    RepeatMode.ONE -> Icons.Filled.RepeatOne
+                    else -> Icons.Filled.Repeat
+                },
+                "循环", tint = if (state.repeat == RepeatMode.OFF) Color(0xFF8E8E93) else Ios5Colors.IosBlueBright,
+                modifier = Modifier.size(34.dp).clip(RoundedCornerShape(17.dp))
+                    .clickable(onClick = onCycleRepeat).padding(7.dp),
+            )
+        }
         Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
             Ios5Slider(
                 value = state.progress.coerceIn(0f, 1f),
@@ -395,12 +438,14 @@ private fun MusicProgressRow(
                 )
             }
         }
-        Icon(
-            Icons.Filled.Shuffle, "随机",
-            tint = if (state.shuffle) Ios5Colors.IosBlueBright else Color(0xFF8E8E93),
-            modifier = Modifier.size(34.dp).clip(RoundedCornerShape(17.dp))
-                .clickable(onClick = onToggleShuffle).padding(7.dp),
-        )
+        if (showOptions) {
+            Icon(
+                Icons.Filled.Shuffle, "随机",
+                tint = if (state.shuffle) Ios5Colors.IosBlueBright else Color(0xFF8E8E93),
+                modifier = Modifier.size(34.dp).clip(RoundedCornerShape(17.dp))
+                    .clickable(onClick = onToggleShuffle).padding(7.dp),
+            )
+        }
     }
 }
 
@@ -422,8 +467,36 @@ internal fun ReaderMusicBubble(
     val container = (context.applicationContext as AuroraApplication).container
     val ttsPrefs by container.settingsStore.unifiedTts.collectAsStateWithLifecycle(initialValue = UnifiedTtsPrefs())
     val scope = rememberCoroutineScope()
+    val playerVM: PlayerViewModel = viewModel()
 
-    Box(
+    // 投屏接收正在工作时，气泡展示接收端的曲目；普通音乐播放保持原样。
+    val castReceiverState by container.castReceiver.state.collectAsStateWithLifecycle()
+    val castHubState by container.castHub.state.collectAsStateWithLifecycle()
+    val castUi = remember(castReceiverState, castHubState) {
+        when (val s = castReceiverState) {
+            is com.aurora.music.data.cast.CastReceiveState.Music -> s.toPlayerUiState()
+            else -> (castHubState as? com.aurora.music.data.cast.receiver.CastReceiverState.Playing)
+                ?.takeIf { it.video == null }
+                ?.toPlayerUiState()
+        }
+    }
+    // 本机正在投屏（网页 / HDMI / 局域网设备）也算“投射正在工作”：
+    // 气泡只把列表换成封面并隐藏循环/随机，其它布局与普通音乐播放保持一致。
+    val ebookCastState by container.ebookCast.state.collectAsStateWithLifecycle()
+    val castSender by container.ebookCast.senderState.collectAsStateWithLifecycle()
+    val castPrefs by container.ebookPrefs.castPrefs.collectAsStateWithLifecycle()
+    val outgoingCastActive = ebookCastState.mode != com.aurora.music.data.ebook.EbookCastMode.OFF ||
+        castSender.device != null ||
+        (ebookCastState.clientsConnected &&
+            castPrefs.musicOnCast(ebookCastState.mode != com.aurora.music.data.ebook.EbookCastMode.PRESENTATION))
+    val panelState = castUi ?: state
+    val castCoverSong = castUi?.current ?: state.current.takeIf { outgoingCastActive }
+    val coverMode = castCoverSong != null
+    val density = LocalDensity.current
+    var headerHeight by remember { mutableStateOf(0.dp) }
+    var bottomHeight by remember { mutableStateOf(0.dp) }
+
+    BoxWithConstraints(
         Modifier.fillMaxSize()
             .background(Color.Black.copy(alpha = 0.42f))
             .clickable(
@@ -433,8 +506,18 @@ internal fun ReaderMusicBubble(
             ),
         contentAlignment = Alignment.Center,
     ) {
+        // 封面态：气泡宽度 = 中间正方形边长；高度由“标题 + 正方形 + 走带区”自然撑开，
+        // 屏幕太矮时缩宽度，保证整块气泡仍在可视范围内。
+        val maxBubbleWidth = maxWidth * 0.9f
+        val maxBubbleHeight = maxHeight * 0.94f
+        val coverSide = (maxBubbleHeight - headerHeight - bottomHeight).coerceAtLeast(140.dp)
+        val bubbleWidth = if (coverMode) minOf(maxBubbleWidth, coverSide) else maxBubbleWidth
         Column(
-            Modifier.fillMaxWidth(0.9f).fillMaxHeight(0.7f)
+            Modifier
+                .then(
+                    if (coverMode) Modifier.width(bubbleWidth)
+                    else Modifier.fillMaxWidth(0.9f).fillMaxHeight(0.7f),
+                )
                 .shadow(18.dp, RoundedCornerShape(16.dp))
                 .clip(RoundedCornerShape(16.dp))
                 .background(Color.White)
@@ -445,19 +528,23 @@ internal fun ReaderMusicBubble(
                 ),
         ) {
             EbookMusicPanel(
-                state = state,
+                state = panelState,
                 onJump = onJump,
-                onSeek = onSeek,
+                onSeek = { f -> if (castUi != null) playerVM.seekPlayback(f) else onSeek(f) },
                 onToggleShuffle = onToggleShuffle,
                 onCycleRepeat = onCycleRepeat,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
+                modifier = if (coverMode) Modifier.fillMaxWidth() else Modifier.weight(1f).fillMaxWidth(),
                 fillList = true,
                 focusThird = true,
+                castCoverSong = castCoverSong,
+                squareCover = coverMode,
+                onHeaderHeight = { headerHeight = it },
             )
 
             // ---- 底部：深色渐变走带键区（上一首 / 播放暂停 / 下一首 + 站内音乐音量） ----
             Column(
                 Modifier.fillMaxWidth().background(readerMusicBlackBrush)
+                    .onSizeChanged { bottomHeight = with(density) { it.height.toDp() } }
                     .padding(top = 6.dp, bottom = 12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
@@ -469,18 +556,31 @@ internal fun ReaderMusicBubble(
                     Icon(
                         Icons.Filled.SkipPrevious, "上一首", tint = Color.White,
                         modifier = Modifier.size(46.dp).clip(RoundedCornerShape(23.dp))
-                            .clickable(onClick = onPrevious).padding(9.dp),
+                            .clickable(
+                                onClick = {
+                                    if (castUi != null) playerVM.previousPlayback() else onPrevious()
+                                },
+                            ).padding(9.dp),
                     )
                     Icon(
-                        if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        if (state.isPlaying) "暂停" else "播放", tint = Color.White,
+                        if (panelState.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        if (panelState.isPlaying) "暂停" else "播放", tint = Color.White,
                         modifier = Modifier.size(54.dp).clip(RoundedCornerShape(27.dp))
-                            .clickable(onClick = onTogglePlay).padding(9.dp),
+                            .clickable(
+                                onClick = {
+                                    // 投屏态：暂停/播放是统一的，会同时作用于投屏和听书。
+                                    if (castUi != null) playerVM.togglePlayback() else onTogglePlay()
+                                },
+                            ).padding(9.dp),
                     )
                     Icon(
                         Icons.Filled.SkipNext, "下一首", tint = Color.White,
                         modifier = Modifier.size(46.dp).clip(RoundedCornerShape(23.dp))
-                            .clickable(onClick = onNext).padding(9.dp),
+                            .clickable(
+                                onClick = {
+                                    if (castUi != null) playerVM.nextPlayback() else onNext()
+                                },
+                            ).padding(9.dp),
                     )
                 }
                 Spacer(Modifier.height(6.dp))

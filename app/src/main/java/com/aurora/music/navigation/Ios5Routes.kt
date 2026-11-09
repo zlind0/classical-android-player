@@ -74,6 +74,7 @@ object Ios5Routes {
     const val SETTINGS_STORAGE = "settings_storage"
     const val SETTINGS_GESTURES = "settings_gestures"
     const val SETTINGS_INTEGRATIONS = "settings_integrations"
+    const val SETTINGS_AIRPLAY_DIAGNOSTICS = "settings_airplay_diagnostics"
     const val SETTINGS_RELAY = "settings_relay"
     const val SETTINGS_ABOUT = "settings_about"
     const val SETTINGS_VISUALIZER = "settings_visualizer"

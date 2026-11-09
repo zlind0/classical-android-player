@@ -92,6 +92,8 @@ class AirPlayReceiver(
         }
         registerNetworkCallback()
         startWatchdog()
+        AirPlayDiagnostics.init(appContext)
+        AirPlayDiagnostics.log(AirPlayDiagnostics.Level.INFO, TAG, "AirPlay receiver started on $actualPort")
         Log.i(TAG, "AirPlay receiver started on $actualPort")
     }
 
@@ -108,6 +110,7 @@ class AirPlayReceiver(
         server?.stop()
         server = null
         listener = null
+        AirPlayDiagnostics.log(AirPlayDiagnostics.Level.INFO, TAG, "AirPlay receiver stopped")
     }
 
     override fun stopSession() {
@@ -127,6 +130,11 @@ class AirPlayReceiver(
         audioOutput?.setDuckFactor(introDuck)
     }
 
+    /** 设置页修改 AirPlay 缓冲 / 重传 / PLC 后调用；重传参数在接收线程实时读取。 */
+    fun applyTuning() {
+        audioOutput?.applyTuning(AirPlayTuning.config)
+    }
+
     // ------------------------------------------------------------- RTSP events
 
     private inner class RtspListener : AirPlayRtspServer.Listener {
@@ -138,6 +146,12 @@ class AirPlayReceiver(
         override fun onSenderIdentified(name: String, mirroring: Boolean) {
             senderLabel = name
             this@AirPlayReceiver.mirroring = mirroring
+            AirPlayDiagnostics.noteSender(name, mirroring)
+            AirPlayDiagnostics.log(
+                AirPlayDiagnostics.Level.INFO,
+                TAG,
+                "sender identified: name=$name mirroring=$mirroring",
+            )
             val current = session
             if (current == null) {
                 val s = AirPlaySession(name, mirroring)
@@ -162,15 +176,18 @@ class AirPlayReceiver(
 
         override fun onRecord() {
             val s = session ?: return
+            AirPlayDiagnostics.log(AirPlayDiagnostics.Level.INFO, TAG, "RECORD: sender starts playback")
             listener?.onProgress(s, pendingInfoMs, pendingDurationMs, true)
         }
 
         override fun onFlush() {
+            AirPlayDiagnostics.log(AirPlayDiagnostics.Level.INFO, TAG, "FLUSH from sender")
             audioReceiver?.flush()
             audioOutput?.flush()
         }
 
         override fun onTeardown() {
+            AirPlayDiagnostics.log(AirPlayDiagnostics.Level.INFO, TAG, "TEARDOWN from sender")
             endSessionInternal(notify = true)
         }
 
@@ -192,6 +209,11 @@ class AirPlayReceiver(
             )
             if (media != lastMedia) {
                 lastMedia = media
+                AirPlayDiagnostics.log(
+                    AirPlayDiagnostics.Level.DEBUG,
+                    TAG,
+                    "metadata: ${media.title} / ${media.artist} / ${media.album}",
+                )
                 listener?.onMediaChanged(s, media)
             }
             listener?.onProgress(s, pendingInfoMs, pendingDurationMs, true)
@@ -224,8 +246,22 @@ class AirPlayReceiver(
                 "encrypted=${format.encrypted} alac=${format.alacConfig} " +
                 "key=${format.aesKey.hex()} iv=${format.aesIv.hex()}",
         )
+        AirPlayDiagnostics.log(
+            AirPlayDiagnostics.Level.INFO,
+            TAG,
+            "audio stream: codec=${format.codec} rate=${format.sampleRate} ch=${format.channels} " +
+                "encrypted=${format.encrypted} ptime=${format.ptimeMs}",
+        )
         endAudio()
         pausedByUser = false
+        AirPlayDiagnostics.sessionStarted(
+            sender = senderLabel,
+            codec = format.codec.name,
+            sampleRate = format.sampleRate,
+            channels = format.channels,
+            encrypted = format.encrypted,
+            mirroring = mirroring,
+        )
         val output = AirPlayAudioOutput(appContext, sinkFactory(), audioSessionId) {
             // Audio focus lost: keep the session but stop output.
         }
@@ -256,6 +292,7 @@ class AirPlayReceiver(
         audioReceiver = null
         audioOutput?.stop()
         audioOutput = null
+        AirPlayDiagnostics.sessionEnded("audio output released")
     }
 
     // ---------------------------------------------------------------- video
@@ -285,6 +322,11 @@ class AirPlayReceiver(
         )
         receiver.start(0)
         videoReceiver = receiver
+        AirPlayDiagnostics.log(
+            AirPlayDiagnostics.Level.INFO,
+            TAG,
+            "mirroring video listening on ${receiver.localPort}",
+        )
         Log.i(TAG, "mirroring video listening on ${receiver.localPort}")
     }
 
@@ -312,6 +354,7 @@ class AirPlayReceiver(
         mirroring = false
         pausedByUser = false
         introDuck = 1f
+        AirPlayDiagnostics.sessionEnded("session torn down")
         if (notify && current != null) listener?.onSessionEnded(current)
     }
 
@@ -334,6 +377,11 @@ class AirPlayReceiver(
                 if (pausedByUser) continue
                 val last = lastAudioPacketMs
                 if (last > 0 && System.currentTimeMillis() - last > 45_000) {
+                    AirPlayDiagnostics.log(
+                        AirPlayDiagnostics.Level.WARN,
+                        TAG,
+                        "no audio for 45s, ending AirPlay session",
+                    )
                     Log.i(TAG, "no audio for 45s, ending AirPlay session")
                     endSessionInternal(notify = true)
                     server?.stopSession()

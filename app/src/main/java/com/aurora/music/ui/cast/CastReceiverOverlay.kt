@@ -69,7 +69,8 @@ fun CastReceiverOverlay() {
     when (val s = state) {
         CastReceiveState.Idle -> Unit
         is CastReceiveState.Incoming -> IncomingScreen(s, onAccept = { container.castReceiver.accept() }, onReject = { container.castReceiver.reject() })
-        is CastReceiveState.Loading -> LoadingScreen(s)
+        // 建立连接阶段不覆盖屏幕：投屏一开始不能有任何闪烁/翻页。
+        is CastReceiveState.Loading -> Unit
         is CastReceiveState.Music -> Unit
         is CastReceiveState.Ebook -> EbookScreen(s)
     }

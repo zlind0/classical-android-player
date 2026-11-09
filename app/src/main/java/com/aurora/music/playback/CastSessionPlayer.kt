@@ -33,6 +33,15 @@ class CastSessionPlayer(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var attached = false
 
+    /**
+     * 系统走带键先交给 [NeoUnifiedPlayer]：暂停/播放是“全局”语义，
+     * 要同时作用于投屏、听书和音乐。为空时退回只控制投屏接收本身。
+     */
+    var onSetPlayingRequest: ((Boolean) -> Unit)? = null
+    var onStopRequest: (() -> Unit)? = null
+    var onNextRequest: (() -> Unit)? = null
+    var onPreviousRequest: (() -> Unit)? = null
+
     fun attach() {
         if (attached) return
         attached = true
@@ -121,7 +130,9 @@ class CastSessionPlayer(
     }
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
-        container.receiveNowPlaying.setPlaying(playWhenReady)
+        val delegate = onSetPlayingRequest
+        if (delegate != null) delegate(playWhenReady)
+        else container.receiveNowPlaying.setPlaying(playWhenReady)
         invalidateState()
         return Futures.immediateFuture(null)
     }
@@ -129,7 +140,9 @@ class CastSessionPlayer(
     override fun handlePrepare(): ListenableFuture<*> = Futures.immediateFuture(null)
 
     override fun handleStop(): ListenableFuture<*> {
-        container.receiveNowPlaying.setPlaying(false)
+        val delegate = onStopRequest
+        if (delegate != null) delegate()
+        else container.receiveNowPlaying.setPlaying(false)
         invalidateState()
         return Futures.immediateFuture(null)
     }
@@ -140,10 +153,14 @@ class CastSessionPlayer(
         seekCommand: Int,
     ): ListenableFuture<*> {
         when (seekCommand) {
-            Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM ->
-                container.receiveNowPlaying.next()
-            Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM ->
-                container.receiveNowPlaying.previous()
+            Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> {
+                val delegate = onNextRequest
+                if (delegate != null) delegate() else container.receiveNowPlaying.next()
+            }
+            Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
+                val delegate = onPreviousRequest
+                if (delegate != null) delegate() else container.receiveNowPlaying.previous()
+            }
             Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM -> {
                 val s = container.receiveNowPlaying.snapshot() ?: return Futures.immediateFuture(null)
                 if (s.durationMs > 0L) {

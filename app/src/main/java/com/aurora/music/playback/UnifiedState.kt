@@ -3,7 +3,7 @@ package com.aurora.music.playback
 import androidx.media3.common.MediaItem
 
 /** 统一会话当前呈现的通道。 */
-enum class UnifiedChannel { MUSIC, BOOK }
+enum class UnifiedChannel { MUSIC, BOOK, CAST }
 
 /** 单个通道的装载/播放/待恢复状态。 */
 data class ChannelState(
@@ -33,6 +33,8 @@ data class MusicSnapshot(
 data class UnifiedState(
     val music: ChannelState = ChannelState(),
     val book: ChannelState = ChannelState(),
+    /** 投屏接收音乐：与音乐/听书同级的第三个通道，只受统一暂停/恢复控制。 */
+    val cast: ChannelState = ChannelState(),
     val foreground: UnifiedChannel = UnifiedChannel.MUSIC,
     val musicTitle: String = "",
     val musicArtist: String = "",

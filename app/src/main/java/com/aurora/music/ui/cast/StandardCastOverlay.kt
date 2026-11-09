@@ -76,7 +76,9 @@ fun StandardCastOverlay() {
     val state by hub.state.collectAsStateWithLifecycle()
     when (val s = state) {
         CastReceiverState.Idle -> Unit
-        is CastReceiverState.Connecting -> ConnectingScreen(s)
+        // 连接阶段不铺全屏：音频接收开始/结束必须做到屏幕零闪烁，
+        // 直接等 Playing 后由统一正在播放页接管；视频镜像也在 Playing 才出画面。
+        is CastReceiverState.Connecting -> Unit
         is CastReceiverState.Playing -> {
             // 音频接收已并入统一正在播放页；这里只保留 AirPlay 视频镜像。
             if (s.video != null) {

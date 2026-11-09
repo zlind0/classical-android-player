@@ -438,12 +438,6 @@
     <string name="integrations_acoustid_on">已填 key——标签编辑器里可用自动识别</string>
     <string name="integrations_acoustid_off">去 acoustid.org/new-application 免费申请</string>
     <string name="integrations_acoustid_label">AcoustID API key</string>
-    <string name="integrations_cast_section">投屏接收</string>
-    <string name="integrations_cast_airplay">AirPlay</string>
-    <string name="integrations_cast_listening">监听中 · 端口 %1$d</string>
-    <string name="integrations_cast_off">未启动</string>
-    <string name="integrations_cast_active">正在接收：%1$s · %2$s</string>
-    <string name="integrations_cast_none">当前没有投屏会话</string>
 
     <!-- Permissions -->
     <string name="perms_title">权限</string>
