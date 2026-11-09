@@ -216,7 +216,12 @@ fun Ios5App() {
         else -> NowPlayingMode.MUSIC
     }
     val nowPlayingState = receiveUi ?: playerState
-    val receiveCaption = if (receiveActive) "Pod 局域网串流" else ""
+    // 统一播放页底部的来源说明：自有协议走局域网，标准协议是 AirPlay。
+    val receiveCaption = when (nowPlayingMode) {
+        NowPlayingMode.POD_RECEIVE -> "Pod局域网串流"
+        NowPlayingMode.AIRPLAY_RECEIVE -> "Airplay串流"
+        else -> ""
+    }
     // 投屏开始不再暂停本机音乐/听书：音乐由统一控制层让位（保留断点），
     // 听书继续朗读。屏幕也不因为接收开始而跳转。
     val browseState by browseVM.state.collectAsStateWithLifecycle()

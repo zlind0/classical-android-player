@@ -70,6 +70,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -271,7 +272,14 @@ fun Ios5PlayerPage(
         // 底栏最小高度必须和它真正的内容一致：上内边距 8 + 走带行 72 + 间隔 12 + 音量行 52
         // + 下内边距 18 = 162，再加 1dp 分割线。原来写 144 会少 19dp，而 Column 是"最后一个
         // 子项吃掉缺口"，被压扁的就是音量行里的 52dp airplay 键（图标只剩十几 dp）。
-        val bottomBase = 164.dp + navBottom + if (mode.isReceive) 18.dp else 0.dp
+        // 来源说明按字体实际行高（sp→dp 随系统字体缩放变化）预留，避免固定 18dp 在
+        // 大字体或字体自带上下留白时把最后一行压出底栏，看起来像被削掉了脚。
+        val captionPadTop = 2.dp
+        val captionPadBottom = 4.dp
+        val captionBlockH = if (mode.isReceive) {
+            with(LocalDensity.current) { 14.sp.toDp() } + captionPadTop + captionPadBottom + 4.dp
+        } else 0.dp
+        val bottomBase = 164.dp + navBottom + captionBlockH
         val coverSide = minOf(maxWidth, maxHeight - topBase - grayBase - bottomBase).coerceAtLeast(0.dp)
         val leftover = (maxHeight - topBase - grayBase - coverSide - bottomBase).coerceAtLeast(0.dp)
         val topExtra = leftover * 0.4f
@@ -579,7 +587,9 @@ fun Ios5PlayerPage(
                     fontWeight = FontWeight.Bold,
                     fontFamily = Ios5Sans,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp),
+                    maxLines = 1,
+                    modifier = Modifier.fillMaxWidth()
+                        .padding(top = captionPadTop, bottom = captionPadBottom),
                 )
             }
         }
