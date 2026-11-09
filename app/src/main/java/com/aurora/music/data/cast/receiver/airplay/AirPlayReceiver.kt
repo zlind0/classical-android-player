@@ -64,7 +64,10 @@ class AirPlayReceiver(
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     @Volatile private var lastAudioPacketMs = 0L
-    @Volatile private var pausedByUser = false
+    /** 收到第一段数字静音的时间；发送端暂停时可能会继续推空包。 */
+    @Volatile private var silenceSinceMs = 0L
+    /** 发送端（iOS）自己的播放状态；暂停完全由发送端控制，本地只跟随。 */
+    @Volatile private var senderPaused = false
     @Volatile private var hasVideo = false
     @Volatile private var mirroring = false
     @Volatile private var audioSampleRate = 44100
@@ -175,13 +178,17 @@ class AirPlayReceiver(
         }
 
         override fun onRecord() {
-            val s = session ?: return
-            AirPlayDiagnostics.log(AirPlayDiagnostics.Level.INFO, TAG, "RECORD: sender starts playback")
-            listener?.onProgress(s, pendingInfoMs, pendingDurationMs, true)
+            markPlaying()
+        }
+
+        override fun onPause() {
+            markPaused()
         }
 
         override fun onFlush() {
             AirPlayDiagnostics.log(AirPlayDiagnostics.Level.INFO, TAG, "FLUSH from sender")
+            // RAOP senders also signal a pause by flushing the stream.
+            markPaused()
             audioReceiver?.flush()
             audioOutput?.flush()
         }
@@ -216,7 +223,7 @@ class AirPlayReceiver(
                 )
                 listener?.onMediaChanged(s, media)
             }
-            listener?.onProgress(s, pendingInfoMs, pendingDurationMs, true)
+            listener?.onProgress(s, pendingInfoMs, pendingDurationMs, !senderPaused)
         }
 
         override fun onVolume(volume: Float) {
@@ -233,8 +240,46 @@ class AirPlayReceiver(
             val s = session ?: return
             pendingInfoMs = positionMs
             if (durationMs > 0) pendingDurationMs = durationMs
-            listener?.onProgress(s, pendingInfoMs, pendingDurationMs, true)
+            listener?.onProgress(s, pendingInfoMs, pendingDurationMs, !senderPaused)
         }
+    }
+
+    /**
+     * 播放状态以发送端为准：RECORD / 恢复收包表示播放，PAUSE / FLUSH 表示暂停。
+     * 本地只更新状态，不暂停自己的音频输出（pause 只是把 DACP 命令发给 iOS）。
+     */
+    private fun markPlaying() {
+        val s = session ?: return
+        silenceSinceMs = 0L
+        if (!senderPaused) {
+            // 已经在播放，只需刷新进度，避免每个音频包都回调。
+            listener?.onProgress(s, pendingInfoMs, pendingDurationMs, true)
+            return
+        }
+        senderPaused = false
+        lastAudioPacketMs = System.currentTimeMillis()
+        AirPlayDiagnostics.log(AirPlayDiagnostics.Level.INFO, TAG, "sender resumed playback")
+        // 发送端恢复时确保本地输出没被音频焦点等外部原因卡在暂停状态。
+        if (audioOutput?.isPaused == true) audioOutput?.resume()
+        listener?.onProgress(s, pendingInfoMs, pendingDurationMs, true)
+    }
+
+    private fun markPaused() {
+        val s = session ?: return
+        if (senderPaused) return
+        senderPaused = true
+        AirPlayDiagnostics.log(AirPlayDiagnostics.Level.INFO, TAG, "sender paused playback")
+        listener?.onProgress(s, pendingInfoMs, pendingDurationMs, false)
+    }
+
+    /** 16-bit PCM 里是否存在非零样本（用于识别发送端暂停时的数字静音）。 */
+    private fun hasAudiblePcm(pcm: ByteArray, length: Int): Boolean {
+        var i = 0
+        while (i + 1 < length) {
+            if (pcm[i].toInt() != 0 || pcm[i + 1].toInt() != 0) return true
+            i += 2
+        }
+        return false
     }
 
     // ---------------------------------------------------------------- audio
@@ -253,7 +298,8 @@ class AirPlayReceiver(
                 "encrypted=${format.encrypted} ptime=${format.ptimeMs}",
         )
         endAudio()
-        pausedByUser = false
+        senderPaused = false
+        silenceSinceMs = 0L
         AirPlayDiagnostics.sessionStarted(
             sender = senderLabel,
             codec = format.codec.name,
@@ -272,12 +318,21 @@ class AirPlayReceiver(
         val receiver = AirPlayAudioReceiver(
             format = format,
             onPcm = { pcm, length, ptsNs ->
-                lastAudioPacketMs = System.currentTimeMillis()
+                val now = System.currentTimeMillis()
+                val packetGap = if (lastAudioPacketMs > 0) now - lastAudioPacketMs else Long.MAX_VALUE
+                lastAudioPacketMs = now
+                if (senderPaused && packetGap >= PAUSE_DETECT_MS) markPlaying()
+                if (hasAudiblePcm(pcm, length)) {
+                    silenceSinceMs = 0L
+                    if (senderPaused) markPlaying()
+                } else if (silenceSinceMs == 0L) {
+                    silenceSinceMs = now
+                }
                 output.writePcm(pcm, length, ptsNs)
             },
             onFirstPacket = {
                 session?.let { s ->
-                    listener?.onProgress(s, 0, pendingDurationMs, true)
+                    listener?.onProgress(s, 0, pendingDurationMs, !senderPaused)
                 }
             },
             onError = { Log.w(TAG, "audio stream error: $it") },
@@ -352,7 +407,8 @@ class AirPlayReceiver(
         artworkPath = ""
         senderLabel = ""
         mirroring = false
-        pausedByUser = false
+        senderPaused = false
+        silenceSinceMs = 0L
         introDuck = 1f
         AirPlayDiagnostics.sessionEnded("session torn down")
         if (notify && current != null) listener?.onSessionEnded(current)
@@ -372,17 +428,30 @@ class AirPlayReceiver(
     private fun startWatchdog() {
         watchdog = scope.launch {
             while (isActive && running.get()) {
-                delay(5_000)
-                if (session == null) continue
-                if (pausedByUser) continue
-                val last = lastAudioPacketMs
-                if (last > 0 && System.currentTimeMillis() - last > 45_000) {
+                delay(1_000)
+                session ?: continue
+                if (audioOutput == null) continue
+                val now = System.currentTimeMillis()
+                val silentPacketsMs = if (lastAudioPacketMs > 0) now - lastAudioPacketMs else 0L
+                val digitalSilenceMs = if (silenceSinceMs > 0) now - silenceSinceMs else 0L
+                // iOS 暂停时有时直接停发 RTP，有时继续推数字静音包；两种都要
+                // 当成暂停，否则 UI 会一直显示播放，超时还会把会话销毁。
+                if (!senderPaused &&
+                    (silentPacketsMs >= PAUSE_DETECT_MS || digitalSilenceMs >= SILENCE_DETECT_MS)
+                ) {
+                    markPaused()
+                }
+                // A paused sender keeps the RTSP session alive; only clean up
+                // after a long idle period. Unpaused silence is a stalled stream.
+                val idleMs = maxOf(silentPacketsMs, digitalSilenceMs)
+                val timeout = if (senderPaused) PAUSED_STALE_MS else STALL_TIMEOUT_MS
+                if (idleMs > timeout) {
                     AirPlayDiagnostics.log(
                         AirPlayDiagnostics.Level.WARN,
                         TAG,
-                        "no audio for 45s, ending AirPlay session",
+                        "no audio for ${idleMs}ms, ending AirPlay session",
                     )
-                    Log.i(TAG, "no audio for 45s, ending AirPlay session")
+                    Log.i(TAG, "no audio for ${idleMs}ms, ending AirPlay session")
                     endSessionInternal(notify = true)
                     server?.stopSession()
                 }
@@ -437,20 +506,21 @@ class AirPlayReceiver(
             )
 
         override fun play() {
-            // Control the sender first so it resumes its timeline, then let the
-            // local sink jump to the newest packet.
+            // 只驱动发送端；本地不恢复“虚拟暂停”的音频，只在输出被焦点等
+            // 外部原因卡住时重新拉起。
             dacp?.play()
-            pausedByUser = false
+            senderPaused = false
+            silenceSinceMs = 0L
             lastAudioPacketMs = System.currentTimeMillis()
-            audioOutput?.resume()
+            if (audioOutput?.isPaused == true) audioOutput?.resume()
             listener?.onProgress(this, pendingInfoMs, pendingDurationMs, true)
         }
 
         override fun pause() {
+            // 不做本地虚拟暂停：只把暂停命令发给 iOS，并立即把 UI 状态
+            // 置为暂停（iOS 收到 DACP 后会自行暂停）。
             dacp?.pause()
-            pausedByUser = true
-            audioOutput?.pause()
-            listener?.onProgress(this, pendingInfoMs, pendingDurationMs, false)
+            markPaused()
         }
 
         override fun seekTo(positionMs: Long) = Unit
@@ -471,6 +541,18 @@ class AirPlayReceiver(
 
     companion object {
         private const val TAG = "AirPlayReceiver"
+
+        /** 持续没有音频包多久后认为发送端已暂停。 */
+        private const val PAUSE_DETECT_MS = 2_000L
+
+        /** 连续数字静音多久后认为发送端已暂停（有些发送端暂停时仍推空包）。 */
+        private const val SILENCE_DETECT_MS = 2_500L
+
+        /** 未暂停但完全收不到音频：视为流已断，结束会话。 */
+        private const val STALL_TIMEOUT_MS = 45_000L
+
+        /** 发送端暂停后仍保留会话（可随时恢复），长时间无活动才清理。 */
+        private const val PAUSED_STALE_MS = 30 * 60_000L
 
         private fun ByteArray.hex(): String = joinToString("") { "%02x".format(it) }
     }

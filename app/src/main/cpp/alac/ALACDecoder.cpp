@@ -251,6 +251,15 @@ int32_t ALACDecoder::Decode( BitBuffer * bits, uint8_t * sampleBuffer, uint32_t 
 				{
 					numSamples  = BitBufferRead( bits, 16 ) << 16;
 					numSamples |= BitBufferRead( bits, 16 );
+					// A truncated/corrupt packet (common right after a sender
+					// pause/resume) can declare a bogus sample count and make
+					// dyn_decomp overflow mPredictor/mMixBufferU. Never trust it
+					// beyond the configured frame length.
+					if ( numSamples == 0 || numSamples > mConfig.frameLength )
+					{
+						status = kALAC_ParamError;
+						goto Exit;
+					}
 				}
 
 				if ( escapeFlag == 0 )

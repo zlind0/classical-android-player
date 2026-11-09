@@ -112,12 +112,6 @@ class AirPlayAudioOutput(
         publishState()
     }
 
-    fun pause() {
-        player.pause()
-        AirPlayDiagnostics.log(AirPlayDiagnostics.Level.INFO, "Output", "paused by user")
-        publishState()
-    }
-
     fun resume() {
         timeline?.flushAndReprime()
         player.resume()

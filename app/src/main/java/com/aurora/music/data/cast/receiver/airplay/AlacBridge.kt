@@ -22,6 +22,8 @@ class AlacBridge(
 ) : AutoCloseable {
 
     private var handle: Long = 0L
+    /** decode() and close() must not overlap: the native decoder is freed on close. */
+    private val nativeLock = Any()
 
     /** Samples per channel that one ALAC frame can produce. */
     val maxSamplesPerFrame: Int = frameLength
@@ -47,20 +49,24 @@ class AlacBridge(
      * @return number of samples **per channel**, or 0 on failure.
      */
     fun decode(packet: ByteArray, packetLength: Int, out: ShortArray): Int {
-        val h = handle
-        if (h == 0L) return 0
-        // The ALAC decoder's numSamples argument is the frame length, not the
-        // output buffer capacity. Passing the whole scratch buffer made it read
-        // past the 352-sample frame and emit silence.
-        val maxSamples = maxSamplesPerFrame.coerceAtMost(out.size / channels.coerceAtLeast(1))
-        return runCatching { nativeDecode(h, packet, packetLength, out, maxSamples) }
-            .getOrDefault(0)
+        synchronized(nativeLock) {
+            val h = handle
+            if (h == 0L) return 0
+            // The ALAC decoder's numSamples argument is the frame length, not the
+            // output buffer capacity. Passing the whole scratch buffer made it read
+            // past the 352-sample frame and emit silence.
+            val maxSamples = maxSamplesPerFrame.coerceAtMost(out.size / channels.coerceAtLeast(1))
+            return runCatching { nativeDecode(h, packet, packetLength, out, maxSamples) }
+                .getOrDefault(0)
+        }
     }
 
     override fun close() {
-        val h = handle
-        handle = 0L
-        if (h != 0L) runCatching { nativeDestroy(h) }
+        synchronized(nativeLock) {
+            val h = handle
+            handle = 0L
+            if (h != 0L) runCatching { nativeDestroy(h) }
+        }
     }
 
     private external fun nativeCreate(

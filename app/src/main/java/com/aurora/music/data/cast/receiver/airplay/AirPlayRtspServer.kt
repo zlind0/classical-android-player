@@ -33,6 +33,7 @@ class AirPlayRtspServer(
         fun onAudioStream(format: AirPlayAudioFormat, data: DatagramSocket, control: DatagramSocket)
         fun onMirrorStream(streamConnectionId: Long, aesKey: ByteArray, aesIv: ByteArray): Int
         fun onRecord()
+        fun onPause()
         fun onFlush()
         fun onTeardown()
         fun onMetadata(nowPlaying: AirPlayNowPlaying)
@@ -253,10 +254,10 @@ class AirPlayRtspServer(
                 request.method == "SETUP" -> handleSetup(request, output)
                 request.method == "RECORD" -> {
                     val session = sessionLocked(create = false)
-                    if (session != null && !session.started) {
-                        session.started = true
-                        listener.onRecord()
-                    }
+                    if (session != null) session.started = true
+                    // RECORD is also sent when the sender resumes after a pause,
+                    // so always report playback instead of only the first time.
+                    listener.onRecord()
                     // 上报的 Audio-Latency 与设置页的固定缓冲保持一致，发送端
                     // 按同样的提前量安排音频，镜像时音画才有机会对齐。
                     val latencyFrames = (session?.audioFormat?.sampleRate ?: 44100) *
@@ -271,6 +272,10 @@ class AirPlayRtspServer(
                 }
                 request.method == "SET_PARAMETER" -> handleSetParameter(request, output)
                 request.method == "GET_PARAMETER" -> respondGetParameter(request, output)
+                request.method == "PAUSE" -> {
+                    listener.onPause()
+                    respondEmpty(request, output)
+                }
                 request.method == "FLUSH" -> {
                     listener.onFlush()
                     session?.let { flushAudio(it) }

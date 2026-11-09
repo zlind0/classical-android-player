@@ -455,6 +455,13 @@ class AirPlayAudioReceiver(
                 ) {
                     return
                 }
+                // A malformed/truncated packet (e.g. a partial marker after a
+                // pause/resume) makes Apple's decoder read past the bitstream and
+                // crash the process; drop anything too short to be a real frame.
+                if (decrypted.size < 8) {
+                    AirPlayDiagnostics.recordDecodeError()
+                    return
+                }
                 val bridge = alac ?: return
                 val frames = bridge.decode(decrypted, decrypted.size, pcmScratch)
                 lastFrameCount = frames
