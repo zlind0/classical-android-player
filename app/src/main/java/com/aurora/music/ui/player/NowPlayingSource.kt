@@ -42,6 +42,8 @@ fun CastReceiverState.Playing.toPlayerUiState(): PlayerUiState {
         album = media.album,
         artworkUrl = media.artworkUri,
         durationSec = (durationMs / 1000L).toInt().coerceAtLeast(0),
+        // 发送端没带封面时才用 AirPlay 占位图；有封面仍然优先显示真图
+        airplayPlaceholder = media.artworkUri.isBlank(),
     )
     return PlayerUiState(
         current = song,

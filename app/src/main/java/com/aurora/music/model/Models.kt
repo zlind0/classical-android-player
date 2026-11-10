@@ -33,6 +33,8 @@ data class Song(
     val codecMime: String = "",
     // false = 文件已不在磁盘上：各列表沉底灰色不可点，播放队列自动过滤
     val available: Boolean = true,
+    // AirPlay 接收且发送端没给封面：展示 AirPlay 专用占位图而不是通用默认封面
+    val airplayPlaceholder: Boolean = false,
 )
 
 data class Album(

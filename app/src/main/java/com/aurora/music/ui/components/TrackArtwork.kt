@@ -85,7 +85,11 @@ fun TrackArtwork(
                 onError = { bottomUrl = "" },
             )
         } else {
-            DefaultCover(contentScale = contentScale, corner = artCorner)
+            DefaultCover(
+                contentScale = contentScale,
+                corner = artCorner,
+                drawableRes = if (song.airplayPlaceholder) R.drawable.airplay_cover else R.drawable.default_cover,
+            )
         }
         // 上层只加载本首的目标；切歌瞬间旧目标即下线，绝不把旧歌盖到新歌上
         val (topId, topTarget) = top
@@ -104,9 +108,13 @@ fun TrackArtwork(
 }
 
 @Composable
-private fun DefaultCover(contentScale: ContentScale, corner: Dp) {
+private fun DefaultCover(
+    contentScale: ContentScale,
+    corner: Dp,
+    drawableRes: Int = R.drawable.default_cover,
+) {
     Image(
-        painter = painterResource(R.drawable.default_cover),
+        painter = painterResource(drawableRes),
         contentDescription = null,
         contentScale = contentScale,
         modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(corner)),
