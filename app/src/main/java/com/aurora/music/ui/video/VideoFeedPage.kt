@@ -12,6 +12,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aurora.music.AuroraApplication
 import kotlinx.coroutines.delay
 import org.videolan.libvlc.MediaPlayer
@@ -57,6 +60,18 @@ internal fun VideoFeedPage(
     var randomApplied by remember(url) { mutableStateOf(false) }
     var started by remember(url) { mutableStateOf(false) }
     var positioned by remember(url) { mutableStateOf(false) }
+    var videoLayout by remember(url) { mutableStateOf<VLCVideoLayout?>(null) }
+
+    /**
+     * 画面被系统回收（切后台、离屏页的 SurfaceView 被销毁）后，libVLC 会把 views 整个 detach，
+     * 回到前台/重新可见时不会自动挂回去，表现就是黑屏或只剩声音。这里在需要时补一次 attach。
+     */
+    fun ensureViewsAttached() {
+        val layout = videoLayout ?: return
+        if (player.isReleased) return
+        if (player.vlcVout.areViewsAttached()) return
+        runCatching { player.attachViews(layout, null, true, false) }
+    }
 
     fun applyRandomStartIfNeeded() {
         if (!randomNow || randomApplied) return
@@ -74,6 +89,11 @@ internal fun VideoFeedPage(
                     if (!positioned) {
                         positioned = true
                         aspectNow(engine.videoAspect(player))
+                    }
+                    // 音量在音频输出真正建立后再落一次，避免预加载静音后恢复时偶发没声音。
+                    when {
+                        currentNow -> player.volume = 100
+                        preloadNow -> player.volume = 0
                     }
                     applyRandomStartIfNeeded()
                     progressNow(player.time, player.length, true)
@@ -111,23 +131,25 @@ internal fun VideoFeedPage(
         when {
             isCurrent -> {
                 onPlayerChanged(player)
+                ensureViewsAttached()
                 if (!started) {
                     started = true
                     engine.play(player, url, muted = false)
                 } else {
-                    player.volume = 100
                     if (!player.isPlaying) player.play()
+                    player.volume = 100
                 }
                 // 预加载过来的页在成为当前页时长度早已就绪，直接补一次随机起点
                 applyRandomStartIfNeeded()
             }
             isPreload -> {
+                ensureViewsAttached()
                 if (!started) {
                     started = true
                     engine.play(player, url, muted = true)
                 } else {
-                    player.volume = 0
                     if (!player.isPlaying) player.play()
+                    player.volume = 0
                 }
                 // 预加载 15 秒；被滑到当前页时这个 effect 会被取消，继续正常播放。
                 delay(15_000L)
@@ -137,6 +159,16 @@ internal fun VideoFeedPage(
                 if (started && player.isPlaying) runCatching { player.pause() }
             }
         }
+    }
+
+    // 切后台再回来：SurfaceView 的 surface 被销毁后 libVLC 不会自己重新挂载，这里补挂。
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, player) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) ensureViewsAttached()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // 双击缩放：普通比例 ↔ 保持纵横比的居中放大裁切。
@@ -156,12 +188,16 @@ internal fun VideoFeedPage(
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
             VLCVideoLayout(ctx).also { layout ->
+                videoLayout = layout
                 layout.post {
                     if (!player.isReleased) {
                         runCatching { player.attachViews(layout, null, true, false) }
                     }
                 }
             }
+        },
+        onRelease = { layout ->
+            if (videoLayout === layout) videoLayout = null
         },
     )
 }
