@@ -229,7 +229,7 @@ private val tabIcons: Map<String, ImageVector> = mapOf(
 
 /** Icon painted with a vertical gradient (iOS5 tab glyphs). */
 @Composable
-private fun Ios5GradientIcon(
+fun Ios5GradientIcon(
     icon: ImageVector,
     contentDescription: String?,
     top: Color,

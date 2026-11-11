@@ -139,12 +139,13 @@ internal fun VideoFeedPage(
         }
     }
 
-    // 双击缩放：普通比例 ↔ 居中裁切铺满。
+    // 双击缩放：普通比例 ↔ 保持纵横比的居中放大裁切。
+    // 注意不能用 SURFACE_FILL：那个是不管原始比例的拉伸铺满，会把画面拉变形。
     LaunchedEffect(fill) {
         if (!player.isReleased) {
             runCatching {
                 player.setVideoScale(
-                    if (fill) MediaPlayer.ScaleType.SURFACE_FILL
+                    if (fill) MediaPlayer.ScaleType.SURFACE_FIT_SCREEN
                     else MediaPlayer.ScaleType.SURFACE_BEST_FIT,
                 )
             }
