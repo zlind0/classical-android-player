@@ -132,6 +132,13 @@ object Ios5Colors {
     val ProgressFillTop = Color(0xFFFCFCFC)
     val ProgressFillBottom = Color(0xFFAAAAAA)
 
+    // ---- arrow popover (dark translucent panel) ----
+    val PopoverTop = Color(0xFF3C3C3E)
+    val PopoverMid = Color(0xFF262628)
+    val PopoverBottom = Color(0xFF121214)
+    val PopoverDivider = Color(0x24FFFFFF)
+    val PopoverCheck = Color(0xFF3B9BFF)
+
     // ---- text ----
     val TextPrimary = Color(0xFF000000)
     val TextSecondary = Color(0xFF6D7278)
@@ -258,6 +265,12 @@ object Ios5Colors {
 
     val progressTrackBrush = Brush.verticalGradient(0f to ProgressTrackTop, 1f to ProgressTrackBottom)
     val progressFillBrush = Brush.verticalGradient(0f to ProgressFillTop, 1f to ProgressFillBottom)
+
+    val popoverBrush = Brush.verticalGradient(
+        0f to PopoverTop.copy(alpha = 0.94f),
+        0.10f to PopoverMid.copy(alpha = 0.94f),
+        1f to PopoverBottom.copy(alpha = 0.94f),
+    )
 }
 
 /** iOS5 corner radii and fixed control metrics, all in pt (dp). */

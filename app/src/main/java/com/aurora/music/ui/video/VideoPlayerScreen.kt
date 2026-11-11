@@ -43,8 +43,6 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -64,6 +62,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
@@ -72,6 +71,8 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -87,9 +88,12 @@ import com.aurora.music.AuroraApplication
 import com.aurora.music.data.video.VideoFeedState
 import com.aurora.music.data.video.applyVideoOrientation
 import com.aurora.music.ui.components.MarqueeText
+import com.aurora.music.ui.ios5.Ios5ArrowPopup
 import com.aurora.music.ui.ios5.Ios5ButtonTone
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5GradientIcon
+import com.aurora.music.ui.ios5.Ios5PopoverDivider
+import com.aurora.music.ui.ios5.Ios5PopoverItem
 import com.aurora.music.ui.ios5.Ios5Sans
 import com.aurora.music.ui.ios5.Ios5Slider
 import com.aurora.music.ui.ios5.Ios5SmallButton
@@ -121,7 +125,7 @@ fun VideoPlayerScreen(onClose: () -> Unit) {
     if (state.items.isEmpty()) return
 
     val activity = remember(context) { context.findActivity() }
-    val pagerState = rememberPagerState(initialPage = state.index.coerceAtLeast(0)) { state.items.size }
+    val pagerState = rememberPagerState(initialPage = state.index.coerceAtLeast(0)) { state.pageCount }
     val scope = rememberCoroutineScope()
 
     var controlsVisible by rememberSaveable { mutableStateOf(true) }
@@ -134,6 +138,7 @@ fun VideoPlayerScreen(onClose: () -> Unit) {
     var scrubbing by remember { mutableStateOf(false) }
     var scrubFraction by remember { mutableFloatStateOf(0f) }
     var trackMenu by remember { mutableStateOf(TrackMenu.None) }
+    var trackMenuAnchor by remember { mutableStateOf(Rect.Zero) }
     val sleepTimer by container.sleepTimer.timer.collectAsStateWithLifecycle()
     var sleepBubble by remember { mutableStateOf(false) }
     var videoSleepDeadline by remember { mutableLongStateOf(0L) }
@@ -214,7 +219,7 @@ fun VideoPlayerScreen(onClose: () -> Unit) {
                 beyondViewportPageCount = 1,
                 pageSpacing = 0.dp,
             ) { page ->
-                val item = state.items.getOrNull(page)
+                val item = state.itemAt(page)
                 if (item == null) {
                     Box(Modifier.fillMaxSize())
                 } else {
@@ -238,21 +243,11 @@ fun VideoPlayerScreen(onClose: () -> Unit) {
                         },
                         onEnded = {
                             if (page == pagerState.currentPage) {
-                                if (page < state.items.size - 1) {
+                                if (state.shuffled) {
+                                    // 随机模式在目录里无限循环：直接滑到下一页（同一个视频的不同随机片段）。
                                     container.videoFeed.next()
-                                } else if (state.shuffled) {
-                                    // 本批播完：补一批新的随机视频接着滑
-                                    scope.launch {
-                                        val more = container.remoteLibrary.fetchRandomVideos(
-                                            state.deviceId, state.rootKey, state.dir, 20,
-                                        )
-                                        if (more.isNullOrEmpty()) {
-                                            container.videoFeed.close()
-                                        } else {
-                                            container.videoFeed.append(more)
-                                            container.videoFeed.next()
-                                        }
-                                    }
+                                } else if (page < state.items.size - 1) {
+                                    container.videoFeed.next()
                                 } else {
                                     container.videoFeed.close()
                                 }
@@ -355,8 +350,14 @@ fun VideoPlayerScreen(onClose: () -> Unit) {
                             hasPlayer = currentPlayer != null,
                             onLoop = { container.videoFeed.setLoop(!loop) },
                             onShuffle = { container.videoFeed.setShuffle(!shuffle) },
-                            onSubtitle = { trackMenu = TrackMenu.Subtitle },
-                            onAudio = { trackMenu = TrackMenu.Audio },
+                            onSubtitle = { anchor ->
+                                trackMenuAnchor = anchor
+                                trackMenu = TrackMenu.Subtitle
+                            },
+                            onAudio = { anchor ->
+                                trackMenuAnchor = anchor
+                                trackMenu = TrackMenu.Audio
+                            },
                             onMoon = { sleepBubble = true },
                         )
                     }
@@ -388,8 +389,14 @@ fun VideoPlayerScreen(onClose: () -> Unit) {
                         hasPlayer = currentPlayer != null,
                         onLoop = { container.videoFeed.setLoop(!loop) },
                         onShuffle = { container.videoFeed.setShuffle(!shuffle) },
-                        onSubtitle = { trackMenu = TrackMenu.Subtitle },
-                        onAudio = { trackMenu = TrackMenu.Audio },
+                        onSubtitle = { anchor ->
+                            trackMenuAnchor = anchor
+                            trackMenu = TrackMenu.Subtitle
+                        },
+                        onAudio = { anchor ->
+                            trackMenuAnchor = anchor
+                            trackMenu = TrackMenu.Audio
+                        },
                         onMoon = { sleepBubble = true },
                         modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
                         evenly = true,
@@ -430,7 +437,7 @@ fun VideoPlayerScreen(onClose: () -> Unit) {
                     }
                 }
                 Box(Modifier.size(40.dp).clip(CircleShape).clickable {
-                    if (pagerState.currentPage < state.items.size - 1) {
+                    if (pagerState.currentPage < state.pageCount - 1) {
                         scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
                     }
                 }, contentAlignment = Alignment.Center) {
@@ -443,6 +450,7 @@ fun VideoPlayerScreen(onClose: () -> Unit) {
         TrackMenuDropdown(
             menu = trackMenu,
             player = currentPlayer,
+            anchor = trackMenuAnchor,
             onDismiss = { trackMenu = TrackMenu.None },
         )
 
@@ -554,12 +562,14 @@ private fun VideoTrackToggles(
     hasPlayer: Boolean,
     onLoop: () -> Unit,
     onShuffle: () -> Unit,
-    onSubtitle: () -> Unit,
-    onAudio: () -> Unit,
+    onSubtitle: (Rect) -> Unit,
+    onAudio: (Rect) -> Unit,
     onMoon: () -> Unit,
     modifier: Modifier = Modifier,
     evenly: Boolean = false,
 ) {
+    var subtitleBounds by remember { mutableStateOf(Rect.Zero) }
+    var audioBounds by remember { mutableStateOf(Rect.Zero) }
     Row(
         modifier.padding(horizontal = if (evenly) 0.dp else 8.dp, vertical = 2.dp),
         horizontalArrangement = if (evenly) {
@@ -569,8 +579,16 @@ private fun VideoTrackToggles(
         },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        VideoToggle(Icons.Filled.Subtitles, "字幕", subtitleActive, hasPlayer, onSubtitle)
-        VideoToggle(Icons.Filled.Audiotrack, "音轨", audioActive, hasPlayer, onAudio)
+        VideoToggle(
+            Icons.Filled.Subtitles, "字幕", subtitleActive, hasPlayer,
+            onClick = { onSubtitle(subtitleBounds) },
+            onBounds = { subtitleBounds = it },
+        )
+        VideoToggle(
+            Icons.Filled.Audiotrack, "音轨", audioActive, hasPlayer,
+            onClick = { onAudio(audioBounds) },
+            onBounds = { audioBounds = it },
+        )
         VideoToggle(Icons.Filled.Repeat, "循环", loop, true, onLoop)
         VideoToggle(Icons.Filled.Shuffle, "随机", shuffle, true, onShuffle)
         VideoToggle(Icons.Filled.Bedtime, "睡眠定时", moonActive, true, onMoon)
@@ -585,9 +603,11 @@ private fun VideoToggle(
     active: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
+    onBounds: (Rect) -> Unit = {},
 ) {
     Box(
         Modifier.size(38.dp)
+            .onGloballyPositioned { onBounds(it.boundsInWindow()) }
             .clip(RoundedCornerShape(7.dp))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
@@ -661,6 +681,7 @@ private fun Ios5FullscreenGlyph(
 private fun TrackMenuDropdown(
     menu: TrackMenu,
     player: MediaPlayer?,
+    anchor: Rect,
     onDismiss: () -> Unit,
 ) {
     val tracks = remember(menu, player) {
@@ -670,13 +691,22 @@ private fun TrackMenuDropdown(
             TrackMenu.Audio -> player?.audioTracks?.toList().orEmpty()
         }
     }
-    DropdownMenu(
-        expanded = menu != TrackMenu.None && tracks.isNotEmpty(),
-        onDismissRequest = onDismiss,
+    if (menu == TrackMenu.None || tracks.isEmpty()) return
+    val selectedId = when (menu) {
+        TrackMenu.Subtitle -> player?.spuTrack ?: -1
+        TrackMenu.Audio -> player?.audioTrack ?: -1
+        TrackMenu.None -> -1
+    }
+    Ios5ArrowPopup(
+        anchor = anchor,
+        onDismiss = onDismiss,
+        title = if (menu == TrackMenu.Subtitle) "字幕" else "音轨",
     ) {
-        tracks.forEach { track ->
-            DropdownMenuItem(
-                text = { Text(track.name ?: track.id.toString()) },
+        tracks.forEachIndexed { index, track ->
+            if (index > 0) Ios5PopoverDivider()
+            Ios5PopoverItem(
+                text = track.name ?: track.id.toString(),
+                selected = track.id == selectedId,
                 onClick = {
                     when (menu) {
                         TrackMenu.Subtitle -> player?.setSpuTrack(track.id)

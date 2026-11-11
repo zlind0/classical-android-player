@@ -18,7 +18,21 @@ data class VideoFeedState(
     /** 由“随机播放”按钮打开：条目顺序已由服务端打乱。 */
     val shuffled: Boolean = false,
 ) {
-    val current: RemoteVideoWire? get() = items.getOrNull(index)
+    /**
+     * Pager 的页数。随机模式在目录里无限循环：页数不设上限，条目按批次取模，
+     * 所以哪怕目录里只有一个视频，也能一直往下滑，每一页都是同一个视频的不同随机片段。
+     */
+    val pageCount: Int get() = if (shuffled) Int.MAX_VALUE else items.size
+
+    /** 第 [page] 页对应的视频；随机模式下按批次循环取模。 */
+    fun itemAt(page: Int): RemoteVideoWire? {
+        if (items.isEmpty()) return null
+        if (!shuffled) return items.getOrNull(page)
+        val size = items.size
+        return items[((page % size) + size) % size]
+    }
+
+    val current: RemoteVideoWire? get() = itemAt(index)
 }
 
 /**
@@ -110,13 +124,22 @@ class VideoFeedController(
 
     fun setIndex(index: Int) {
         val current = _state.value ?: return
-        val safe = index.coerceIn(0, (current.items.size - 1).coerceAtLeast(0))
+        val safe = if (current.shuffled) {
+            index.coerceAtLeast(0)
+        } else {
+            index.coerceIn(0, (current.items.size - 1).coerceAtLeast(0))
+        }
         if (safe == current.index) return
         _state.value = current.copy(index = safe)
     }
 
     fun next(): Boolean {
         val current = _state.value ?: return false
+        if (current.shuffled) {
+            // 随机模式无限循环：一直往后走，条目按批次取模。
+            _state.value = current.copy(index = current.index + 1)
+            return true
+        }
         if (current.index < current.items.size - 1) {
             _state.value = current.copy(index = current.index + 1)
             return true

@@ -31,7 +31,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -271,6 +270,7 @@ private fun DirRow(
             if (folder.subdirCount > 0) append(" · ${folder.subdirCount} 个子目录")
         },
         onClick = onOpen,
+        showChevron = false,
         leading = {
             Icon(
                 Icons.Filled.Folder,
@@ -281,16 +281,13 @@ private fun DirRow(
         },
         trailing = {
             Box(
-                Modifier.size(32.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color.Black.copy(alpha = 0.05f))
-                    .clickable(onClick = onShuffle),
+                Modifier.size(32.dp).clickable(onClick = onShuffle),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     Icons.Filled.Shuffle,
                     "随机播放这个文件夹",
-                    tint = Ios5Colors.TextSecondary,
+                    tint = Ios5Colors.IosBlue,
                     modifier = Modifier.size(18.dp),
                 )
             }
@@ -302,7 +299,6 @@ private fun DirRow(
 private fun VideoFileCell(video: RemoteVideoWire, onClick: () -> Unit) {
     Ios5Cell(
         title = video.displayTitle,
-        subtitle = video.name,
         count = formatVideoSize(video.size),
         leading = {
             Icon(
