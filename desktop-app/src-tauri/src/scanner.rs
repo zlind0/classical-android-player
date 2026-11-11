@@ -26,9 +26,11 @@ struct ArtBlob {
     data: Vec<u8>,
 }
 
-fn file_mtime(path: &Path) -> i64 {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
+/// Seconds since the epoch for an already-fetched metadata. Taking the
+/// `Metadata` instead of the path keeps the walk to one `stat` per file: the
+/// size and the mtime come from the same syscall.
+fn meta_mtime(meta: &std::fs::Metadata) -> i64 {
+    meta.modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64)
@@ -73,7 +75,7 @@ fn collect_files<F: Fn(&str) -> bool>(root: &Path, want: F) -> Vec<FileEntry> {
                 .unwrap_or_default(),
             rel_path,
             size: meta.len() as i64,
-            mtime: file_mtime(path),
+            mtime: meta_mtime(&meta),
             ext,
         });
     }
@@ -897,7 +899,13 @@ struct VideoItem {
 }
 
 enum VideoEntry {
-    Unchanged(String),
+    /// Already indexed with the same size and mtime. The relative path comes
+    /// from the walk, so the directory aggregates do not need a second read of
+    /// the `videos` table.
+    Unchanged {
+        path: String,
+        rel_path: String,
+    },
     Video(VideoItem),
 }
 
@@ -913,7 +921,7 @@ fn collect_videos<F: Fn(ScanProgress)>(
     let total = files.len() as i64;
     let mut out = Vec::with_capacity(files.len());
 
-    for (index, file) in files.iter().enumerate() {
+    for (index, file) in files.into_iter().enumerate() {
         if index % 50 == 0 {
             progress(ScanProgress {
                 root_id: root.id,
@@ -925,7 +933,10 @@ fn collect_videos<F: Fn(ScanProgress)>(
         }
         if let Some((size, mtime)) = existing.get(&file.path) {
             if *size == file.size && *mtime == file.mtime {
-                out.push(VideoEntry::Unchanged(file.path.clone()));
+                out.push(VideoEntry::Unchanged {
+                    path: file.path,
+                    rel_path: file.rel_path,
+                });
                 continue;
             }
         }
@@ -934,13 +945,13 @@ fn collect_videos<F: Fn(ScanProgress)>(
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| file.file_name.clone());
         out.push(VideoEntry::Video(VideoItem {
-            path: file.path.clone(),
-            rel_path: file.rel_path.clone(),
-            file_name: file.file_name.clone(),
+            path: file.path,
+            rel_path: file.rel_path,
+            file_name: file.file_name,
             title: stem,
             size: file.size,
             mtime: file.mtime,
-            ext: file.ext.clone(),
+            ext: file.ext,
         }));
     }
     progress(ScanProgress {
@@ -984,25 +995,11 @@ fn record_video_dirs(rel_path: &str, dirs: &mut HashMap<String, DirAgg>) {
     }
 }
 
-fn video_rel_paths(db: &Db, root_id: i64) -> Result<HashMap<String, String>> {
-    // Relative paths of already indexed rows, so unchanged files still feed the
-    // directory aggregates without trusting `strip_prefix` on a moved root.
-    let conn = db.lock();
-    let mut stmt = conn.prepare("SELECT path, rel_path FROM videos WHERE root_id = ?1")?;
-    let mut rows = stmt.query(params![root_id])?;
-    let mut out = HashMap::new();
-    while let Some(row) = rows.next()? {
-        out.insert(row.get::<_, String>(0)?, row.get::<_, String>(1)?);
-    }
-    Ok(out)
-}
-
 fn write_videos_batch(
     tx: &Connection,
     root: &RootInfo,
     token: i64,
     existing: &HashMap<String, (i64, i64)>,
-    rel_by_path: &HashMap<String, String>,
     items: &[VideoEntry],
     dirs: &mut HashMap<String, DirAgg>,
     summary: &mut ScanSummary,
@@ -1023,16 +1020,14 @@ fn write_videos_batch(
     )?;
 
     let mut count = 0i64;
+    // Cached so a rescan of a big library does not re-prepare the same
+    // statement once per unchanged file.
+    let mut touch = tx.prepare_cached("UPDATE videos SET scan_token = ?1 WHERE path = ?2")?;
     for item in items {
         match item {
-            VideoEntry::Unchanged(path) => {
-                tx.execute(
-                    "UPDATE videos SET scan_token = ?1 WHERE path = ?2",
-                    params![token, path],
-                )?;
-                if let Some(rel) = rel_by_path.get(path) {
-                    record_video_dirs(rel, dirs);
-                }
+            VideoEntry::Unchanged { path, rel_path } => {
+                touch.execute(params![token, path])?;
+                record_video_dirs(rel_path, dirs);
                 count += 1;
             }
             VideoEntry::Video(video) => {
@@ -1061,9 +1056,12 @@ fn write_videos_batch(
     Ok(count)
 }
 
-/// Drops videos this scan did not see and rebuilds this root's directory tree
-/// from the videos that survived. Doing it per scan keeps `video_dirs` exact
-/// and avoids recursive counting on every browse request.
+/// Drops videos this scan did not see and syncs this root's directory tree.
+///
+/// The tree is diffed against what is already stored instead of being deleted
+/// and re-inserted: a rescan that changes nothing writes no `video_dirs` rows
+/// at all, and a scan that adds one clip only touches the directories on that
+/// clip's path.
 fn finish_videos(
     tx: &Connection,
     root: &RootInfo,
@@ -1084,25 +1082,74 @@ fn finish_videos(
         }
     }
 
-    tx.execute(
-        "DELETE FROM video_dirs WHERE root_id = ?1",
-        params![root.id],
-    )?;
-    let mut insert = tx.prepare_cached(
+    // Stored rows, so unchanged directories can be skipped.
+    let stored: HashMap<String, (String, String, i64, i64, i64)> = {
+        let mut stmt = tx.prepare(
+            "SELECT rel_path, parent_path, name, video_count, subdir_count, deep_count
+             FROM video_dirs WHERE root_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![root.id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                (
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                ),
+            ))
+        })?;
+        let mut map = HashMap::new();
+        for row in rows {
+            let (rel, values) = row?;
+            map.insert(rel, values);
+        }
+        map
+    };
+
+    let mut upsert = tx.prepare_cached(
         "INSERT INTO video_dirs(root_id, rel_path, parent_path, name, video_count, subdir_count, deep_count, scan_token)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(root_id, rel_path) DO UPDATE SET
+            parent_path = excluded.parent_path,
+            name = excluded.name,
+            video_count = excluded.video_count,
+            subdir_count = excluded.subdir_count,
+            deep_count = excluded.deep_count,
+            scan_token = excluded.scan_token",
     )?;
+    let mut delete =
+        tx.prepare_cached("DELETE FROM video_dirs WHERE root_id = ?1 AND rel_path = ?2")?;
+
     for (rel, agg) in dirs {
-        insert.execute(params![
+        let parent = rel_dir(rel);
+        let subdir_count = subdirs.get(rel).copied().unwrap_or(0);
+        let unchanged = stored.get(rel).is_some_and(|(p, n, vc, sc, dc)| {
+            *p == parent
+                && *n == agg.name
+                && *vc == agg.video_count
+                && *sc == subdir_count
+                && *dc == agg.deep_count
+        });
+        if unchanged {
+            continue;
+        }
+        upsert.execute(params![
             root.id,
             rel,
-            rel_dir(rel),
+            parent,
             agg.name,
             agg.video_count,
-            subdirs.get(rel).copied().unwrap_or(0),
+            subdir_count,
             agg.deep_count,
             token,
         ])?;
+    }
+    for rel in stored.keys() {
+        if !dirs.contains_key(rel) {
+            delete.execute(params![root.id, rel])?;
+        }
     }
     Ok(())
 }
@@ -1252,7 +1299,6 @@ where
                 count
             }
             Collected::Videos(items) => {
-                let rel_by_path = video_rel_paths(db, root.id)?;
                 let mut dirs: HashMap<String, DirAgg> = HashMap::new();
                 let count = write_batched(db, items, |tx, batch| {
                     write_videos_batch(
@@ -1260,7 +1306,6 @@ where
                         &root,
                         token,
                         video_existing,
-                        &rel_by_path,
                         batch,
                         &mut dirs,
                         &mut summary,
@@ -1346,6 +1391,22 @@ mod tests {
             std::fs::create_dir_all(parent).unwrap();
         }
         std::fs::write(path, bytes).unwrap();
+    }
+
+    /// `rel_path -> scan_token` for one root's directory rows. The token only
+    /// moves when the scan actually rewrites a row, so it doubles as a cheap
+    /// "was this directory touched?" probe.
+    fn video_dir_tokens(db: &Db, root_id: i64) -> HashMap<String, i64> {
+        let conn = db.lock();
+        let mut stmt = conn
+            .prepare("SELECT rel_path, scan_token FROM video_dirs WHERE root_id = ?1")
+            .unwrap();
+        let rows = stmt
+            .query_map(rusqlite::params![root_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .unwrap();
+        rows.map(|row| row.unwrap()).collect()
     }
 
     #[test]
@@ -1493,6 +1554,14 @@ mod tests {
         };
         assert_eq!(rebuilt.dirs[0].deep_count, 2);
 
+        // The tree is diffed, not rebuilt: a no-op rescan must not rewrite a
+        // single `video_dirs` row. The sleep makes the scan token differ, so
+        // the assertion below is meaningful.
+        let tokens_before = video_dir_tokens(&db, root.id);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let _ = scan_root(&db, root.id, |_| {}).unwrap();
+        assert_eq!(video_dir_tokens(&db, root.id), tokens_before);
+
         // Adding a file does move the version.
         write_file(&root_dir.join("clip2.mp4"), b"x");
         let third = scan_root(&db, root.id, |_| {}).unwrap();
@@ -1502,6 +1571,20 @@ mod tests {
             db::library_version(&conn).unwrap()
         };
         assert!(version_changed > version_after);
+
+        // A clip in a brand new folder only touches that folder; the untouched
+        // branches keep their old rows.
+        write_file(&root_dir.join("Season 2").join("ep01.mkv"), b"x");
+        let fourth = scan_root(&db, root.id, |_| {}).unwrap();
+        assert_eq!(fourth.added, 1);
+        let tokens_after = video_dir_tokens(&db, root.id);
+        assert!(tokens_after.contains_key("Season 2"));
+        assert_ne!(tokens_after.get("Season 2"), tokens_before.get("Season 2"));
+        assert_eq!(tokens_after.get("Season 1"), tokens_before.get("Season 1"));
+        assert_eq!(
+            tokens_after.get("Season 1/Extras"),
+            tokens_before.get("Season 1/Extras")
+        );
 
         // The same folder may be shared as a music root at the same time.
         let music = {
