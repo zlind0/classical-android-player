@@ -275,35 +275,101 @@ fn remember_art(
     entry.is_some()
 }
 
-fn write_music(
+// ------------------------------------------------------------ write batching
+
+/// Rows per write transaction.
+///
+/// All database access goes through one `Mutex<Connection>`, so a scan that
+/// writes a whole directory in a single transaction blocks every other command
+/// (adding a root, `/library/*`, relay index pushes) for as long as it takes to
+/// insert the whole tree. Committing in batches releases the lock in between,
+/// which keeps the desktop UI and connected clients responsive while a big
+/// directory is being indexed.
+///
+/// The trade-off is atomicity: an interrupted scan leaves a mix of old and new
+/// rows behind, and the `scan_token` cleanup never runs. That is harmless — the
+/// next scan of the root fixes both.
+const WRITE_CHUNK: usize = 2000;
+
+/// Album/book covers are blobs, so they get smaller batches than plain rows.
+const ART_CHUNK: usize = 16;
+
+/// Runs `write_chunk` over `items` in [`WRITE_CHUNK`] batches, taking the
+/// database lock only for one batch at a time.
+fn write_batched<T, F>(db: &Db, items: Vec<T>, mut write_chunk: F) -> Result<i64>
+where
+    F: FnMut(&Connection, &[T]) -> Result<i64>,
+{
+    let mut iter = items.into_iter();
+    let mut total = 0i64;
+    loop {
+        let batch: Vec<T> = iter.by_ref().take(WRITE_CHUNK).collect();
+        if batch.is_empty() {
+            break;
+        }
+        total += with_write_tx(db, |tx| write_chunk(tx, &batch))?;
+    }
+    Ok(total)
+}
+
+/// Opens one transaction, runs `f` inside it and commits. Used for the small
+/// bookkeeping steps that must stay in a single transaction (stale-row cleanup,
+/// directory-tree rebuild, scan state).
+fn with_write_tx<T, F>(db: &Db, f: F) -> Result<T>
+where
+    F: FnOnce(&Connection) -> Result<T>,
+{
+    let mut conn = db.lock();
+    let tx = conn.transaction().context("开启扫描事务失败")?;
+    let value = f(&tx)?;
+    tx.commit()?;
+    Ok(value)
+}
+
+fn write_music_art(
+    db: &Db,
+    root: &RootInfo,
+    dir_arts: HashMap<PathBuf, Option<ArtBlob>>,
+) -> Result<()> {
+    // Album covers first so track rows can point at stable keys.
+    let mut pending: Vec<(String, ArtBlob)> = dir_arts
+        .into_iter()
+        .filter_map(|(dir, blob)| {
+            blob.map(|blob| (format!("album:{}:{}", root.id, path_key(&dir)), blob))
+        })
+        .collect();
+    while !pending.is_empty() {
+        let batch: Vec<(String, ArtBlob)> = pending.drain(..pending.len().min(ART_CHUNK)).collect();
+        with_write_tx(db, |tx| {
+            for (key, blob) in batch {
+                // Only replace when the bytes changed, to keep rescans cheap.
+                let same: Option<i64> = tx
+                    .query_row("SELECT size FROM art WHERE key = ?1", params![key], |row| {
+                        row.get(0)
+                    })
+                    .ok();
+                if same == Some(blob.data.len() as i64) {
+                    continue;
+                }
+                tx.execute(
+                    "INSERT OR REPLACE INTO art(key, mime, data, size) VALUES (?1, ?2, ?3, ?4)",
+                    params![key, blob.mime, blob.data, blob.data.len() as i64],
+                )?;
+            }
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+fn write_music_batch(
     tx: &Connection,
     root: &RootInfo,
     token: i64,
     existing: &HashMap<String, (i64, i64)>,
-    items: Vec<MusicItem>,
-    dir_arts: &HashMap<PathBuf, Option<ArtBlob>>,
+    items: &[MusicItem],
     summary: &mut ScanSummary,
 ) -> Result<i64> {
-    // Album covers first so track rows can point at stable keys.
-    for (dir, blob) in dir_arts {
-        if let Some(blob) = blob {
-            let key = format!("album:{}:{}", root.id, path_key(dir));
-            // Only replace when the bytes changed, to keep rescans cheap.
-            let same: Option<i64> = tx
-                .query_row("SELECT size FROM art WHERE key = ?1", params![key], |row| {
-                    row.get(0)
-                })
-                .ok();
-            if same == Some(blob.data.len() as i64) {
-                continue;
-            }
-            tx.execute(
-                "INSERT OR REPLACE INTO art(key, mime, data, size) VALUES (?1, ?2, ?3, ?4)",
-                params![key, blob.mime, blob.data, blob.data.len() as i64],
-            )?;
-        }
-    }
-
     let mut count = 0i64;
     let mut statement = tx.prepare_cached(
         "INSERT INTO tracks(
@@ -375,8 +441,17 @@ fn write_music(
         }
         count += 1;
     }
-    drop(statement);
+    Ok(count)
+}
 
+/// Drops tracks this scan did not see and the album art that no longer belongs
+/// to any of them.
+fn finish_music(
+    tx: &Connection,
+    root: &RootInfo,
+    token: i64,
+    summary: &mut ScanSummary,
+) -> Result<()> {
     summary.removed += tx.execute(
         "DELETE FROM tracks WHERE root_id = ?1 AND scan_token <> ?2",
         params![root.id, token],
@@ -387,7 +462,7 @@ fn write_music(
          AND key NOT IN (SELECT art_key FROM tracks WHERE root_id = ?2 AND art_key IS NOT NULL)",
         params![format!("album:{}:%", root.id), root.id],
     )?;
-    Ok(count)
+    Ok(())
 }
 
 // --------------------------------------------------------------- audiobooks
@@ -520,11 +595,11 @@ fn collect_audiobooks<F: Fn(ScanProgress)>(
     (books, Vec::new())
 }
 
-fn write_audiobooks(
+fn write_audiobooks_batch(
     tx: &Connection,
     root: &RootInfo,
     token: i64,
-    books: Vec<PreparedBook>,
+    books: &[PreparedBook],
     summary: &mut ScanSummary,
 ) -> Result<i64> {
     let mut book_stmt = tx.prepare_cached(
@@ -582,7 +657,7 @@ fn write_audiobooks(
         } else {
             summary.added += 1;
         }
-        if let Some(art) = book.art {
+        if let Some(art) = &book.art {
             tx.execute(
                 "INSERT OR REPLACE INTO art(key, mime, data, size) VALUES (?1, ?2, ?3, ?4)",
                 params![
@@ -593,7 +668,7 @@ fn write_audiobooks(
                 ],
             )?;
         }
-        for chapter in book.chapters {
+        for chapter in &book.chapters {
             chapter_stmt.execute(params![
                 book.id,
                 chapter.path,
@@ -610,9 +685,16 @@ fn write_audiobooks(
             item_count += 1;
         }
     }
-    drop(book_stmt);
-    drop(chapter_stmt);
+    Ok(item_count)
+}
 
+/// Drops audiobooks this scan did not see, their chapters and their covers.
+fn finish_audiobooks(
+    tx: &Connection,
+    root: &RootInfo,
+    token: i64,
+    summary: &mut ScanSummary,
+) -> Result<()> {
     summary.removed += tx.execute(
         "DELETE FROM audiobooks WHERE root_id = ?1 AND scan_token <> ?2",
         params![root.id, token],
@@ -627,7 +709,7 @@ fn write_audiobooks(
          AND key NOT IN (SELECT 'audiobook:' || id FROM audiobooks WHERE root_id = ?2)",
         params![format!("audiobook:ab:{}:%", root.id), root.id],
     )?;
-    Ok(item_count)
+    Ok(())
 }
 
 // ------------------------------------------------------------------- books
@@ -709,12 +791,12 @@ fn collect_books<F: Fn(ScanProgress)>(
     out
 }
 
-fn write_books(
+fn write_books_batch(
     tx: &Connection,
     root: &RootInfo,
     token: i64,
     existing: &HashMap<String, (i64, i64)>,
-    items: Vec<BookItem>,
+    items: &[BookItem],
     summary: &mut ScanSummary,
 ) -> Result<i64> {
     let mut stmt = tx.prepare_cached(
@@ -745,7 +827,7 @@ fn write_books(
             }
             BookItem::Book(book) => {
                 let has_cover = book.cover.is_some();
-                if let Some(cover) = book.cover {
+                if let Some(cover) = &book.cover {
                     tx.execute(
                         "INSERT OR REPLACE INTO art(key, mime, data, size) VALUES (?1, ?2, ?3, ?4)",
                         params![
@@ -779,8 +861,17 @@ fn write_books(
         }
         count += 1;
     }
-    drop(stmt);
+    Ok(count)
+}
 
+/// Drops books this scan did not see and the covers that no longer belong to
+/// any book.
+fn finish_books(
+    tx: &Connection,
+    root: &RootInfo,
+    token: i64,
+    summary: &mut ScanSummary,
+) -> Result<()> {
     summary.removed += tx.execute(
         "DELETE FROM books WHERE root_id = ?1 AND scan_token <> ?2",
         params![root.id, token],
@@ -790,7 +881,7 @@ fn write_books(
          AND key NOT IN (SELECT 'book:' || path FROM books)",
         [],
     )?;
-    Ok(count)
+    Ok(())
 }
 
 // ------------------------------------------------------------------- videos
@@ -866,7 +957,6 @@ fn collect_videos<F: Fn(ScanProgress)>(
 struct DirAgg {
     name: String,
     video_count: i64,
-    subdir_count: i64,
     deep_count: i64,
 }
 
@@ -894,12 +984,27 @@ fn record_video_dirs(rel_path: &str, dirs: &mut HashMap<String, DirAgg>) {
     }
 }
 
-fn write_videos(
+fn video_rel_paths(db: &Db, root_id: i64) -> Result<HashMap<String, String>> {
+    // Relative paths of already indexed rows, so unchanged files still feed the
+    // directory aggregates without trusting `strip_prefix` on a moved root.
+    let conn = db.lock();
+    let mut stmt = conn.prepare("SELECT path, rel_path FROM videos WHERE root_id = ?1")?;
+    let mut rows = stmt.query(params![root_id])?;
+    let mut out = HashMap::new();
+    while let Some(row) = rows.next()? {
+        out.insert(row.get::<_, String>(0)?, row.get::<_, String>(1)?);
+    }
+    Ok(out)
+}
+
+fn write_videos_batch(
     tx: &Connection,
     root: &RootInfo,
     token: i64,
     existing: &HashMap<String, (i64, i64)>,
-    items: Vec<VideoEntry>,
+    rel_by_path: &HashMap<String, String>,
+    items: &[VideoEntry],
+    dirs: &mut HashMap<String, DirAgg>,
     summary: &mut ScanSummary,
 ) -> Result<i64> {
     let mut stmt = tx.prepare_cached(
@@ -917,20 +1022,7 @@ fn write_videos(
             scan_token = excluded.scan_token",
     )?;
 
-    let mut dirs: HashMap<String, DirAgg> = HashMap::new();
     let mut count = 0i64;
-
-    // Relative paths of already indexed rows, so unchanged files still feed the
-    // directory aggregates without trusting `strip_prefix` on a moved root.
-    let mut rel_by_path: HashMap<String, String> = HashMap::new();
-    {
-        let mut rel_stmt = tx.prepare("SELECT path, rel_path FROM videos WHERE root_id = ?1")?;
-        let mut rows = rel_stmt.query(params![root.id])?;
-        while let Some(row) = rows.next()? {
-            rel_by_path.insert(row.get::<_, String>(0)?, row.get::<_, String>(1)?);
-        }
-    }
-
     for item in items {
         match item {
             VideoEntry::Unchanged(path) => {
@@ -938,8 +1030,8 @@ fn write_videos(
                     "UPDATE videos SET scan_token = ?1 WHERE path = ?2",
                     params![token, path],
                 )?;
-                if let Some(rel) = rel_by_path.get(&path) {
-                    record_video_dirs(rel, &mut dirs);
+                if let Some(rel) = rel_by_path.get(path) {
+                    record_video_dirs(rel, dirs);
                 }
                 count += 1;
             }
@@ -961,28 +1053,34 @@ fn write_videos(
                 } else {
                     summary.added += 1;
                 }
-                record_video_dirs(&video.rel_path, &mut dirs);
+                record_video_dirs(&video.rel_path, dirs);
                 count += 1;
             }
         }
     }
-    drop(stmt);
+    Ok(count)
+}
 
+/// Drops videos this scan did not see and rebuilds this root's directory tree
+/// from the videos that survived. Doing it per scan keeps `video_dirs` exact
+/// and avoids recursive counting on every browse request.
+fn finish_videos(
+    tx: &Connection,
+    root: &RootInfo,
+    token: i64,
+    dirs: &HashMap<String, DirAgg>,
+    summary: &mut ScanSummary,
+) -> Result<()> {
     summary.removed += tx.execute(
         "DELETE FROM videos WHERE root_id = ?1 AND scan_token <> ?2",
         params![root.id, token],
     )? as i64;
 
-    // Rebuild this root's directory tree from the videos that survived. Doing
-    // it per scan keeps `video_dirs` exact and avoids recursive counting on
-    // every browse request.
-    let dir_keys: Vec<String> = dirs.keys().cloned().collect();
-    for rel in &dir_keys {
+    let mut subdirs: HashMap<String, i64> = HashMap::new();
+    for rel in dirs.keys() {
         let parent = rel_dir(rel);
         if !parent.is_empty() {
-            if let Some(agg) = dirs.get_mut(&parent) {
-                agg.subdir_count += 1;
-            }
+            *subdirs.entry(parent).or_insert(0) += 1;
         }
     }
 
@@ -994,21 +1092,19 @@ fn write_videos(
         "INSERT INTO video_dirs(root_id, rel_path, parent_path, name, video_count, subdir_count, deep_count, scan_token)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )?;
-    for (rel, agg) in &dirs {
+    for (rel, agg) in dirs {
         insert.execute(params![
             root.id,
             rel,
             rel_dir(rel),
             agg.name,
             agg.video_count,
-            agg.subdir_count,
+            subdirs.get(rel).copied().unwrap_or(0),
             agg.deep_count,
             token,
         ])?;
     }
-    drop(insert);
-
-    Ok(count)
+    Ok(())
 }
 
 // ------------------------------------------------------------------- driver
@@ -1127,34 +1223,66 @@ where
             other => return Err(anyhow!("未知的目录类型: {other}")),
         };
 
-        let mut conn = db.lock();
         let token = now_ms().max(1);
-        let tx = conn.transaction().context("开启扫描事务失败")?;
 
+        // Each batch below commits and drops the database lock before the next
+        // one, so adding a root or a `/library/*` request never has to wait for
+        // a whole big directory to be written.
         let item_count = match collected {
-            Collected::Music(items, dir_arts) => write_music(
-                &tx,
-                &root,
-                token,
-                music_existing,
-                items,
-                &dir_arts,
-                &mut summary,
-            )?,
+            Collected::Music(items, dir_arts) => {
+                write_music_art(db, &root, dir_arts)?;
+                let count = write_batched(db, items, |tx, batch| {
+                    write_music_batch(tx, &root, token, music_existing, batch, &mut summary)
+                })?;
+                with_write_tx(db, |tx| finish_music(tx, &root, token, &mut summary))?;
+                count
+            }
             Collected::Audiobooks(books) => {
-                write_audiobooks(&tx, &root, token, books, &mut summary)?
+                let count = write_batched(db, books, |tx, batch| {
+                    write_audiobooks_batch(tx, &root, token, batch, &mut summary)
+                })?;
+                with_write_tx(db, |tx| finish_audiobooks(tx, &root, token, &mut summary))?;
+                count
             }
             Collected::Books(items) => {
-                write_books(&tx, &root, token, book_existing, items, &mut summary)?
+                let count = write_batched(db, items, |tx, batch| {
+                    write_books_batch(tx, &root, token, book_existing, batch, &mut summary)
+                })?;
+                with_write_tx(db, |tx| finish_books(tx, &root, token, &mut summary))?;
+                count
             }
             Collected::Videos(items) => {
-                write_videos(&tx, &root, token, video_existing, items, &mut summary)?
+                let rel_by_path = video_rel_paths(db, root.id)?;
+                let mut dirs: HashMap<String, DirAgg> = HashMap::new();
+                let count = write_batched(db, items, |tx, batch| {
+                    write_videos_batch(
+                        tx,
+                        &root,
+                        token,
+                        video_existing,
+                        &rel_by_path,
+                        batch,
+                        &mut dirs,
+                        &mut summary,
+                    )
+                })?;
+                with_write_tx(db, |tx| {
+                    finish_videos(tx, &root, token, &dirs, &mut summary)
+                })?;
+                count
             }
         };
 
-        tx.commit()?;
-        db::finish_scan(&conn, root.id, item_count)?;
-        db::refresh_library_version(&conn)?;
+        let changed = summary.added + summary.updated + summary.removed > 0;
+        with_write_tx(db, |tx| {
+            db::finish_scan(tx, root.id, item_count)?;
+            // The version only has to move when rows actually changed; a
+            // no-op rescan keeps it stable so clients skip a full refetch.
+            if changed {
+                db::bump_library_version(tx)?;
+            }
+            Ok(())
+        })?;
         summary.duration_ms = started.elapsed().as_millis() as i64;
         Ok(summary)
     })();
@@ -1345,15 +1473,35 @@ mod tests {
         assert_eq!(nested_random.len(), 2);
 
         // A rescan keeps rows stable and rebuilds the same tree.
+        let version_before = {
+            let conn = db.lock();
+            db::library_version(&conn).unwrap()
+        };
         let again = scan_root(&db, root.id, |_| {}).unwrap();
         assert_eq!(again.added, 0);
         assert_eq!(again.updated, 0);
         assert_eq!(again.removed, 0);
+        // Nothing changed, so clients must not be told to refetch everything.
+        let version_after = {
+            let conn = db.lock();
+            db::library_version(&conn).unwrap()
+        };
+        assert_eq!(version_before, version_after);
         let rebuilt = {
             let conn = db.lock();
             db::video_listing(&conn, &root_key, "").unwrap()
         };
         assert_eq!(rebuilt.dirs[0].deep_count, 2);
+
+        // Adding a file does move the version.
+        write_file(&root_dir.join("clip2.mp4"), b"x");
+        let third = scan_root(&db, root.id, |_| {}).unwrap();
+        assert_eq!(third.added, 1);
+        let version_changed = {
+            let conn = db.lock();
+            db::library_version(&conn).unwrap()
+        };
+        assert!(version_changed > version_after);
 
         // The same folder may be shared as a music root at the same time.
         let music = {

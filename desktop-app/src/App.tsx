@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   api,
@@ -55,6 +55,8 @@ export default function App() {
 
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState<Record<number, ScanProgress>>({});
+  const scanQueue = useRef<number[]>([]);
+  const scanRunning = useRef(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const [pendingPath, setPendingPath] = useState<string | null>(null);
@@ -143,24 +145,37 @@ export default function App() {
 
   const startScan = useCallback(
     async (ids: number[]) => {
-      if (ids.length === 0 || scanning) return;
+      if (ids.length === 0) return;
+      // A scan request that arrives while another scan is running is queued
+      // instead of dropped: adding a folder while a big scan is in flight must
+      // still index the new folder once the running one finishes.
+      for (const id of ids) {
+        if (!scanQueue.current.includes(id)) scanQueue.current.push(id);
+      }
+      if (scanRunning.current) return;
+      scanRunning.current = true;
       setScanning(true);
-      setError(null);
       try {
-        const summaries: ScanSummary[] = await api.scanRoots(ids);
-        const totalErrors = summaries.reduce((sum, summary) => sum + summary.errors.length, 0);
-        if (totalErrors > 0) {
-          setError(summaries.flatMap((summary) => summary.errors).slice(0, 5).join("\n"));
+        while (scanQueue.current.length > 0) {
+          const batch = scanQueue.current.splice(0);
+          setError(null);
+          const summaries: ScanSummary[] = await api.scanRoots(batch);
+          const totalErrors = summaries.reduce((sum, summary) => sum + summary.errors.length, 0);
+          if (totalErrors > 0) {
+            setError(summaries.flatMap((summary) => summary.errors).slice(0, 5).join("\n"));
+          }
+          await refresh();
         }
-        await refresh();
       } catch (err) {
+        scanQueue.current = [];
         setError(String(err));
       } finally {
+        scanRunning.current = false;
         setScanning(false);
         setProgress({});
       }
     },
-    [refresh, scanning],
+    [refresh],
   );
 
   const pickFolder = async () => {

@@ -289,6 +289,11 @@ pub fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn meta_delete(conn: &Connection, key: &str) -> Result<()> {
+    conn.execute("DELETE FROM meta WHERE key = ?1", params![key])?;
+    Ok(())
+}
+
 fn default_device_name(device_id: &str) -> String {
     let host = std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("COMPUTERNAME"))
@@ -440,6 +445,11 @@ fn content_signature(conn: &Connection) -> Result<String> {
 
 /// Updates the library version only when the content actually changed, keeping
 /// the value stable across restarts (remote_database.md §4.1).
+///
+/// This hashes every indexed row, so it is only worth its cost where the whole
+/// library is about to be compared anyway: at startup, and as the fallback in
+/// [`library_version`]. Callers that already know the library changed use
+/// [`bump_library_version`] instead.
 pub fn refresh_library_version(conn: &Connection) -> Result<i64> {
     let signature = content_signature(conn)?;
     let previous_signature = meta_get(conn, "library_signature")?;
@@ -447,19 +457,49 @@ pub fn refresh_library_version(conn: &Connection) -> Result<i64> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
 
-    if previous_version > 0 && previous_signature.as_deref() == Some(signature.as_str()) {
-        return Ok(previous_version);
+    if previous_version > 0 {
+        if previous_signature.as_deref() == Some(signature.as_str()) {
+            return Ok(previous_version);
+        }
+        if previous_signature.is_none() {
+            // [`bump_library_version`] already moved the version and dropped the
+            // signature; re-anchoring it keeps the value stable from here on.
+            meta_set(conn, "library_signature", &signature)?;
+            return Ok(previous_version);
+        }
     }
 
-    let now = now_ms();
-    let version = if now > previous_version {
-        now
-    } else {
-        previous_version + 1
-    };
+    let version = next_version(previous_version);
     meta_set(conn, "library_signature", &signature)?;
     meta_set(conn, "library_version", &version.to_string())?;
     Ok(version)
+}
+
+/// Cheap version bump for callers that already know the library changed
+/// (root added/renamed/removed, a scan wrote rows).
+///
+/// It never walks the tables, so it stays O(1) no matter how big the library
+/// is. The stored content signature is dropped to mark it stale: the next
+/// [`refresh_library_version`] (startup) recomputes it without bumping again.
+pub fn bump_library_version(conn: &Connection) -> Result<i64> {
+    let previous_version: i64 = meta_get(conn, "library_version")?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let version = next_version(previous_version);
+    meta_set(conn, "library_version", &version.to_string())?;
+    meta_delete(conn, "library_signature")?;
+    Ok(version)
+}
+
+/// Monotonic, wall-clock seeded so clients also see a fresh value after a
+/// restart that only re-bumped an already high version.
+fn next_version(previous_version: i64) -> i64 {
+    let now = now_ms();
+    if now > previous_version {
+        now
+    } else {
+        previous_version + 1
+    }
 }
 
 pub fn library_version(conn: &Connection) -> Result<i64> {
@@ -579,7 +619,7 @@ pub fn add_root(
         ],
     )?;
     let id = conn.last_insert_rowid();
-    refresh_library_version(conn)?;
+    bump_library_version(conn)?;
     get_root(conn, id)
 }
 
@@ -624,7 +664,7 @@ pub fn update_root(
             }
         }
     }
-    refresh_library_version(conn)?;
+    bump_library_version(conn)?;
     get_root(conn, id)
 }
 
@@ -649,7 +689,7 @@ pub fn remove_root(conn: &Connection, id: i64) -> Result<()> {
     )?;
     tx.execute("DELETE FROM roots WHERE id = ?1", params![id])?;
     tx.commit()?;
-    refresh_library_version(conn)?;
+    bump_library_version(conn)?;
     Ok(())
 }
 
@@ -1577,6 +1617,33 @@ mod tests {
         conn.execute_batch(SCHEMA).unwrap();
         conn.execute_batch(VIDEO_SCHEMA).unwrap();
         conn
+    }
+
+    #[test]
+    fn version_bumps_are_cheap_and_stable_across_restarts() {
+        let conn = test_conn();
+        // First call seeds the version.
+        let v1 = refresh_library_version(&conn).unwrap();
+        assert!(v1 > 0);
+        // Nothing changed: the version must stay put.
+        assert_eq!(refresh_library_version(&conn).unwrap(), v1);
+
+        // A bump moves it without hashing anything, and the next refresh only
+        // re-anchors the signature instead of bumping a second time.
+        let v2 = bump_library_version(&conn).unwrap();
+        assert!(v2 > v1);
+        assert_eq!(refresh_library_version(&conn).unwrap(), v2);
+        assert_eq!(refresh_library_version(&conn).unwrap(), v2);
+
+        // Real content changes still move it.
+        conn.execute(
+            "INSERT INTO roots(id, path, kind, display_name, created_at)
+             VALUES (1, '/x', 'music', 'X', 0)",
+            [],
+        )
+        .unwrap();
+        let v3 = refresh_library_version(&conn).unwrap();
+        assert!(v3 > v2);
     }
 
     #[test]
