@@ -35,7 +35,7 @@ internal data class RemoteLibrarySnapshot(
  */
 internal object RemoteLibraryDb {
 
-    private const val SCHEMA_VERSION = 5
+    private const val SCHEMA_VERSION = 6
     private const val DB_EXT = ".db"
 
     fun file(dir: File, deviceId: String): File = File(dir, safeId(deviceId) + DB_EXT)
@@ -115,6 +115,21 @@ internal object RemoteLibraryDb {
                 }
             }
 
+            val videoRoots = ArrayList<RemoteVideoRootWire>()
+            it.rawQuery(
+                "SELECT key, rootPath, displayName, videoCount FROM video_roots ORDER BY ord",
+                null,
+            ).use { c ->
+                while (c.moveToNext()) {
+                    videoRoots += RemoteVideoRootWire(
+                        key = c.getString(0),
+                        rootPath = c.getString(1),
+                        displayName = c.getString(2),
+                        videoCount = c.getLong(3),
+                    )
+                }
+            }
+
             val chaptersByBook = HashMap<Long, MutableList<RemoteChapterWire>>()
             it.rawQuery(
                 "SELECT bookOrd, path, title, trackNumber, durationSec, size FROM chapters " +
@@ -165,6 +180,7 @@ internal object RemoteLibraryDb {
                     ebookRoots = roots,
                     ebooks = ebooks,
                     audiobooks = audiobooks,
+                    videoRoots = videoRoots,
                 ),
             )
         }
@@ -182,6 +198,7 @@ internal object RemoteLibraryDb {
                 it.delete("ebooks", null, null)
                 it.delete("audiobooks", null, null)
                 it.delete("chapters", null, null)
+                it.delete("video_roots", null, null)
 
                 val meta = ContentValues()
                 fun put(key: String, value: String) {
@@ -247,6 +264,17 @@ internal object RemoteLibraryDb {
                     ebook.put("metaScanned", if (b.metaScanned) 1 else 0)
                     ebook.put("rootKey", b.rootKey)
                     it.insert("ebooks", null, ebook)
+                }
+
+                val videoRoot = ContentValues()
+                snapshot.payload.videoRoots.forEachIndexed { ord, r ->
+                    videoRoot.clear()
+                    videoRoot.put("ord", ord.toLong())
+                    videoRoot.put("key", r.key)
+                    videoRoot.put("rootPath", r.rootPath)
+                    videoRoot.put("displayName", r.displayName)
+                    videoRoot.put("videoCount", r.videoCount)
+                    it.insert("video_roots", null, videoRoot)
                 }
 
                 val book = ContentValues()
@@ -332,6 +360,7 @@ internal object RemoteLibraryDb {
                 db.execSQL("DROP TABLE IF EXISTS ebooks")
                 db.execSQL("DROP TABLE IF EXISTS audiobooks")
                 db.execSQL("DROP TABLE IF EXISTS chapters")
+                db.execSQL("DROP TABLE IF EXISTS video_roots")
                 db.execSQL("CREATE TABLE meta (k TEXT PRIMARY KEY NOT NULL, v TEXT NOT NULL)")
                 db.execSQL(
                     "CREATE TABLE tracks (" +
@@ -363,6 +392,11 @@ internal object RemoteLibraryDb {
                         "bookOrd INTEGER NOT NULL, ord INTEGER NOT NULL, path TEXT NOT NULL, " +
                         "title TEXT NOT NULL, trackNumber INTEGER NOT NULL, durationSec INTEGER NOT NULL, " +
                         "size INTEGER NOT NULL, PRIMARY KEY(bookOrd, ord))",
+                )
+                db.execSQL(
+                    "CREATE TABLE video_roots (" +
+                        "ord INTEGER PRIMARY KEY NOT NULL, key TEXT NOT NULL, rootPath TEXT NOT NULL, " +
+                        "displayName TEXT NOT NULL, videoCount INTEGER NOT NULL)",
                 )
                 db.version = SCHEMA_VERSION
                 db.setTransactionSuccessful()

@@ -165,6 +165,16 @@ pub async fn check(
             }
             Ok(Decision::allow())
         }
+        "/library/video/list" | "/library/video/random" => {
+            let root = params
+                .get("rootKey")
+                .and_then(|text| text.parse::<i64>().ok())
+                .ok_or_else(|| denied("missing rootKey"))?;
+            if !grant.allows(root) {
+                return Err(denied("folder is not shared with this device"));
+            }
+            Ok(Decision::allow())
+        }
         "/library/ebook/scan" => {
             let paths: Vec<String> = if method == "GET" {
                 vec![params

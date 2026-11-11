@@ -97,6 +97,8 @@ class RelayProxy(
             "/library/ebook/scan" -> serveLiveJson(output, request)
             "/library/ebook/random",
             "/library/ebook/search",
+            "/library/video/list",
+            "/library/video/random",
             -> serveLiveJson(output, request)
             "/library/ebook/feed/start",
             "/library/ebook/feed/turn",
@@ -107,6 +109,7 @@ class RelayProxy(
             "/media/music" -> serveMedia(output, request, "music", request.query["id"].orEmpty())
             "/media/audiobook" -> serveMedia(output, request, "audiobook", request.query["path"].orEmpty())
             "/media/ebook" -> serveMedia(output, request, "ebook", request.query["path"].orEmpty())
+            "/media/video" -> serveMedia(output, request, "video", request.query["path"].orEmpty())
             "/media/songart" -> serveMedia(output, request, "songart", request.query["id"].orEmpty())
             "/media/cover" -> serveMedia(
                 output,

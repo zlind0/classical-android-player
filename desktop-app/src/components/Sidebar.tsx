@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { LibraryStats, RootInfo, ScanProgress, ServerInfo } from "../api";
 import { kindLabel, modeLabel } from "../api";
-import { BookIcon, FolderIcon, HeadphonesIcon, MusicIcon, PlusIcon, RefreshIcon, ServerIcon, TrashIcon } from "./Icons";
+import { BookIcon, FolderIcon, HeadphonesIcon, MusicIcon, PlusIcon, RefreshIcon, ServerIcon, TrashIcon, VideoIcon } from "./Icons";
 
 interface SidebarProps {
   roots: RootInfo[];
@@ -21,6 +21,7 @@ const kindIcon = {
   music: MusicIcon,
   audiobook: HeadphonesIcon,
   book: BookIcon,
+  video: VideoIcon,
 };
 
 export function Sidebar({
@@ -64,7 +65,9 @@ export function Sidebar({
           <span className="root-main">
             <span className="root-name">全部目录</span>
             <span className="root-meta">
-              {stats ? `${stats.tracks} 曲 · ${stats.audiobooks} 书 · ${stats.books} 本` : "尚未扫描"}
+              {stats
+                ? `${stats.tracks} 曲 · ${stats.audiobooks} 书 · ${stats.books} 本 · ${stats.videos} 视频`
+                : "尚未扫描"}
             </span>
           </span>
         </button>
@@ -148,7 +151,7 @@ export function Sidebar({
 
         {roots.length === 0 && (
           <div className="empty-hint">
-            还没有共享目录。点击右上角 <PlusIcon width={14} height={14} /> 添加音乐、有声书或书籍文件夹。
+            还没有共享目录。点击右上角 <PlusIcon width={14} height={14} /> 添加音乐、有声书、书籍或视频文件夹。
           </div>
         )}
       </div>

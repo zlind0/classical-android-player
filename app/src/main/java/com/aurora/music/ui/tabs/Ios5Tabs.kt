@@ -280,11 +280,12 @@ fun PlaylistsTab(
     onOpenDetail: (kind: String, id: String, title: String) -> Unit,
     onCreatePlaylist: (name: String) -> Unit,
     onOpenSearch: () -> Unit,
+    onBack: (() -> Unit)? = null,
 ) {
     var showCreate by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize()) {
-        Ios5NavBar(title = "歌单", onSearch = onOpenSearch)
+        Ios5NavBar(title = "歌单", onBack = onBack, onSearch = onOpenSearch)
         LazyColumn(
             state = com.aurora.music.ui.rememberPersistentLazyListState("tab:playlists"),
             modifier = Modifier.fillMaxSize(),
@@ -429,6 +430,7 @@ fun MoreTab(onOpenRoute: (String) -> Unit) {
                 Ios5SectionTitle("浏览音乐")
                 Ios5Group(Modifier.padding(horizontal = 12.dp)) {
                     val rows = listOf(
+                        "歌单" to Ios5Routes.PLAYLISTS,
                         "歌曲" to Ios5Routes.MORE_SONGS,
                         "专辑" to Ios5Routes.MORE_ALBUMS,
                         "风格" to Ios5Routes.MORE_GENRES,

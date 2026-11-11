@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 pub const KIND_MUSIC: &str = "music";
 pub const KIND_AUDIOBOOK: &str = "audiobook";
 pub const KIND_BOOK: &str = "book";
+pub const KIND_VIDEO: &str = "video";
 
 pub const MODE_TAG: &str = "tag";
 pub const MODE_FOLDER: &str = "folder";
@@ -177,6 +178,7 @@ pub struct LibraryStats {
     pub audiobooks: i64,
     pub chapters: i64,
     pub books: i64,
+    pub videos: i64,
     pub video_tracks: i64,
     pub library_version: i64,
 }
@@ -246,6 +248,64 @@ pub struct WireAudiobook {
     pub root_key: String,
 }
 
+/// One shared short-video root as seen by clients.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireVideoRoot {
+    pub key: String,
+    pub root_path: String,
+    pub display_name: String,
+    pub video_count: i64,
+}
+
+/// One video file. Only the file listing is indexed on the host; duration and
+/// resolution are left to the client's player (no ffprobe pass during scans).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireVideo {
+    /// Absolute path; also the stable identity clients use in URLs.
+    pub path: String,
+    /// Path relative to the video root, using `/` separators.
+    pub rel_path: String,
+    /// Directory of `rel_path` (`""` for files directly inside the root).
+    pub dir_path: String,
+    /// File name with extension; the client falls back to it for the title.
+    pub name: String,
+    /// File name without extension, used as the default title.
+    pub title: String,
+    pub size: i64,
+    pub mtime: i64,
+}
+
+/// One directory that contains videos (or subdirectories of such a directory),
+/// so clients can browse a video root like a file explorer.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireVideoDir {
+    pub path: String,
+    pub name: String,
+    /// Videos directly inside this directory.
+    pub video_count: i64,
+    /// Direct subdirectories.
+    pub subdir_count: i64,
+    /// Videos anywhere below this directory, subdirectories included.
+    pub deep_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireVideoListing {
+    pub path: String,
+    pub dirs: Vec<WireVideoDir>,
+    pub videos: Vec<WireVideo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireVideoBatch {
+    pub videos: Vec<WireVideo>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WireSnapshot {
@@ -258,4 +318,8 @@ pub struct WireSnapshot {
     pub ebook_roots: Vec<WireEbookRoot>,
     pub ebooks: Vec<WireEbook>,
     pub audiobooks: Vec<WireAudiobook>,
+    /// Only the roots travel in the snapshot; per-directory listings and random
+    /// batches stay behind live endpoints so a 100k-video library never gets
+    /// serialized into `/library/all`.
+    pub video_roots: Vec<WireVideoRoot>,
 }

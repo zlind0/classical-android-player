@@ -10,7 +10,10 @@ import android.net.Uri
 object Ios5Routes {
     // ---- five tabs ----
     const val HOME = "ios5_home"
+    /** 歌单不再占 Tab 位（收进“更多”），路由保留给“更多”里的入口和分享链接。 */
     const val PLAYLISTS = "ios5_playlists"
+    /** 短视频 Tab：桌面端共享的视频目录。 */
+    const val VIDEOS = "ios5_videos"
     const val ARTISTS = "ios5_artists"
     const val EBOOKS = "ios5_ebooks"
     const val AUDIOBOOKS = "ios5_audiobooks"
@@ -23,6 +26,12 @@ object Ios5Routes {
     const val MORE_GENRES = "ios5_more_genres"
     const val MORE_COMPOSERS = "ios5_more_composers"
     const val MORE_FOLDERS = "ios5_more_folders"
+
+    /** 视频文件浏览器（每进一层目录压一个新路由，返回键自然回上一层）。 */
+    const val VIDEO_BROWSE = "ios5_video_browse?device={device}&root={root}&dir={dir}&title={title}"
+    fun videoBrowse(device: String, root: String, dir: String = "", title: String = "") =
+        "ios5_video_browse?device=${Uri.encode(device)}&root=${Uri.encode(root)}" +
+            "&dir=${Uri.encode(dir)}&title=${Uri.encode(title)}"
 
     /** 局域网艺人/专辑的曲目页（内容来自 RemoteLibraryManager，不经过本地 repository）。 */
     const val REMOTE_GROUP =
@@ -108,7 +117,7 @@ data class Ios5Tab(
 
 val ios5Tabs = listOf(
     Ios5Tab(Ios5Routes.HOME, "首页"),
-    Ios5Tab(Ios5Routes.PLAYLISTS, "歌单"),
+    Ios5Tab(Ios5Routes.VIDEOS, "视频"),
     Ios5Tab(Ios5Routes.ARTISTS, "艺人"),
     Ios5Tab(Ios5Routes.EBOOKS, "电子书"),
     Ios5Tab(Ios5Routes.AUDIOBOOKS, "有声书"),

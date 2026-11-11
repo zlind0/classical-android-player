@@ -149,6 +149,10 @@ class AppContainer(context: Context) {
     /** 随机阅读：服务端保持 3 本随机书，客户端按章取正文（只读，不入本地书库）。 */
     val randomFeed = com.aurora.music.data.cast.RandomFeedManager(appContext, remoteLibrary, ebookStore)
 
+    /** 短视频：libVLC 内核 + 播放现场（旋转/切页都不丢状态）。 */
+    val videoEngine = com.aurora.music.data.video.VideoEngine(appContext)
+    val videoFeed = com.aurora.music.data.video.VideoFeedController(appContext, remoteLibrary)
+
     val ebookCast = com.aurora.music.data.ebook.EbookCastController(
         appContext,
         ebookPrefs,

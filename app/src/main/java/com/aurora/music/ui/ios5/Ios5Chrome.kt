@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -218,6 +219,7 @@ fun Ios5BarKey(onClick: () -> Unit, content: @Composable RowScope.() -> Unit) {
 private val tabIcons: Map<String, ImageVector> = mapOf(
     "首页" to Icons.Filled.Home,
     "歌单" to Icons.AutoMirrored.Filled.QueueMusic,
+    "视频" to Icons.Filled.Videocam,
     "艺人" to Icons.Filled.Mic,
     "电子书" to Icons.Filled.Book,
     "有声书" to Icons.Filled.Headset,

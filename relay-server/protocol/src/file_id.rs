@@ -9,6 +9,12 @@ pub const KIND_EBOOK: &str = "ebook";
 pub const KIND_SONGART: &str = "songart";
 pub const KIND_COVER: &str = "cover";
 pub const KIND_DEFAULT_ART: &str = "defaultart";
+/// Short videos are streamed raw (`key = absolute path`).
+pub const KIND_VIDEO: &str = "video";
+/// Reserved: transcoded variants (`key = path\u{1f}<profile>`). No profile is
+/// produced until the host's ffmpeg pipeline lands, but the kind is fixed now so
+/// existing clients and relays agree on the id layout.
+pub const KIND_VIDEO_TC: &str = "video-tc";
 
 pub fn file_id(kind: &str, key: &str) -> FileId {
     let mut hasher = Sha256::new();

@@ -48,6 +48,9 @@ pub fn build_router(state: HttpState) -> Router {
         .route("/media/music", get(media_music))
         .route("/media/audiobook", get(media_audiobook))
         .route("/media/ebook", get(media_ebook))
+        .route("/media/video", get(media_video))
+        .route("/library/video/list", get(library_video_list))
+        .route("/library/video/random", get(library_video_random))
         .route("/media/songart", get(media_songart))
         .route("/media/cover", get(media_cover))
         .route("/relay/pair", post(relay_pair))
@@ -63,7 +66,7 @@ pub fn build_router(state: HttpState) -> Router {
 
 async fn index(State(state): State<HttpState>) -> Response {
     let body = format!(
-        "Aurora Desktop · {} ({})\n\nGET /library/version\nGET /library/all\nGET /media/music?id=\nGET /media/audiobook?path=\nGET /media/ebook?path=\nGET /media/songart?id=\nGET /media/cover?kind=ebook|audiobook&key=\n",
+        "Aurora Desktop · {} ({})\n\nGET /library/version\nGET /library/all\nGET /library/video/list?rootKey=&dir=\nGET /library/video/random?rootKey=&dir=&count=\nGET /media/music?id=\nGET /media/audiobook?path=\nGET /media/ebook?path=\nGET /media/video?path=[&transcode=]\nGET /media/songart?id=\nGET /media/cover?kind=ebook|audiobook&key=\n",
         state.info.device_name, state.info.device_id
     );
     text_response(StatusCode::OK, body, "text/plain; charset=utf-8")
@@ -725,6 +728,120 @@ async fn media_ebook(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
     serve_file(&found.0, &mime, range).await
+}
+
+// ------------------------------------------------------------------- videos
+
+/// Transcode profiles the relay/host can serve for `/media/video`.
+///
+/// Reserved hook: the raw file is streamed as-is today, and the ffmpeg
+/// pipeline (see `docs/` short-video notes) will fill this table with
+/// e.g. `"h264-720p"`, `"h264-480p"`. Until then every `transcode=` request is
+/// rejected with 501 instead of silently serving the original bytes.
+const TRANSCODE_PROFILES: &[&str] = &[];
+
+fn find_transcode_profile(name: &str) -> Option<&'static str> {
+    TRANSCODE_PROFILES.iter().copied().find(|p| *p == name)
+}
+
+async fn library_video_list(
+    State(state): State<HttpState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let root_key = query.get("rootKey").cloned().unwrap_or_default();
+    let dir = query.get("dir").cloned().unwrap_or_default();
+    let result = run_db(&state, move |conn| {
+        db::video_listing(conn, &root_key, &dir)
+    })
+    .await;
+    match result {
+        Ok(listing) => json_response(json!(listing)),
+        Err(err) => text_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            err.to_string(),
+            "text/plain; charset=utf-8",
+        ),
+    }
+}
+
+async fn library_video_random(
+    State(state): State<HttpState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let root_key = query.get("rootKey").cloned().unwrap_or_default();
+    let dir = query.get("dir").cloned().unwrap_or_default();
+    let count = query
+        .get("count")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(20)
+        .clamp(1, 100);
+    let result = run_db(&state, move |conn| {
+        db::video_random(conn, &root_key, &dir, count)
+    })
+    .await;
+    match result {
+        Ok(videos) => json_response(json!({ "videos": videos })),
+        Err(err) => text_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            err.to_string(),
+            "text/plain; charset=utf-8",
+        ),
+    }
+}
+
+async fn media_video(
+    State(state): State<HttpState>,
+    Query(query): Query<HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let Some(path) = query.get("path") else {
+        return text_response(
+            StatusCode::BAD_REQUEST,
+            "missing path".into(),
+            "text/plain; charset=utf-8",
+        );
+    };
+    let path = path.clone();
+    if let Some(profile) = query.get("transcode").filter(|p| !p.is_empty()) {
+        if find_transcode_profile(profile).is_none() {
+            return text_response(
+                StatusCode::NOT_IMPLEMENTED,
+                format!("transcode profile not available: {profile}"),
+                "text/plain; charset=utf-8",
+            );
+        }
+    }
+    let found = match run_db(&state, move |conn| db::video_source(conn, &path)).await {
+        Ok(Some(found)) => found,
+        Ok(None) => {
+            return text_response(
+                StatusCode::NOT_FOUND,
+                "unknown video".into(),
+                "text/plain; charset=utf-8",
+            )
+        }
+        Err(err) => {
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                err.to_string(),
+                "text/plain; charset=utf-8",
+            )
+        }
+    };
+    let mime = util::video_mime(
+        found
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+    )
+    .to_string();
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    serve_file(&found, &mime, range).await
 }
 
 async fn media_songart(

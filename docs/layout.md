@@ -179,9 +179,35 @@ rememberSaveable(seeded from UiStateStore.scrollOf(key))
 8. **投屏 Overlay 不区分方向**：始终全屏覆盖。
 9. **没有旋转动画**：只做即时重排，避免复杂的方向转场。
 
+## 8. 短视频播放页
+
+短视频（桌面端 `kind=video` 的共享目录）不走音乐播放器，也不进 NavHost：
+`VideoPlayerScreen` 是盖在整棵树最上面的浮层，关闭只是这层消失，下面的 Tab、
+列表滚动位置都还在。
+
+- **竖屏**：黑底，视频铺满"标题栏 → 三键导航条"整块区域（控件层自己避让 inset）。
+  顶部半透明遮罩里第一行是返回 / 标题（`title` 优先，回退文件名）/ 全屏，
+  下面是进度条，再下面是字幕、音轨、循环、随机四个开关。底部半透明胶囊是
+  上一条 / 播放暂停 / 下一条。
+- **横屏**：同一个页面，把四个开关放到进度条右边，底部胶囊下移。横屏只在
+  **全屏**时出现：全屏按视频真实宽高比选方向（竖屏素材锁竖屏，横屏素材用
+  `SENSOR_LANDSCAPE`/`LANDSCAPE`，开了系统自动旋转就不锁死某一侧），
+  横屏窗口铺满整屏（隐藏系统栏）。
+- **手势**：单击显示/隐藏控件，双击切换"完整画面 ↔ 居中裁切铺满"；没有
+  音乐播放器的上下左右滑动。上下滑切换视频由 `VerticalPager` 负责，
+  同时最多 3 个 libVLC 播放器（当前页 + 前一页 + 预加载后一页）。
+- **随机播放**：视频 Tab → 目录 → 每个目录右侧的随机按钮向桌面端要一批
+  随机视频，TikTok 式下滑切换；每个视频第一次成为当前页时从 5%–60% 的
+  随机位置开始，后一页静音预加载 15 秒。
+- **状态**：播放现场（设备、根目录、批次、当前条目）在 `AppContainer.videoFeed`
+  里，旋转方向不会丢；循环 / 随机 / 裁切三个开关写在 SharedPreferences，
+  下次进来沿用。
+
 ## 关键文件
 
 `ui/ios5/Ios5App.kt`（唯一方向判断）、`ui/ios5/Ios5Chrome.kt`（`TopBarHost`、TabBar）、
 `ui/player/Ios5Player.kt`（竖屏整页 + 横屏侧栏）、`ui/player/Ios5AudiobookPlayer.kt`、
 `ui/ebook/EbookReaderScreen.kt`、`ui/StateSaving.kt`、`data/UiStateStore.kt`、
+`ui/video/VideoPlayerScreen.kt`、`ui/video/VideoFeedPage.kt`、
+`ui/video/RemoteVideoScreens.kt`、`data/video/VideoFeedController.kt`、
 `AndroidManifest.xml`（`configChanges`）。

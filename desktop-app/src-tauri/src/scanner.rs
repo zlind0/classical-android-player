@@ -793,11 +793,230 @@ fn write_books(
     Ok(count)
 }
 
+// ------------------------------------------------------------------- videos
+
+struct VideoItem {
+    path: String,
+    rel_path: String,
+    file_name: String,
+    title: String,
+    size: i64,
+    mtime: i64,
+    ext: String,
+}
+
+enum VideoEntry {
+    Unchanged(String),
+    Video(VideoItem),
+}
+
+/// Extension-only scan: the file name is the whole record. Container metadata
+/// (duration, resolution, tracks) is left to the client's player.
+fn collect_videos<F: Fn(ScanProgress)>(
+    root: &RootInfo,
+    root_path: &Path,
+    existing: &HashMap<String, (i64, i64)>,
+    progress: &F,
+) -> Vec<VideoEntry> {
+    let files = collect_files(root_path, util::is_video_ext);
+    let total = files.len() as i64;
+    let mut out = Vec::with_capacity(files.len());
+
+    for (index, file) in files.iter().enumerate() {
+        if index % 50 == 0 {
+            progress(ScanProgress {
+                root_id: root.id,
+                root_name: root.display_name.clone(),
+                phase: "collect".to_string(),
+                scanned: index as i64,
+                total,
+            });
+        }
+        if let Some((size, mtime)) = existing.get(&file.path) {
+            if *size == file.size && *mtime == file.mtime {
+                out.push(VideoEntry::Unchanged(file.path.clone()));
+                continue;
+            }
+        }
+        let stem = Path::new(&file.file_name)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| file.file_name.clone());
+        out.push(VideoEntry::Video(VideoItem {
+            path: file.path.clone(),
+            rel_path: file.rel_path.clone(),
+            file_name: file.file_name.clone(),
+            title: stem,
+            size: file.size,
+            mtime: file.mtime,
+            ext: file.ext.clone(),
+        }));
+    }
+    progress(ScanProgress {
+        root_id: root.id,
+        root_name: root.display_name.clone(),
+        phase: "collect".to_string(),
+        scanned: total,
+        total,
+    });
+    out
+}
+
+#[derive(Default)]
+struct DirAgg {
+    name: String,
+    video_count: i64,
+    subdir_count: i64,
+    deep_count: i64,
+}
+
+/// Registers one video path into the per-root directory aggregate: every
+/// ancestor gets a `deep_count` bump, the direct parent gets `video_count`.
+fn record_video_dirs(rel_path: &str, dirs: &mut HashMap<String, DirAgg>) {
+    let dir = rel_dir(rel_path);
+    if dir.is_empty() {
+        return;
+    }
+    let mut prefix = String::new();
+    for part in dir.split('/') {
+        if !prefix.is_empty() {
+            prefix.push('/');
+        }
+        prefix.push_str(part);
+        let entry = dirs.entry(prefix.clone()).or_default();
+        if entry.name.is_empty() {
+            entry.name = part.to_string();
+        }
+        entry.deep_count += 1;
+    }
+    if let Some(entry) = dirs.get_mut(&dir) {
+        entry.video_count += 1;
+    }
+}
+
+fn write_videos(
+    tx: &Connection,
+    root: &RootInfo,
+    token: i64,
+    existing: &HashMap<String, (i64, i64)>,
+    items: Vec<VideoEntry>,
+    summary: &mut ScanSummary,
+) -> Result<i64> {
+    let mut stmt = tx.prepare_cached(
+        "INSERT INTO videos(path, root_id, rel_path, dir_path, file_name, title, size, mtime, ext, scan_token)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(path) DO UPDATE SET
+            root_id = excluded.root_id,
+            rel_path = excluded.rel_path,
+            dir_path = excluded.dir_path,
+            file_name = excluded.file_name,
+            title = excluded.title,
+            size = excluded.size,
+            mtime = excluded.mtime,
+            ext = excluded.ext,
+            scan_token = excluded.scan_token",
+    )?;
+
+    let mut dirs: HashMap<String, DirAgg> = HashMap::new();
+    let mut count = 0i64;
+
+    // Relative paths of already indexed rows, so unchanged files still feed the
+    // directory aggregates without trusting `strip_prefix` on a moved root.
+    let mut rel_by_path: HashMap<String, String> = HashMap::new();
+    {
+        let mut rel_stmt = tx.prepare("SELECT path, rel_path FROM videos WHERE root_id = ?1")?;
+        let mut rows = rel_stmt.query(params![root.id])?;
+        while let Some(row) = rows.next()? {
+            rel_by_path.insert(row.get::<_, String>(0)?, row.get::<_, String>(1)?);
+        }
+    }
+
+    for item in items {
+        match item {
+            VideoEntry::Unchanged(path) => {
+                tx.execute(
+                    "UPDATE videos SET scan_token = ?1 WHERE path = ?2",
+                    params![token, path],
+                )?;
+                if let Some(rel) = rel_by_path.get(&path) {
+                    record_video_dirs(rel, &mut dirs);
+                }
+                count += 1;
+            }
+            VideoEntry::Video(video) => {
+                stmt.execute(params![
+                    video.path,
+                    root.id,
+                    video.rel_path,
+                    rel_dir(&video.rel_path),
+                    video.file_name,
+                    video.title,
+                    video.size,
+                    video.mtime,
+                    video.ext,
+                    token,
+                ])?;
+                if existing.contains_key(&video.path) {
+                    summary.updated += 1;
+                } else {
+                    summary.added += 1;
+                }
+                record_video_dirs(&video.rel_path, &mut dirs);
+                count += 1;
+            }
+        }
+    }
+    drop(stmt);
+
+    summary.removed += tx.execute(
+        "DELETE FROM videos WHERE root_id = ?1 AND scan_token <> ?2",
+        params![root.id, token],
+    )? as i64;
+
+    // Rebuild this root's directory tree from the videos that survived. Doing
+    // it per scan keeps `video_dirs` exact and avoids recursive counting on
+    // every browse request.
+    let dir_keys: Vec<String> = dirs.keys().cloned().collect();
+    for rel in &dir_keys {
+        let parent = rel_dir(rel);
+        if !parent.is_empty() {
+            if let Some(agg) = dirs.get_mut(&parent) {
+                agg.subdir_count += 1;
+            }
+        }
+    }
+
+    tx.execute(
+        "DELETE FROM video_dirs WHERE root_id = ?1",
+        params![root.id],
+    )?;
+    let mut insert = tx.prepare_cached(
+        "INSERT INTO video_dirs(root_id, rel_path, parent_path, name, video_count, subdir_count, deep_count, scan_token)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    )?;
+    for (rel, agg) in &dirs {
+        insert.execute(params![
+            root.id,
+            rel,
+            rel_dir(rel),
+            agg.name,
+            agg.video_count,
+            agg.subdir_count,
+            agg.deep_count,
+            token,
+        ])?;
+    }
+    drop(insert);
+
+    Ok(count)
+}
+
 // ------------------------------------------------------------------- driver
 
 enum Existing {
     Music(HashMap<String, (i64, i64)>),
     Books(HashMap<String, (i64, i64)>),
+    Videos(HashMap<String, (i64, i64)>),
     None,
 }
 
@@ -822,6 +1041,16 @@ fn load_existing(conn: &Connection, root: &RootInfo) -> Result<Existing> {
                 map.insert(row.get::<_, String>(0)?, (row.get(1)?, row.get(2)?));
             }
             Ok(Existing::Books(map))
+        }
+        KIND_VIDEO => {
+            let mut stmt =
+                conn.prepare("SELECT path, size, mtime FROM videos WHERE root_id = ?1")?;
+            let mut rows = stmt.query(params![root.id])?;
+            let mut map = HashMap::new();
+            while let Some(row) = rows.next()? {
+                map.insert(row.get::<_, String>(0)?, (row.get(1)?, row.get(2)?));
+            }
+            Ok(Existing::Videos(map))
         }
         _ => Ok(Existing::None),
     }
@@ -861,6 +1090,10 @@ where
             Existing::Books(map) => map,
             _ => &empty_music,
         };
+        let video_existing = match &existing {
+            Existing::Videos(map) => map,
+            _ => &empty_music,
+        };
 
         // Collection (walking the filesystem + reading tags) happens without
         // holding the database lock so the HTTP server keeps answering.
@@ -868,6 +1101,7 @@ where
             Music(Vec<MusicItem>, HashMap<PathBuf, Option<ArtBlob>>),
             Audiobooks(Vec<PreparedBook>),
             Books(Vec<BookItem>),
+            Videos(Vec<VideoEntry>),
         }
 
         let collected = match root.kind.as_str() {
@@ -885,6 +1119,10 @@ where
             KIND_BOOK => {
                 let items = collect_books(&root, &root_path, book_existing, &progress);
                 Collected::Books(items)
+            }
+            KIND_VIDEO => {
+                let items = collect_videos(&root, &root_path, video_existing, &progress);
+                Collected::Videos(items)
             }
             other => return Err(anyhow!("未知的目录类型: {other}")),
         };
@@ -908,6 +1146,9 @@ where
             }
             Collected::Books(items) => {
                 write_books(&tx, &root, token, book_existing, items, &mut summary)?
+            }
+            Collected::Videos(items) => {
+                write_videos(&tx, &root, token, video_existing, items, &mut summary)?
             }
         };
 
@@ -957,11 +1198,17 @@ mod tests {
         out
     }
 
+    /// Each run gets its own directory: repeated `cargo test` runs must not
+    /// collide with an existing library.db (the tests never delete state).
     fn scratch_dir(name: &str) -> PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("tmp")
-            .join(name);
+            .join(format!("{name}-{}-{stamp}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -1037,6 +1284,91 @@ mod tests {
         assert_eq!(stats.tracks, 3);
         assert_eq!(stats.video_tracks, 1);
         assert!(stats.library_version > 0);
+    }
+
+    #[test]
+    fn scans_videos_by_extension_and_builds_directory_tree() {
+        let base = scratch_dir("scan-video");
+        let root_dir = base.join("videos");
+        write_file(&root_dir.join("clip.mp4"), b"x");
+        write_file(&root_dir.join("Season 1").join("ep01.mkv"), b"x");
+        write_file(
+            &root_dir.join("Season 1").join("Extras").join("behind.webm"),
+            b"x",
+        );
+        write_file(&root_dir.join("notes.txt"), b"not a video");
+
+        let db = Db::open(&base.join("library.db")).unwrap();
+        let root = {
+            let conn = db.lock();
+            db::add_root(
+                &conn,
+                root_dir.to_str().unwrap(),
+                KIND_VIDEO,
+                None,
+                None,
+                false,
+            )
+            .unwrap()
+        };
+
+        let summary = scan_root(&db, root.id, |_| {}).unwrap();
+        assert_eq!(summary.added, 3);
+        assert!(summary.errors.is_empty());
+
+        let root_key = root.id.to_string();
+        let listing = {
+            let conn = db.lock();
+            db::video_listing(&conn, &root_key, "").unwrap()
+        };
+        assert_eq!(listing.videos.len(), 1);
+        assert_eq!(listing.videos[0].name, "clip.mp4");
+        assert_eq!(listing.videos[0].title, "clip");
+        assert_eq!(listing.dirs.len(), 1);
+        assert_eq!(listing.dirs[0].name, "Season 1");
+        assert_eq!(listing.dirs[0].video_count, 1);
+        assert_eq!(listing.dirs[0].subdir_count, 1);
+        assert_eq!(listing.dirs[0].deep_count, 2);
+
+        let season = {
+            let conn = db.lock();
+            db::video_listing(&conn, &root_key, "Season 1").unwrap()
+        };
+        assert_eq!(season.videos.len(), 1);
+        assert_eq!(season.dirs.len(), 1);
+        assert_eq!(season.dirs[0].deep_count, 1);
+
+        let nested_random = {
+            let conn = db.lock();
+            db::video_random(&conn, &root_key, "Season 1", 10).unwrap()
+        };
+        assert_eq!(nested_random.len(), 2);
+
+        // A rescan keeps rows stable and rebuilds the same tree.
+        let again = scan_root(&db, root.id, |_| {}).unwrap();
+        assert_eq!(again.added, 0);
+        assert_eq!(again.updated, 0);
+        assert_eq!(again.removed, 0);
+        let rebuilt = {
+            let conn = db.lock();
+            db::video_listing(&conn, &root_key, "").unwrap()
+        };
+        assert_eq!(rebuilt.dirs[0].deep_count, 2);
+
+        // The same folder may be shared as a music root at the same time.
+        let music = {
+            let conn = db.lock();
+            db::add_root(
+                &conn,
+                root_dir.to_str().unwrap(),
+                KIND_MUSIC,
+                Some(MODE_TAG),
+                None,
+                false,
+            )
+            .unwrap()
+        };
+        assert_ne!(music.id, root.id);
     }
 
     #[test]

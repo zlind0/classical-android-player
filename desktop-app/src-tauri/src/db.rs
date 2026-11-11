@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS meta (
 
 CREATE TABLE IF NOT EXISTS roots (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    path         TEXT NOT NULL UNIQUE,
-    kind         TEXT NOT NULL CHECK (kind IN ('music','audiobook','book')),
+    path         TEXT NOT NULL,
+    kind         TEXT NOT NULL CHECK (kind IN ('music','audiobook','book','video')),
     music_mode   TEXT,
     fast_scan    INTEGER NOT NULL DEFAULT 0,
     display_name TEXT NOT NULL,
@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS roots (
     last_scan_at INTEGER,
     scan_token   INTEGER NOT NULL DEFAULT 0,
     item_count   INTEGER NOT NULL DEFAULT 0,
-    scan_state   TEXT NOT NULL DEFAULT 'idle'
+    scan_state   TEXT NOT NULL DEFAULT 'idle',
+    UNIQUE (path, kind)
 );
 
 CREATE TABLE IF NOT EXISTS tracks (
@@ -107,6 +108,37 @@ CREATE TABLE IF NOT EXISTS art (
 );
 "#;
 
+/// Short-video index. Only file names are recorded: no container parsing, no
+/// ffprobe. Clients read the real resolution from their own player.
+const VIDEO_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS videos (
+    path       TEXT PRIMARY KEY,
+    root_id    INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
+    rel_path   TEXT NOT NULL,
+    dir_path   TEXT NOT NULL DEFAULT '',
+    file_name  TEXT NOT NULL,
+    title      TEXT NOT NULL,
+    size       INTEGER NOT NULL DEFAULT 0,
+    mtime      INTEGER NOT NULL DEFAULT 0,
+    ext        TEXT NOT NULL,
+    scan_token INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_videos_root ON videos(root_id);
+CREATE INDEX IF NOT EXISTS idx_videos_dir ON videos(root_id, dir_path);
+
+CREATE TABLE IF NOT EXISTS video_dirs (
+    root_id     INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
+    rel_path    TEXT NOT NULL,
+    parent_path TEXT NOT NULL DEFAULT '',
+    name        TEXT NOT NULL,
+    video_count INTEGER NOT NULL DEFAULT 0,
+    subdir_count INTEGER NOT NULL DEFAULT 0,
+    deep_count  INTEGER NOT NULL DEFAULT 0,
+    scan_token  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (root_id, rel_path)
+);
+"#;
+
 pub struct Db {
     conn: Mutex<Connection>,
 }
@@ -182,6 +214,56 @@ fn migrate(conn: &Connection) -> Result<()> {
             )?;
         }
         conn.pragma_update(None, "user_version", 4)?;
+    }
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 5 {
+        // `roots.path` used to be globally unique and `kind` was limited to the
+        // three media kinds. The same folder is allowed to be shared both as a
+        // music root and as a video root, so the constraint becomes
+        // `(path, kind)`. SQLite cannot drop a column constraint in place, so
+        // the table is rebuilt while foreign keys are disabled (otherwise
+        // DROP TABLE would cascade into tracks/books/audiobooks).
+        let roots_sql: Option<String> = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'roots'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let needs_rebuild = roots_sql
+            .as_deref()
+            .map(|sql| !sql.contains("'video'"))
+            .unwrap_or(false);
+        if needs_rebuild {
+            conn.pragma_update(None, "foreign_keys", false)?;
+            let rebuilt = conn.execute_batch(
+                "CREATE TABLE roots_migrated (
+                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                     path         TEXT NOT NULL,
+                     kind         TEXT NOT NULL CHECK (kind IN ('music','audiobook','book','video')),
+                     music_mode   TEXT,
+                     fast_scan    INTEGER NOT NULL DEFAULT 0,
+                     display_name TEXT NOT NULL,
+                     created_at   INTEGER NOT NULL,
+                     last_scan_at INTEGER,
+                     scan_token   INTEGER NOT NULL DEFAULT 0,
+                     item_count   INTEGER NOT NULL DEFAULT 0,
+                     scan_state   TEXT NOT NULL DEFAULT 'idle',
+                     UNIQUE (path, kind)
+                 );
+                 INSERT INTO roots_migrated (id, path, kind, music_mode, fast_scan, display_name,
+                                             created_at, last_scan_at, scan_token, item_count, scan_state)
+                     SELECT id, path, kind, music_mode, fast_scan, display_name,
+                            created_at, last_scan_at, scan_token, item_count, scan_state
+                     FROM roots;
+                 DROP TABLE roots;
+                 ALTER TABLE roots_migrated RENAME TO roots;",
+            );
+            conn.pragma_update(None, "foreign_keys", true)?;
+            rebuilt?;
+        }
+        conn.execute_batch(VIDEO_SCHEMA)?;
+        conn.pragma_update(None, "user_version", 5)?;
     }
     Ok(())
 }
@@ -336,6 +418,22 @@ fn content_signature(conn: &Connection) -> Result<String> {
         feed_i64(&mut hasher, row.get::<_, Option<i64>>(5)?.unwrap_or(0));
         feed_i64(&mut hasher, row.get::<_, Option<i64>>(6)?.unwrap_or(0));
     }
+    drop(rows);
+    drop(stmt);
+
+    // Video files are not part of `/library/all`, but the relay index maps each
+    // file id to its owning root, so every path change has to bump the version:
+    // otherwise a renamed video keeps the old index and playback 403s until the
+    // next unrelated change. Hashing path/size/mtime is cheap next to a scan and
+    // keeps the list root counts implicitly covered.
+    let mut stmt = conn.prepare("SELECT path, root_id, size, mtime FROM videos ORDER BY path")?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        feed_str(&mut hasher, &row.get::<_, String>(0)?);
+        feed_i64(&mut hasher, row.get(1)?);
+        feed_i64(&mut hasher, row.get(2)?);
+        feed_i64(&mut hasher, row.get(3)?);
+    }
 
     Ok(format!("{hasher:016x}"))
 }
@@ -423,7 +521,10 @@ pub fn add_root(
     display_name: Option<&str>,
     fast_scan: bool,
 ) -> Result<RootInfo> {
-    if !matches!(kind, KIND_MUSIC | KIND_AUDIOBOOK | KIND_BOOK) {
+    if !matches!(
+        kind,
+        KIND_MUSIC | KIND_AUDIOBOOK | KIND_BOOK | KIND_VIDEO
+    ) {
         return Err(anyhow!("未知的目录类型: {kind}"));
     }
     let mode = if kind == KIND_MUSIC {
@@ -446,8 +547,8 @@ pub fn add_root(
 
     let existing: Option<i64> = conn
         .query_row(
-            "SELECT id FROM roots WHERE path = ?1",
-            params![canonical],
+            "SELECT id FROM roots WHERE path = ?1 AND kind = ?2",
+            params![canonical, kind],
             |row| row.get(0),
         )
         .optional()?;
@@ -825,6 +926,7 @@ pub fn stats(conn: &Connection) -> Result<LibraryStats> {
         audiobooks: count("SELECT COUNT(*) FROM audiobooks")?,
         chapters: count("SELECT COUNT(*) FROM audiobook_chapters")?,
         books: count("SELECT COUNT(*) FROM books")?,
+        videos: count("SELECT COUNT(*) FROM videos")?,
         video_tracks: count("SELECT COUNT(*) FROM tracks WHERE from_video = 1")?,
         library_version: library_version(conn)?,
     })
@@ -922,6 +1024,7 @@ pub fn wire_snapshot(
         ebook_roots,
         ebooks,
         audiobooks,
+        video_roots: video_roots(conn)?,
     })
 }
 
@@ -989,11 +1092,167 @@ pub fn wire_index(conn: &Connection) -> Result<serde_json::Value> {
         }));
     }
 
+    // Video file ids are `file_id("video", path)`, so the relay only needs the
+    // path and its owning root to enforce folder grants.
+    let mut video_stmt = conn.prepare("SELECT path, root_id FROM videos")?;
+    let videos: Vec<serde_json::Value> = video_stmt
+        .query_map([], |row| {
+            Ok(serde_json::json!({
+                "path": row.get::<_, String>(0)?,
+                "rootKey": row.get::<_, i64>(1)?.to_string(),
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
     Ok(serde_json::json!({
         "music": music,
         "ebooks": ebooks,
         "audiobooks": audiobooks,
+        "videos": videos,
     }))
+}
+
+// -------------------------------------------------------------------- videos
+
+/// Video roots as they travel in `/library/all`: one small entry per root.
+pub fn video_roots(conn: &Connection) -> Result<Vec<WireVideoRoot>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.path, r.display_name,
+                (SELECT COUNT(*) FROM videos v WHERE v.root_id = r.id)
+         FROM roots r WHERE r.kind = 'video' ORDER BY r.created_at ASC, r.id ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(WireVideoRoot {
+            key: row.get::<_, i64>(0)?.to_string(),
+            root_path: row.get(1)?,
+            display_name: row.get(2)?,
+            video_count: row.get(3)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+fn wire_video_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WireVideo> {
+    Ok(WireVideo {
+        path: row.get(0)?,
+        rel_path: row.get(1)?,
+        dir_path: row.get(2)?,
+        name: row.get(3)?,
+        title: row.get(4)?,
+        size: row.get(5)?,
+        mtime: row.get(6)?,
+    })
+}
+
+const VIDEO_COLUMNS: &str = "path, rel_path, dir_path, file_name, title, size, mtime";
+
+/// One file-explorer page of a video root. `dir_path` is relative to the root
+/// (`""` means the root itself).
+pub fn video_listing(conn: &Connection, root_key: &str, dir_path: &str) -> Result<WireVideoListing> {
+    let Ok(root_id) = root_key.parse::<i64>() else {
+        return Ok(WireVideoListing {
+            path: dir_path.to_string(),
+            dirs: Vec::new(),
+            videos: Vec::new(),
+        });
+    };
+    let dir = dir_path.trim_matches('/');
+
+    let mut stmt = conn.prepare(
+        "SELECT rel_path, name, video_count, subdir_count, deep_count
+         FROM video_dirs WHERE root_id = ?1 AND parent_path = ?2
+         ORDER BY name COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map(params![root_id, dir], |row| {
+        Ok(WireVideoDir {
+            path: row.get(0)?,
+            name: row.get(1)?,
+            video_count: row.get(2)?,
+            subdir_count: row.get(3)?,
+            deep_count: row.get(4)?,
+        })
+    })?;
+    let mut dirs = Vec::new();
+    for row in rows {
+        dirs.push(row?);
+    }
+
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {VIDEO_COLUMNS} FROM videos
+         WHERE root_id = ?1 AND dir_path = ?2
+         ORDER BY file_name COLLATE NOCASE"
+    ))?;
+    let rows = stmt.query_map(params![root_id, dir], wire_video_row)?;
+    let mut videos = Vec::new();
+    for row in rows {
+        videos.push(row?);
+    }
+
+    Ok(WireVideoListing {
+        path: dir.to_string(),
+        dirs,
+        videos,
+    })
+}
+
+/// Random videos for one folder, subfolders included. The client starts each
+/// clip at a random position, so only the file order is randomized here.
+pub fn video_random(
+    conn: &Connection,
+    root_key: &str,
+    dir_path: &str,
+    count: usize,
+) -> Result<Vec<WireVideo>> {
+    let Ok(root_id) = root_key.parse::<i64>() else {
+        return Ok(Vec::new());
+    };
+    let dir = dir_path.trim_matches('/');
+    let escaped = dir
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let nested = format!("{escaped}/%");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {VIDEO_COLUMNS} FROM videos
+         WHERE root_id = ?1 AND (?2 = '' OR dir_path = ?2 OR dir_path LIKE ?3 ESCAPE '\\')
+         ORDER BY RANDOM() LIMIT ?4"
+    ))?;
+    let rows = stmt.query_map(
+        params![root_id, dir, nested, count.min(200) as i64],
+        wire_video_row,
+    )?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Root that owns one video path. Relay live/media requests use this to check
+/// the device's folder grant.
+pub fn video_root_id(conn: &Connection, path: &str) -> Result<Option<i64>> {
+    conn.query_row(
+        "SELECT root_id FROM videos WHERE path = ?1",
+        params![path],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+pub fn video_source(conn: &Connection, path: &str) -> Result<Option<PathBuf>> {
+    let row: Option<String> = conn
+        .query_row(
+            "SELECT path FROM videos WHERE path = ?1",
+            params![path],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(row.map(PathBuf::from))
 }
 
 // ------------------------------------------------------------- media lookups
@@ -1313,10 +1572,16 @@ pub fn album_art_key(root_id: i64, dir: &Path) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn root_book_paths_all_lists_only_root_epubs() {
+    fn test_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(SCHEMA).unwrap();
+        conn.execute_batch(VIDEO_SCHEMA).unwrap();
+        conn
+    }
+
+    #[test]
+    fn root_book_paths_all_lists_only_root_epubs() {
+        let conn = test_conn();
         conn.execute(
             "INSERT INTO roots(id, path, kind, display_name, created_at)
              VALUES (1, '/books', 'book', 'Books', 0),
@@ -1342,8 +1607,7 @@ mod tests {
 
     #[test]
     fn fast_scan_roots_are_lazy_but_searchable() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(SCHEMA).unwrap();
+        let conn = test_conn();
         conn.execute(
             "INSERT INTO roots(id, path, kind, display_name, created_at, fast_scan)
              VALUES (1, '/fast', 'book', 'Fast', 0, 1),

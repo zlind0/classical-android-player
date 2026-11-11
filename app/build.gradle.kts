@@ -27,7 +27,7 @@ fun gitHash(): String {
 
 android {
     namespace = "com.aurora.music"
-    compileSdk = 35
+    compileSdk = 36
     ndkVersion = "27.0.12077973"
 
     defaultConfig {
@@ -115,6 +115,8 @@ android {
             // client-sdk AAR 自带的 core/bindings 与 jniLibs/ 下（验过一致）重复，任选其一
             pickFirsts += "**/libMicrosoft.CognitiveServices.Speech.*"
             pickFirsts += "**/libspeexdsp.so"
+            // libVLC 与其他 AAR 共用 libc++ 运行时。
+            pickFirsts += "**/libc++_shared.so"
         }
     }
 }
@@ -140,6 +142,13 @@ dependencies {
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.session)
     implementation(libs.media3.common)
+    // 短视频播放：libVLC 负责容器/解码/字幕/HDR，避免自己实现这些能力。
+    // libvlc 3.7.7 的 AAR 里全是 Java class，但 POM 漏带了一个 Kotlin 2.2 的
+    // kotlin-stdlib 依赖；项目自己用 Kotlin 2.0，编译器读 2.2 的 metadata 会直接报错，
+    // 所以把这条传递依赖掐掉，用项目自己的 stdlib。
+    implementation(libs.libvlc.all) {
+        exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
+    }
     implementation(libs.retrofit)
     implementation(libs.retrofit.gson)
     implementation(libs.okhttp)

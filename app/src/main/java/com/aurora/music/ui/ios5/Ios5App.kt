@@ -107,6 +107,9 @@ import com.aurora.music.ui.tabs.HomeTab
 import com.aurora.music.ui.tabs.MoreTab
 import com.aurora.music.ui.tabs.PlaylistsTab
 import com.aurora.music.ui.tabs.SettingsTab
+import com.aurora.music.ui.video.RemoteVideoBrowseScreen
+import com.aurora.music.ui.video.VideoPlayerScreen
+import com.aurora.music.ui.video.VideosTab
 import com.aurora.music.viewmodel.HomeViewModel
 import com.aurora.music.viewmodel.Ios5BrowseViewModel
 import com.aurora.music.viewmodel.PlayerViewModel
@@ -531,6 +534,8 @@ fun Ios5App() {
     }
 
     var showQueue by remember { mutableStateOf(false) }
+    // 短视频播放页：不占 NavHost 返回栈，只作为最上层浮层，关掉就露出原来的页面。
+    val videoFeed by container.videoFeed.state.collectAsStateWithLifecycle()
     // 横屏有声书/接收页的气泡宿主：气泡必须盖住整屏，不能只盖右栏。
     var abookBubble by remember { mutableStateOf<com.aurora.music.ui.player.AbookBubble?>(null) }
     var landscapeSleepBubble by remember { mutableStateOf(false) }
@@ -783,6 +788,7 @@ fun Ios5App() {
                                     }
                                 },
                                 onOpenSearch = { navController.navigate(Ios5Routes.search("songs")) },
+                                onBack = { navController.popBackStack() },
                             )
                         }
                         composable(Ios5Routes.ARTISTS) {
@@ -952,6 +958,46 @@ fun Ios5App() {
                                     navController.navigate(Ios5Routes.SETTINGS_AUDIOBOOK_SOURCES)
                                 },
                                 confirm = { confirm(it) },
+                            )
+                        }
+                        composable(Ios5Routes.VIDEOS) {
+                            VideosTab(
+                                onOpenRoot = { deviceId, rootKey, title ->
+                                    navController.navigate(
+                                        Ios5Routes.videoBrowse(deviceId, rootKey, title = title),
+                                    )
+                                },
+                            )
+                        }
+                        composable(
+                            Ios5Routes.VIDEO_BROWSE,
+                            arguments = listOf(
+                                androidx.navigation.navArgument("device") { defaultValue = "" },
+                                androidx.navigation.navArgument("root") { defaultValue = "" },
+                                androidx.navigation.navArgument("dir") { defaultValue = "" },
+                                androidx.navigation.navArgument("title") { defaultValue = "" },
+                            ),
+                        ) { entry ->
+                            val deviceId = Uri.decode(entry.arguments?.getString("device").orEmpty())
+                            val rootKey = Uri.decode(entry.arguments?.getString("root").orEmpty())
+                            val dir = Uri.decode(entry.arguments?.getString("dir").orEmpty())
+                            val title = Uri.decode(entry.arguments?.getString("title").orEmpty())
+                            RemoteVideoBrowseScreen(
+                                deviceId = deviceId,
+                                rootKey = rootKey,
+                                dir = dir,
+                                title = title,
+                                onBack = { navController.popBackStack() },
+                                onOpenDir = { childDir, childTitle ->
+                                    navController.navigate(
+                                        Ios5Routes.videoBrowse(
+                                            deviceId,
+                                            rootKey,
+                                            dir = childDir,
+                                            title = childTitle,
+                                        ),
+                                    )
+                                },
                             )
                         }
                         composable(Ios5Routes.MORE) {
@@ -1923,6 +1969,13 @@ fun Ios5App() {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         com.aurora.music.ui.components.LottieLoader(modifier = Modifier.size(90.dp))
                     }
+                }
+            }
+
+            // 短视频播放页：整页浮层，盖住 Tab 栏与 Mini 条；返回键由浮层内部的 BackHandler 先吃掉。
+            if (videoFeed != null) {
+                Box(Modifier.fillMaxSize()) {
+                    VideoPlayerScreen(onClose = { container.videoFeed.close() })
                 }
             }
 

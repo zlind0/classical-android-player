@@ -4,6 +4,7 @@
 use anyhow::Result;
 use pod_relay_protocol::file_id::{
     encode_query, file_id, KIND_AUDIOBOOK, KIND_COVER, KIND_EBOOK, KIND_MUSIC, KIND_SONGART,
+    KIND_VIDEO,
 };
 use pod_relay_protocol::FileId;
 use serde_json::Value;
@@ -150,6 +151,28 @@ impl Index {
             }
         }
 
+        if let Some(videos) = value.get("videos").and_then(|v| v.as_array()) {
+            for video in videos {
+                let Some(path) = video.get("path").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                if path.is_empty() {
+                    continue;
+                }
+                let Some(root_id) = root_key(video) else {
+                    continue;
+                };
+                // Raw stream only. `KIND_VIDEO_TC` stays unused until the host
+                // exposes a transcode profile; the id layout is fixed so old
+                // relays keep working once it does.
+                index.insert(
+                    file_id(KIND_VIDEO, path),
+                    format!("/media/video?path={}", encode_query(path)),
+                    root_id,
+                );
+            }
+        }
+
         Ok(index)
     }
 }
@@ -173,7 +196,8 @@ mod tests {
         let json = br#"{
             "music":[{"id":"7","rootKey":"2"}],
             "ebooks":[{"path":"/books/a b.epub","rootKey":"4"}],
-            "audiobooks":[{"id":"/ab/one","rootKey":"6","chapters":[{"path":"/ab/one/01.mp3"}]}]
+            "audiobooks":[{"id":"/ab/one","rootKey":"6","chapters":[{"path":"/ab/one/01.mp3"}]}],
+            "videos":[{"path":"/videos/a b.mp4","rootKey":"9"}]
         }"#;
         let index = Index::build(json).unwrap();
         assert_eq!(
@@ -196,6 +220,11 @@ mod tests {
             index.route(&file_id(KIND_AUDIOBOOK, "/ab/one/01.mp3")),
             Some("/media/audiobook?path=%2Fab%2Fone%2F01.mp3")
         );
-        assert_eq!(index.root_entries().len(), 6);
+        assert_eq!(
+            index.route(&file_id(KIND_VIDEO, "/videos/a b.mp4")),
+            Some("/media/video?path=%2Fvideos%2Fa+b.mp4")
+        );
+        assert_eq!(index.root_id(&file_id(KIND_VIDEO, "/videos/a b.mp4")), Some(9));
+        assert_eq!(index.root_entries().len(), 7);
     }
 }

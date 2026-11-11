@@ -89,6 +89,28 @@ pub fn audio_mime(ext: &str) -> &'static str {
     }
 }
 
+/// Container MIME for `/media/video`. The player sniffs the stream anyway, so
+/// this only has to be close enough for browsers and Android's HTTP client.
+pub fn video_mime(ext: &str) -> &'static str {
+    match ext {
+        "mp4" | "m4v" | "f4v" => "video/mp4",
+        "mkv" | "mka" => "video/x-matroska",
+        "webm" | "ogv" => "video/webm",
+        "mov" => "video/quicktime",
+        "avi" | "divx" => "video/x-msvideo",
+        "wmv" | "asf" => "video/x-ms-wmv",
+        "flv" => "video/x-flv",
+        "ts" | "m2ts" | "mts" | "m2v" => "video/mp2t",
+        "mpg" | "mpeg" => "video/mpeg",
+        "3gp" => "video/3gpp",
+        "3g2" => "video/3gpp2",
+        "vob" => "video/dvd",
+        "rmvb" | "rm" => "application/vnd.rn-realmedia-vbr",
+        "mxf" => "application/mxf",
+        _ => "application/octet-stream",
+    }
+}
+
 pub fn ebook_mime(ext: &str) -> &'static str {
     match ext {
         "epub" => "application/epub+zip",
@@ -106,7 +128,8 @@ pub const AUDIO_EXTS: &[&str] = &[
 ];
 
 pub const VIDEO_EXTS: &[&str] = &[
-    "mp4", "mkv", "webm", "mov", "m4v", "avi", "wmv", "flv", "ts", "m2ts", "mpg", "mpeg",
+    "mp4", "mkv", "webm", "mov", "m4v", "avi", "wmv", "flv", "ts", "m2ts", "mpg", "mpeg", "3gp",
+    "3g2", "ogv", "mts", "vob", "rmvb", "rm", "f4v", "asf", "divx", "m2v", "mxf",
 ];
 
 // TODO(pdf): PDF 解析（元数据/封面/阅读）还没做完，先不把 pdf 纳入服务端索引；

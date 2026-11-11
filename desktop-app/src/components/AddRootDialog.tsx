@@ -50,6 +50,11 @@ export function AddRootDialog({ path, busy, error, onCancel, onSubmit }: AddRoot
               <strong>书籍</strong>
               <span>EPUB / MOBI / AZW3 / PDF / TXT</span>
             </button>
+            <button className={`type-card ${kind === "video" ? "active" : ""}`} onClick={() => setKind("video")}>
+              <VideoIcon width={22} height={22} />
+              <strong>短视频</strong>
+              <span>只按扩展名收录视频文件，手机端按文件夹浏览与竖屏播放</span>
+            </button>
           </div>
         </div>
 
@@ -97,12 +102,17 @@ export function AddRootDialog({ path, busy, error, onCancel, onSubmit }: AddRoot
           />
         </div>
 
-        {kind !== "book" && (
+        {kind === "video" ? (
+          <div className="notice">
+            <VideoIcon width={15} height={15} />
+            <span>短视频目录只记录文件名和所在文件夹，不解析视频内容；同一目录可以再加一次音乐或有声书。</span>
+          </div>
+        ) : kind !== "book" ? (
           <div className="notice">
             <VideoIcon width={15} height={15} />
             <span>视频文件只共享其中的音频：扫描时会识别视频容器，播放时由 ffmpeg 提取音轨（需要系统已安装 ffmpeg）。</span>
           </div>
-        )}
+        ) : null}
 
         {error && <div className="form-error">{error}</div>}
 

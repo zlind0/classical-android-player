@@ -7,7 +7,7 @@ declare global {
   const __GIT_COMMIT__: string;
 }
 
-export type RootKind = "music" | "audiobook" | "book";
+export type RootKind = "music" | "audiobook" | "book" | "video";
 export type MusicMode = "tag" | "folder";
 export type Tab = "music" | "audiobooks" | "books";
 
@@ -107,6 +107,7 @@ export interface LibraryStats {
   audiobooks: number;
   chapters: number;
   books: number;
+  videos: number;
   videoTracks: number;
   libraryVersion: number;
 }
@@ -286,6 +287,7 @@ export const kindLabel: Record<RootKind, string> = {
   music: "音乐",
   audiobook: "有声书",
   book: "书籍",
+  video: "视频",
 };
 
 export const modeLabel: Record<MusicMode, string> = {

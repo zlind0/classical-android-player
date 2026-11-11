@@ -158,6 +158,50 @@ data class RemoteAudiobookWire(
     val chapters: List<RemoteChapterWire> = emptyList(),
 )
 
+// ---- 短视频协议（desktop-app /library/video/*） ----
+
+/** 一个短视频根目录。只有它进 `/library/all` 快照，文件列表/随机批次都走实时接口。 */
+data class RemoteVideoRootWire(
+    val key: String = "",
+    val rootPath: String = "",
+    val displayName: String = "",
+    val videoCount: Long = 0L,
+)
+
+/** 一个视频文件。服务端只按扩展名收录，时长/分辨率由本地播放器读。 */
+data class RemoteVideoWire(
+    val path: String = "",
+    val relPath: String = "",
+    val dirPath: String = "",
+    val name: String = "",
+    val title: String = "",
+    val size: Long = 0L,
+    val mtime: Long = 0L,
+) {
+    val displayTitle: String get() = title.ifBlank { name.substringBeforeLast('.') }
+}
+
+/** 文件浏览器里的一个子目录。 */
+data class RemoteVideoDirWire(
+    val path: String = "",
+    val name: String = "",
+    val videoCount: Long = 0L,
+    val subdirCount: Long = 0L,
+    val deepCount: Long = 0L,
+)
+
+/** `GET /library/video/list` 的响应。 */
+data class RemoteVideoListingWire(
+    val path: String = "",
+    val dirs: List<RemoteVideoDirWire> = emptyList(),
+    val videos: List<RemoteVideoWire> = emptyList(),
+)
+
+/** `GET /library/video/random` 的响应。 */
+data class RemoteVideoBatchWire(
+    val videos: List<RemoteVideoWire> = emptyList(),
+)
+
 /** 一台设备的完整资料库快照（磁盘也缓存这一份）。 */
 data class RemoteLibraryWire(
     val deviceId: String = "",
@@ -171,6 +215,7 @@ data class RemoteLibraryWire(
     val ebookRoots: List<RemoteEbookRootWire> = emptyList(),
     val ebooks: List<RemoteEbookWire> = emptyList(),
     val audiobooks: List<RemoteAudiobookWire> = emptyList(),
+    val videoRoots: List<RemoteVideoRootWire> = emptyList(),
 )
 
 // ---- 客户端可用模型 ----
@@ -204,6 +249,7 @@ data class RemoteDeviceLibrary(
     val ebookRoots: List<RemoteEbookRootWire> = emptyList(),
     val ebooks: List<RemoteEbookWire> = emptyList(),
     val audiobooks: List<RemoteAudiobookWire> = emptyList(),
+    val videoRoots: List<RemoteVideoRootWire> = emptyList(),
     /** 这台设备是否有用户显式下载的条目；离线时也要保留在 UI 里。 */
     val hasDownloads: Boolean = false,
     /** 最近一次同步是否经过公网中继（本机回环代理），而不是局域网直连。 */

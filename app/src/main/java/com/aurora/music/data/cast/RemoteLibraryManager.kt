@@ -1630,6 +1630,58 @@ class RemoteLibraryManager(
         return Triple(deviceId, bookId, idx)
     }
 
+    // ---------------------------------------------------------------- 短视频
+
+    /** 这台设备所有短视频根目录（快照里只有这一行信息）。 */
+    fun videoRootsOf(deviceId: String): List<RemoteVideoRootWire> {
+        val libraries = _libraries.value.ifEmpty { cachedLibraries.value }
+        return libraries.firstOrNull { it.deviceId == deviceId }?.videoRoots.orEmpty()
+    }
+
+    /** 浏览视频根下的一个目录（`dir` 为空表示根目录）。 */
+    suspend fun fetchVideoListing(
+        deviceId: String,
+        rootKey: String,
+        dir: String,
+    ): RemoteVideoListingWire? = withContext(Dispatchers.IO) {
+        val base = onlineBaseUrl(deviceId) ?: return@withContext null
+        val url = "$base/library/video/list?rootKey=${enc(rootKey)}&dir=${enc(dir)}"
+        val text = runCatching {
+            val req = Request.Builder().url(url).header("X-Aurora-Device", "1").get().build()
+            client.newCall(req).execute().use { r ->
+                if (r.isSuccessful) r.body?.string() else null
+            }
+        }.getOrNull() ?: return@withContext null
+        runCatching { gson.fromJson(text, RemoteVideoListingWire::class.java) }.getOrNull()
+    }
+
+    /** 某个目录（含子目录）的随机视频批次；返回 null 表示请求失败。 */
+    suspend fun fetchRandomVideos(
+        deviceId: String,
+        rootKey: String,
+        dir: String,
+        count: Int,
+    ): List<RemoteVideoWire>? = withContext(Dispatchers.IO) {
+        val base = onlineBaseUrl(deviceId) ?: return@withContext null
+        val url = "$base/library/video/random?rootKey=${enc(rootKey)}" +
+            "&dir=${enc(dir)}&count=${count.coerceIn(1, 100)}"
+        val text = runCatching {
+            val req = Request.Builder().url(url).header("X-Aurora-Device", "1").get().build()
+            client.newCall(req).execute().use { r ->
+                if (r.isSuccessful) r.body?.string() else null
+            }
+        }.getOrNull() ?: return@withContext null
+        runCatching { gson.fromJson(text, RemoteVideoBatchWire::class.java) }
+            .getOrNull()?.videos
+    }
+
+    /** 视频原始流地址；`transcode` 留给将来的服务端转码配置。 */
+    fun videoStreamUrl(deviceId: String, path: String, transcode: String? = null): String? {
+        val base = onlineBaseUrl(deviceId) ?: return null
+        val suffix = if (transcode.isNullOrBlank()) "" else "&transcode=${enc(transcode)}"
+        return "$base/media/video?path=${enc(path)}$suffix"
+    }
+
     private fun enc(s: String): String = URLEncoder.encode(s, "UTF-8")
 
     private fun safeId(s: String): String = sha1(s).take(20)
@@ -1759,6 +1811,7 @@ class RemoteLibraryManager(
                 songs = songs, artists = artists, albums = albums,
                 ebookRoots = payload.ebookRoots,
                 ebooks = payload.ebooks, audiobooks = payload.audiobooks,
+                videoRoots = payload.videoRoots,
                 relay = relay,
             )
         }
