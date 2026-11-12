@@ -73,6 +73,17 @@ internal fun VideoFeedPage(
         runCatching { player.attachViews(layout, null, true, false) }
     }
 
+    /**
+     * 有些文件 libVLC 会把默认音轨留在 -1（禁用），表现就是画面正常但完全没声音。
+     * 这里在播放开始/跳转后兜底选上第一条真实音轨。
+     */
+    fun ensureAudioTrackSelected() {
+        if (player.isReleased) return
+        if (player.audioTrack >= 0) return
+        val first = player.audioTracks?.firstOrNull { it.id >= 0 } ?: return
+        runCatching { player.audioTrack = first.id }
+    }
+
     fun applyRandomStartIfNeeded() {
         if (!randomNow || randomApplied) return
         if (!currentNow && !preloadNow) return
@@ -80,6 +91,8 @@ internal fun VideoFeedPage(
         if (length <= 30_000L) return
         randomApplied = true
         player.setTime((length * (0.05f + Random.nextFloat() * 0.55f)).toLong())
+        // 跳转后音轨可能被重置，补一次选择。
+        ensureAudioTrackSelected()
     }
 
     DisposableEffect(player) {
@@ -90,6 +103,7 @@ internal fun VideoFeedPage(
                         positioned = true
                         aspectNow(engine.videoAspect(player))
                     }
+                    ensureAudioTrackSelected()
                     // 音量在音频输出真正建立后再落一次，避免预加载静音后恢复时偶发没声音。
                     when {
                         currentNow -> player.volume = 100
@@ -141,6 +155,7 @@ internal fun VideoFeedPage(
                 }
                 // 预加载过来的页在成为当前页时长度早已就绪，直接补一次随机起点
                 applyRandomStartIfNeeded()
+                ensureAudioTrackSelected()
             }
             isPreload -> {
                 ensureViewsAttached()

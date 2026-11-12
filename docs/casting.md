@@ -66,9 +66,23 @@ setVideoSurface + 一组 listener 回调），并用 `CastSessionArbiter` 处理
 ### 2.2 音频
 
 - 编码：ALAC（JNI）、AAC/AAC-ELD（MediaCodec）、PCM 直通。
+- 编码以 SETUP 里 96 号流的 `ct` 为准（2=ALAC，8=AAC-ELD，其他=AAC），
+  不沿用上一条流残留的格式；否则镜像音频之后换回音乐会把 ALAC 包喂给
+  AAC 解码器，表现为「包一直在来、解码失败猛涨、没有声音」。
+- 发送端可以在同一会话里重新 SETUP 一套 FairPlay AES key。新 key 会推给
+  正在跑的收包线程（`AirPlayAudioReceiver.updateKeys`）并重置重排窗口，
+  不需要等新流建立，避免「换 key 之后每个包都解不出来」。
+- FairPlay key 按 RTSP 连接缓存：macOS 一条连接只下过一次 `eiv/ekey`，换歌时
+  TEARDOWN 后再 SETUP 的 96 流不会再带 key。新 Session 没有收到 ANNOUNCE、
+  也没拿到新的 `eiv/ekey` 时沿用本连接上一次解出的 key，否则会把密文当明文
+  交给 ALAC，表现为「换歌后解码失败狂涨、没有声音」。
+- `00 68 34 00` 的 4 字节 no-data 包对所有编码都直接丢弃（镜像音频开头的
+  几个包就是它，喂给 MediaCodec 会让解码器卡在错误状态）。
+- AAC 解码器连续 100 个包没有 PCM 输出就重建一次（最多 3 次）。
 - 乱序重排窗口 128 包；丢包通过控制通道发重传请求（每次 ≤64 包），
   等待 `resendWait` 后重试，最多 `resendMaxRetries` 次；仍不齐就 **1.5 秒后硬重同步**。
-- 解码失败最多补 3 帧 PLC，之后静音。
+- 解码失败最多补 3 帧 PLC，之后静音；日志里会带当前 key 指纹和连续失败次数，
+  方便对照 `audio stream:` / `FairPlay key installed` 判断是 key 还是 codec 不匹配。
 
 ### 2.3 抖动缓冲（重点）
 

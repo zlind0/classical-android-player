@@ -172,6 +172,20 @@ class AirPlayReceiver(
             startAudio(format, data, control)
         }
 
+        override fun onAudioKeysChanged(key: ByteArray, iv: ByteArray) {
+            // 换 key 不重建流：发送端还在往同一对端口发包，只是密文换了。
+            val receiver = audioReceiver
+            if (receiver != null) {
+                receiver.updateKeys(key, iv)
+            } else {
+                AirPlayDiagnostics.log(
+                    AirPlayDiagnostics.Level.WARN,
+                    TAG,
+                    "FairPlay key replaced but no audio stream is running yet",
+                )
+            }
+        }
+
         override fun onMirrorStream(streamConnectionId: Long, aesKey: ByteArray, aesIv: ByteArray): Int {
             startVideo(streamConnectionId, aesKey)
             return videoReceiver?.localPort ?: 0

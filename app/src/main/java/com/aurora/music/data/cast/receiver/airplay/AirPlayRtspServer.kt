@@ -31,6 +31,8 @@ class AirPlayRtspServer(
         fun displaySize(): Pair<Int, Int>
         fun onSenderIdentified(name: String, mirroring: Boolean)
         fun onAudioStream(format: AirPlayAudioFormat, data: DatagramSocket, control: DatagramSocket)
+        /** 同一会话中途换 FairPlay AES key：推给已经在跑的解密线程。 */
+        fun onAudioKeysChanged(key: ByteArray, iv: ByteArray)
         fun onMirrorStream(streamConnectionId: Long, aesKey: ByteArray, aesIv: ByteArray): Int
         fun onRecord()
         fun onPause()
@@ -212,6 +214,13 @@ class AirPlayRtspServer(
     private inner class Connection(private val socket: Socket) {
         private var fairplay: FairPlayBridge? = null
         private var senderName = "AirPlay 设备"
+
+        // FairPlay 的 AES key/IV 属于整条 RTSP 连接，而不是某一次会话：
+        // macOS 只在连接建立后下过一次 eiv/ekey，之后换歌时 TEARDOWN 再
+        // SETUP 不会重发。把上一次协商出的 key 按连接缓存起来，新建的
+        // Session 才能继续解密同一条流。
+        private var lastAesKey: ByteArray? = null
+        private var lastAesIv: ByteArray? = null
         fun run() {
             socket.soTimeout = 0
             try {
@@ -326,10 +335,12 @@ class AirPlayRtspServer(
             val active = sessionLocked(create = true)!!
             active.owner = this
             active.audioFormat = format
-            format?.let {
-                active.aesKey = it.aesKey
-                active.aesIv = it.aesIv
-            }
+            // 新 ANNOUNCE 的 key 必须以 SDP 为准：解析失败（format == null）或无
+            // rsaaeskey 时要把上一轮残留的 key 清掉，否则 SETUP 会拿旧 key 去解新
+            // 流，每个包都解不出来。未加密（et=0）的流不带 key，保持 null。
+            val announcedKey = format?.takeIf { it.encrypted }
+            active.aesKey = announcedKey?.aesKey
+            active.aesIv = announcedKey?.aesIv
             active.announced = true
             senderName = request.senderName() ?: senderName
             listener.onSenderIdentified(senderName, mirroring = false)
@@ -354,11 +365,15 @@ class AirPlayRtspServer(
             // First SETUP: FairPlay keys for mirroring.
             val eiv = root?.get("eiv") as? ByteArray
             val ekey = root?.get("ekey") as? ByteArray
+            // 这次 SETUP 是否下了新 key；以及它是否同时建立了新的 96 音频流。
+            var rekeyed = false
+            var audioStreamCreated = false
             if (eiv != null && ekey != null) {
                 val fp = fairplay ?: FairPlayBridge().also { fairplay = it }
                 val key = fp.decryptKey(ekey)
                 if (key != null) {
                     val ivCopy = eiv.copyOf(16)
+                    val replaced = active.aesKey != null && !active.aesKey!!.contentEquals(key)
                     active.aesKey = key
                     active.aesIv = ivCopy
                     active.audioFormat = active.audioFormat?.copy(
@@ -366,9 +381,48 @@ class AirPlayRtspServer(
                         aesIv = ivCopy,
                         encrypted = true,
                     )
+                    rekeyed = true
+                    lastAesKey = key
+                    lastAesIv = ivCopy
                     Log.i(TAG, "FairPlay AES key installed")
+                    AirPlayDiagnostics.log(
+                        AirPlayDiagnostics.Level.INFO,
+                        TAG,
+                        "FairPlay key installed key=${key.take(4).joinToString("") { "%02x".format(it) }} " +
+                            "replaced=$replaced runningAudio=${active.audioData != null}",
+                    )
                 } else {
                     Log.w(TAG, "FairPlay ekey decryption failed")
+                    AirPlayDiagnostics.log(
+                        AirPlayDiagnostics.Level.WARN,
+                        TAG,
+                        "FairPlay ekey decryption failed (${ekey.size}B)",
+                    )
+                }
+            }
+
+            val streams = root?.get("streams") as? List<*>
+            val wantsAudio = streams?.any { entry ->
+                ((entry as? Map<*, *>)?.get("type") as? Number)?.toInt() == 96
+            } == true
+
+            // 同一条连接上换歌（TEARDOWN 后再 SETUP）时发送端不会再发 eiv/ekey，
+            // 但流本身仍然是加密的：沿用本连接上一次解出的 key，否则新 Session 会
+            // 把密文当明文喂给 ALAC，每个包都解不出帧（表现为「解码失败」疯涨、
+            // 没有声音）。active.audioFormat == null 表示这次会话没有收到 ANNOUNCE，
+            // 也就没有 SDP 明确声明「未加密」，此时可以安全沿用缓存。
+            if (wantsAudio && active.aesKey == null && active.audioFormat == null) {
+                val cachedKey = lastAesKey
+                val cachedIv = lastAesIv
+                if (cachedKey != null && cachedIv != null) {
+                    active.aesKey = cachedKey
+                    active.aesIv = cachedIv
+                    AirPlayDiagnostics.log(
+                        AirPlayDiagnostics.Level.INFO,
+                        TAG,
+                        "SETUP without eiv/ekey: reusing FairPlay key from this connection " +
+                            "key=${cachedKey.take(4).joinToString("") { "%02x".format(it) }}",
+                    )
                 }
             }
 
@@ -379,7 +433,6 @@ class AirPlayRtspServer(
 
             var mirrorPort = 0
             val responseStreams = ArrayList<Any?>()
-            val streams = root?.get("streams") as? List<*>
             if (streams != null) {
                 for (entry in streams) {
                     val stream = entry as? Map<*, *> ?: continue
@@ -417,18 +470,42 @@ class AirPlayRtspServer(
                         96 -> {
                             val ct = (stream["ct"] as? Number)?.toInt() ?: 2
                             val spf = (stream["spf"] as? Number)?.toInt() ?: 0
-                            val format = active.audioFormat?.let { audio ->
-                                audio.copy(
-                                    aesKey = active.aesKey ?: audio.aesKey,
-                                    aesIv = active.aesIv ?: audio.aesIv,
-                                    encrypted = active.aesKey != null || audio.encrypted,
+                            val announced = active.audioFormat
+                            val requested = codecForCt(ct)
+                            // ct 才是这条流真正的编码：会话里残留的 audioFormat 可能
+                            // 属于上一条流（例如镜像音频 AAC-ELD 之后又用 Apple Music
+                            // 投 ALAC）。沿用旧 codec 会让每个包都送进错误的解码器，
+                            // 结果就是「包在来、解码失败狂涨、没有声音」。
+                            val format = if (announced != null && announced.codec == requested) {
+                                announced.copy(
+                                    aesKey = active.aesKey ?: announced.aesKey,
+                                    aesIv = active.aesIv ?: announced.aesIv,
+                                    encrypted = active.aesKey != null || announced.encrypted,
                                 )
-                            } ?: mirrorAudioFormat(active, ct, spf)
+                            } else {
+                                if (announced != null) {
+                                    AirPlayDiagnostics.log(
+                                        AirPlayDiagnostics.Level.WARN,
+                                        TAG,
+                                        "SETUP stream ct=$ct needs ${requested.name} but session had " +
+                                            "${announced.codec.name}; rebuilding audio format",
+                                    )
+                                }
+                                mirrorAudioFormat(active, ct, spf)
+                            }
+                            AirPlayDiagnostics.log(
+                                AirPlayDiagnostics.Level.INFO,
+                                TAG,
+                                "audio SETUP: ct=$ct spf=$spf -> ${format.codec} " +
+                                    "rate=${format.sampleRate} ch=${format.channels} " +
+                                    "enc=${format.encrypted}",
+                            )
                             val sockets = createAudioSockets()
                             if (sockets != null) {
                                 active.audioFormat = format
                                 active.audioData = sockets.first
                                 active.audioControl = sockets.second
+                                audioStreamCreated = true
                                 listener.onAudioStream(format, sockets.first, sockets.second)
                                 responseStreams.add(
                                     plistDict(
@@ -447,6 +524,22 @@ class AirPlayRtspServer(
                 active.announced = true
                 senderName = request.senderName() ?: senderName
                 listener.onSenderIdentified(senderName, mirroring = active.mirroring)
+            }
+
+            // 这次 SETUP 只是重新下发 key（没有建立任何流）：正在跑的收包线程还
+            // 拿着旧 key，不推过去的话之后每个包都会解密失败 —— 这正是「换歌后
+            // 包还在来、解码失败一直涨、没有声音」的一种成因。
+            val liveKey = active.aesKey
+            val liveIv = active.aesIv
+            if (rekeyed && !audioStreamCreated && streams.isNullOrEmpty() &&
+                liveKey != null && liveIv != null && active.audioData != null
+            ) {
+                AirPlayDiagnostics.log(
+                    AirPlayDiagnostics.Level.WARN,
+                    TAG,
+                    "SETUP re-keyed the running audio stream; applying new AES key in place",
+                )
+                listener.onAudioKeysChanged(liveKey, liveIv)
             }
 
             // Classic RAOP (audio-only) SETUP carries ports in the Transport
@@ -495,6 +588,16 @@ class AirPlayRtspServer(
             val control = Regex("control_port=(\\d+)").find(transport)?.groupValues?.get(1)?.toIntOrNull() ?: 0
             val timing = Regex("timing_port=(\\d+)").find(transport)?.groupValues?.get(1)?.toIntOrNull() ?: 0
             return control to timing
+        }
+
+        /**
+         * SETUP `streams[].ct` -> codec, matching UxPlay's `audio_get_format`:
+         * 2 = ALAC, 8 = AAC-ELD, everything else = AAC-LC.
+         */
+        private fun codecForCt(ct: Int): AirPlayCodec = when (ct) {
+            2 -> AirPlayCodec.ALAC
+            8 -> AirPlayCodec.AAC_ELD
+            else -> AirPlayCodec.AAC
         }
 
         private fun defaultAlacFormat(active: Session): AirPlayAudioFormat = AirPlayAudioFormat(

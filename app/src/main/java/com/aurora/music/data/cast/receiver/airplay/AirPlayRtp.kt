@@ -75,6 +75,22 @@ class AirPlayAudioReceiver(
     private val alac: AlacBridge?
     private var aac: AacDecoder? = null
 
+    // 解密参数不能是构造时的常量：发送端可以在同一个会话里重新 SETUP 一套
+    // FairPlay key（Apple Music 换歌 / 结束后重新投播都会这样）。如果这里还用
+    // 旧 key，之后每个包都会解成垃圾 —— 现象正是「包一直在来、解码全失败、
+    // 声音消失」。SETUP 处理路径用 [updateKeys] 把新 key 推进来。
+    @Volatile private var aesKey: ByteArray = format.aesKey
+    @Volatile private var aesIv: ByteArray = format.aesIv
+    @Volatile private var encrypted: Boolean = format.encrypted
+
+    /** 连续解码失败的包数，用于限流日志并给出可操作的诊断提示。 */
+    private var decodeFailureStreak = 0
+
+    private class KeyMaterial(val key: ByteArray, val iv: ByteArray)
+
+    /** 由 RTSP 线程排队、收包线程消费的待切换 key（见 [updateKeys]）。 */
+    @Volatile private var pendingKeys: KeyMaterial? = null
+
     private val pending = TreeMap<Int, RtpPacket>()
     private var expectedSeq = -1
     private var lastTimestamp = -1L
@@ -160,6 +176,49 @@ class AirPlayAudioReceiver(
             lastPcm = null
             consecutiveDecodeFailures = 0
         }
+    }
+
+    /**
+     * 同一会话中途换 AES key。
+     *
+     * 发送端重新 SETUP 时会生成新的 key（和新的 RTP 序列号起点），但 UDP 收包
+     * 线程可能还挂在上一条流上。这里把新 key 交给收包线程（避免从 RTSP 线程
+     * 改乱序窗口），由它在下个包到达前原子切换并重新对齐，避免「换 key 之后
+     * 所有包都解不出来」的死锁状态。
+     */
+    fun updateKeys(key: ByteArray, iv: ByteArray) {
+        pendingKeys = KeyMaterial(key.copyOf(16), iv.copyOf(16))
+        AirPlayDiagnostics.log(
+            AirPlayDiagnostics.Level.WARN,
+            TAG,
+            "AES key update queued (key=${fingerprint(key)})",
+        )
+    }
+
+    /** 由收包线程调用：把 [updateKeys] 排队的 key 应用到一个干净的重对齐状态。 */
+    private fun applyPendingKeys() {
+        val next = pendingKeys ?: return
+        pendingKeys = null
+        aesKey = next.key
+        aesIv = next.iv
+        encrypted = true
+        pending.clear()
+        expectedSeq = -1
+        lastTimestamp = -1
+        lastFrameCount = 0
+        firstRtpTimestamp = -1
+        firstPacketSeen = false
+        lastDecodeMs = 0L
+        gapSinceMs = 0L
+        resendAttempts = 0
+        lastPcm = null
+        consecutiveDecodeFailures = 0
+        decodeFailureStreak = 0
+        AirPlayDiagnostics.log(
+            AirPlayDiagnostics.Level.WARN,
+            TAG,
+            "AES key switched mid-stream (key=${fingerprint(next.key)}); decode window reset",
+        )
     }
 
     fun stop() {
@@ -263,6 +322,7 @@ class AirPlayAudioReceiver(
     }
 
     private fun handleRtp(rtp: RtpPacket, resend: Boolean = false) {
+        applyPendingKeys()
         val now = System.currentTimeMillis()
         if (!resend) AirPlayDiagnostics.recordPacket(rtp.payloadLength)
         if (!firstPacketSeen) {
@@ -428,9 +488,11 @@ class AirPlayAudioReceiver(
             return
         }
         val ptsNs = ptsNs(rtp.timestamp)
-        val decrypted = if (format.encrypted) {
+        val key = aesKey
+        val iv = aesIv
+        val decrypted = if (encrypted) {
             AirPlayCrypto.aesCbcDecrypt(
-                format.aesKey, format.aesIv, rtp.data, rtp.payloadOffset, payloadLength,
+                key, iv, rtp.data, rtp.payloadOffset, payloadLength,
             )
         } else {
             rtp.data.copyOfRange(rtp.payloadOffset, rtp.payloadOffset + payloadLength)
@@ -440,7 +502,8 @@ class AirPlayAudioReceiver(
             AirPlayDiagnostics.log(
                 AirPlayDiagnostics.Level.DEBUG,
                 TAG,
-                "pkt#$debugPackets payload=$payloadLength enc=${format.encrypted} " +
+                "pkt#$debugPackets payload=$payloadLength enc=$encrypted " +
+                    "key=${fingerprint(key)} " +
                     "in=${hex(rtp.data, rtp.payloadOffset, minOf(payloadLength, 32))} " +
                     "out=${hex(decrypted, 0, minOf(decrypted.size, 32))}",
             )
@@ -449,17 +512,14 @@ class AirPlayAudioReceiver(
             AirPlayCodec.ALAC -> {
                 // UxPlay: a 4-byte "no data marker" replaces the payload for
                 // packets that carry no audio (e.g. the first packet after SDP).
-                if (decrypted.size == 4 &&
-                    decrypted[0] == 0x00.toByte() && decrypted[1] == 0x68.toByte() &&
-                    decrypted[2] == 0x34.toByte() && decrypted[3] == 0x00.toByte()
-                ) {
+                if (isNoDataMarker(decrypted)) {
                     return
                 }
                 // A malformed/truncated packet (e.g. a partial marker after a
                 // pause/resume) makes Apple's decoder read past the bitstream and
                 // crash the process; drop anything too short to be a real frame.
                 if (decrypted.size < 8) {
-                    AirPlayDiagnostics.recordDecodeError()
+                    noteDecodeFailure("ALAC payload too short (${decrypted.size}B)", decrypted, rtp.sequence)
                     return
                 }
                 val bridge = alac ?: return
@@ -476,16 +536,11 @@ class AirPlayAudioReceiver(
                 if (frames > 0) {
                     lastDecodeMs = System.currentTimeMillis()
                     consecutiveDecodeFailures = 0
+                    decodeFailureStreak = 0
                     AirPlayDiagnostics.recordDecoded(frames.toLong())
                     emitShorts(pcmScratch, frames * bridge.channels, ptsNs)
                 } else {
-                    AirPlayDiagnostics.recordDecodeError()
-                    AirPlayDiagnostics.log(
-                        AirPlayDiagnostics.Level.WARN,
-                        TAG,
-                        "ALAC decode failed: seq=${rtp.sequence} payload=$payloadLength " +
-                            "first=${hex(decrypted, 0, minOf(8, decrypted.size))}",
-                    )
+                    noteDecodeFailure("ALAC decode returned 0 frames", decrypted, rtp.sequence)
                     // 解码失败不要留下 PTS 洞：用上一块正常 PCM 顶一帧，
                     // 最多连续 3 帧，避免解码器彻底坏掉时一直重复。
                     val previous = lastPcm
@@ -499,6 +554,11 @@ class AirPlayAudioReceiver(
                 }
             }
             AirPlayCodec.AAC, AirPlayCodec.AAC_ELD -> {
+                // 镜像音频的第一批包是 4 字节 no-data marker，AAC 解码器收到它
+                // 会进入错误状态并且再也不产出数据；必须在这里过滤掉。
+                if (isNoDataMarker(decrypted) || decrypted.size < 4) {
+                    return
+                }
                 var produced = 0
                 aac?.decode(decrypted, adts = format.codec == AirPlayCodec.AAC) { pcm, len ->
                     produced += len / 4
@@ -508,9 +568,10 @@ class AirPlayAudioReceiver(
                 if (produced > 0) {
                     lastDecodeMs = System.currentTimeMillis()
                     consecutiveDecodeFailures = 0
+                    decodeFailureStreak = 0
                     AirPlayDiagnostics.recordDecoded(produced.toLong())
                 } else {
-                    AirPlayDiagnostics.recordDecodeError()
+                    noteDecodeFailure("${format.codec} decode produced no PCM", decrypted, rtp.sequence)
                 }
             }
             AirPlayCodec.PCM -> {
@@ -518,11 +579,41 @@ class AirPlayAudioReceiver(
                 if (lastFrameCount > 0) {
                     lastDecodeMs = System.currentTimeMillis()
                     consecutiveDecodeFailures = 0
+                    decodeFailureStreak = 0
                     AirPlayDiagnostics.recordDecoded(lastFrameCount.toLong())
                     onPcm(decrypted, decrypted.size, ptsNs)
                 }
             }
             else -> Unit
+        }
+    }
+
+    /**
+     * 记录一次解码失败。
+     *
+     * 连续失败时只在前几次和每隔若干次输出日志：正常播放 / 静音期间偶发一两个
+     * 坏包非常常见，只有「连续几十个包都失败」才说明 key / 编码格式对不上，
+     * 这时日志里带上当前 key 指纹和前几个字节，能直接和 `audio stream:` 那行
+     * 的 key 对比，不用再靠猜。
+     */
+    private fun noteDecodeFailure(reason: String, payload: ByteArray, seq: Int) {
+        decodeFailureStreak++
+        AirPlayDiagnostics.recordDecodeError()
+        val streak = decodeFailureStreak
+        if (streak <= 3 || streak % 100 == 0) {
+            val hint = if (streak >= 20) {
+                " — 连续失败通常意味着 AES key 没跟上（换了 key 还在用旧的）" +
+                    " 或 codec 与流不匹配，对照上面的 `audio stream:` / `FairPlay key installed`"
+            } else {
+                ""
+            }
+            AirPlayDiagnostics.log(
+                AirPlayDiagnostics.Level.WARN,
+                TAG,
+                "$reason: streak=$streak seq=$seq payload=${payload.size}B " +
+                    "codec=${format.codec} enc=$encrypted key=${fingerprint(aesKey)} " +
+                    "head=${hex(payload, 0, minOf(8, payload.size))}$hint",
+            )
         }
     }
 
@@ -568,6 +659,19 @@ class AirPlayAudioReceiver(
         /** Safety cap only; the real limit is the configured wait time. */
         private const val MAX_PENDING = 128
 
+        /**
+         * RAOP 用 4 字节 `00 68 34 00` 表示「这个包没有音频数据」（UxPlay 的
+         * `empty_packet_marker`）。它不会被加密，也不是任何编码的有效帧。
+         */
+        private fun isNoDataMarker(data: ByteArray): Boolean =
+            data.size == 4 &&
+                data[0] == 0x00.toByte() && data[1] == 0x68.toByte() &&
+                data[2] == 0x34.toByte() && data[3] == 0x00.toByte()
+
+        /** 日志里的 key 指纹：只取前 4 字节，够对比，不泄露整把 key。 */
+        private fun fingerprint(key: ByteArray): String =
+            key.take(4).joinToString("") { "%02x".format(it) }
+
         private fun hex(data: ByteArray, offset: Int, length: Int): String {
             val sb = StringBuilder()
             val end = minOf(offset + length, data.size)
@@ -591,8 +695,16 @@ private class AacDecoder(
     private var codec: MediaCodec? = null
     private var started = false
     private val bufferInfo = MediaCodec.BufferInfo()
+    /** 连续「喂了数据却没有 PCM 输出」的包数，用来识别解码器卡死。 */
+    private var silentDecodes = 0
+    private var recreateCount = 0
+    private var failureLogged = false
 
     init {
+        open()
+    }
+
+    private fun open() {
         runCatching {
             val c = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
             val fmt = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, channels)
@@ -606,13 +718,17 @@ private class AacDecoder(
             c.start()
             codec = c
             started = true
+            silentDecodes = 0
+            failureLogged = false
         }.onFailure {
             Log.w("AirPlayAac", "AAC decoder unavailable: ${it.message}")
         }
     }
 
+    @Synchronized
     fun decode(aacFrame: ByteArray, adts: Boolean, emit: (ByteArray, Int) -> Unit) {
         val c = codec ?: return
+        var emitted = 0
         runCatching {
             val header = if (adts) buildAdts(aacFrame.size) else ByteArray(0)
             val idx = c.dequeueInputBuffer(10_000)
@@ -623,11 +739,52 @@ private class AacDecoder(
                 input.put(aacFrame)
                 c.queueInputBuffer(idx, 0, header.size + aacFrame.size, 0, 0)
             }
-            drain(c, emit)
+            emitted = drain(c, emit)
+        }.onFailure {
+            // MediaCodec 出错后会一直抛 IllegalStateException；不再恢复的话
+            // 这条音频流就永远是「包在来、没有声音」。
+            if (!failureLogged) {
+                failureLogged = true
+                AirPlayDiagnostics.log(
+                    AirPlayDiagnostics.Level.WARN,
+                    "AirPlayAac",
+                    "AAC decode error: ${it.message}",
+                )
+            }
+        }
+        if (emitted > 0) {
+            silentDecodes = 0
+        } else {
+            silentDecodes++
+            if (silentDecodes >= MAX_SILENT_DECODES) {
+                silentDecodes = 0
+                if (recreateCount < MAX_RECREATES) {
+                    recreateCount++
+                    AirPlayDiagnostics.log(
+                        AirPlayDiagnostics.Level.WARN,
+                        "AirPlayAac",
+                        "no PCM output for $MAX_SILENT_DECODES packets; recreating AAC decoder " +
+                            "(eld=$aacEld rate=$sampleRate ch=$channels attempt=$recreateCount)",
+                    )
+                    release()
+                    open()
+                } else if (!failureLogged) {
+                    // 不是解码器卡死就是数据本身不对（key / 编码不匹配）：
+                    // 不再反复重建，日志交给上层判断。
+                    failureLogged = true
+                    AirPlayDiagnostics.log(
+                        AirPlayDiagnostics.Level.ERROR,
+                        "AirPlayAac",
+                        "AAC decoder still produces no PCM after $recreateCount recreations; " +
+                            "check AES key / stream codec",
+                    )
+                }
+            }
         }
     }
 
-    private fun drain(c: MediaCodec, emit: (ByteArray, Int) -> Unit) {
+    private fun drain(c: MediaCodec, emit: (ByteArray, Int) -> Unit): Int {
+        var emitted = 0
         while (true) {
             val idx = c.dequeueOutputBuffer(bufferInfo, 0)
             if (idx == MediaCodec.INFO_TRY_AGAIN_LATER) break
@@ -638,10 +795,12 @@ private class AacDecoder(
                 val bytes = ByteArray(bufferInfo.size)
                 out.position(bufferInfo.offset)
                 out.get(bytes)
+                emitted += bytes.size
                 emit(bytes, bytes.size)
             }
             c.releaseOutputBuffer(idx, false)
         }
+        return emitted
     }
 
     private fun buildAdts(payloadSize: Int): ByteArray {
@@ -664,12 +823,21 @@ private class AacDecoder(
         return h
     }
 
+    @Synchronized
     fun release() {
         val c = codec ?: return
         codec = null
         runCatching { if (started) c.stop() }
         runCatching { c.release() }
         started = false
+    }
+
+    private companion object {
+        /** 连续这么多包没有 PCM 输出就认为解码器坏了（正常解码最多延迟一两包）。 */
+        const val MAX_SILENT_DECODES = 100
+
+        /** 重建有上限：真问题（key / codec 不匹配）重建多少次都没用。 */
+        const val MAX_RECREATES = 3
     }
 }
 
