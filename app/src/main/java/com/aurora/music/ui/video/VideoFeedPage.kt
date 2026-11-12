@@ -53,6 +53,7 @@ internal fun VideoFeedPage(
     val currentNow by rememberUpdatedState(isCurrent)
     val preloadNow by rememberUpdatedState(isPreload)
     val randomNow by rememberUpdatedState(randomStart)
+    val fillNow by rememberUpdatedState(fill)
 
     // 随机起点：随机模式（目录右侧的随机按钮）里每个视频只取一次随机位置，
     // 预加载时就可以先跳过去，滑到它时画面不会先从头放两秒再跳。
@@ -63,6 +64,23 @@ internal fun VideoFeedPage(
     var videoLayout by remember(url) { mutableStateOf<VLCVideoLayout?>(null) }
 
     /**
+     * 双击缩放/上次退出时保存的画面比例。
+     *
+     * 关键点是它不能只在 [fill] 变化时落一次：播放器刚创建时视频输出（vout）和视频尺寸都还没就绪，
+     * 这时 `setVideoScale` 是空操作；等 vout 建立后比例又会被 libVLC 重置回默认。
+     * 所以每次 vout 建立（Vout/Playing/LengthChanged）以及重新 attach 之后都要再落一次。
+     */
+    fun applyVideoScale() {
+        if (player.isReleased) return
+        runCatching {
+            player.setVideoScale(
+                if (fillNow) MediaPlayer.ScaleType.SURFACE_FIT_SCREEN
+                else MediaPlayer.ScaleType.SURFACE_BEST_FIT,
+            )
+        }
+    }
+
+    /**
      * 画面被系统回收（切后台、离屏页的 SurfaceView 被销毁）后，libVLC 会把 views 整个 detach，
      * 回到前台/重新可见时不会自动挂回去，表现就是黑屏或只剩声音。这里在需要时补一次 attach。
      */
@@ -71,6 +89,8 @@ internal fun VideoFeedPage(
         if (player.isReleased) return
         if (player.vlcVout.areViewsAttached()) return
         runCatching { player.attachViews(layout, null, true, false) }
+        // 新 attach 出来的 VideoHelper 默认是 BEST_FIT，补一次当前的缩放。
+        applyVideoScale()
     }
 
     /**
@@ -110,13 +130,18 @@ internal fun VideoFeedPage(
                         preloadNow -> player.volume = 0
                     }
                     applyRandomStartIfNeeded()
+                    // vout 建立后 libVLC 会重置画面比例，这里补一次。
+                    applyVideoScale()
                     progressNow(player.time, player.length, true)
                 }
                 MediaPlayer.Event.LengthChanged -> {
                     if (!positioned) aspectNow(engine.videoAspect(player))
                     applyRandomStartIfNeeded()
+                    // 视频尺寸已知后 `setVideoScale` 才会走 Android View 布局这条路。
+                    applyVideoScale()
                     progressNow(player.time, player.length, player.isPlaying)
                 }
+                MediaPlayer.Event.Vout -> applyVideoScale()
                 MediaPlayer.Event.TimeChanged ->
                     progressNow(player.time, player.length, player.isPlaying)
                 MediaPlayer.Event.Paused ->
@@ -189,14 +214,7 @@ internal fun VideoFeedPage(
     // 双击缩放：普通比例 ↔ 保持纵横比的居中放大裁切。
     // 注意不能用 SURFACE_FILL：那个是不管原始比例的拉伸铺满，会把画面拉变形。
     LaunchedEffect(fill) {
-        if (!player.isReleased) {
-            runCatching {
-                player.setVideoScale(
-                    if (fill) MediaPlayer.ScaleType.SURFACE_FIT_SCREEN
-                    else MediaPlayer.ScaleType.SURFACE_BEST_FIT,
-                )
-            }
-        }
+        applyVideoScale()
     }
 
     AndroidView(
@@ -204,11 +222,7 @@ internal fun VideoFeedPage(
         factory = { ctx ->
             VLCVideoLayout(ctx).also { layout ->
                 videoLayout = layout
-                layout.post {
-                    if (!player.isReleased) {
-                        runCatching { player.attachViews(layout, null, true, false) }
-                    }
-                }
+                layout.post { ensureViewsAttached() }
             }
         },
         onRelease = { layout ->

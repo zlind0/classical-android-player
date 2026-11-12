@@ -1,3 +1,4 @@
 - Always write git commit messages in English (imperative mood, no Chinese).
 - Don't commit unless told.
 - this project is named nostalgiaPod or pod, not aurora
+- if you need vlc's source code, you can see /Users/lin/Documents/Code/vlc-android
