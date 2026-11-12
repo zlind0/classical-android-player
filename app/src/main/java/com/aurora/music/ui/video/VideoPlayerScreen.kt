@@ -86,6 +86,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
 import com.aurora.music.data.video.VideoFeedState
+import com.aurora.music.data.video.VideoFillAspect
 import com.aurora.music.data.video.applyVideoOrientation
 import com.aurora.music.ui.components.MarqueeText
 import com.aurora.music.ui.ios5.Ios5ArrowPopup
@@ -121,6 +122,7 @@ fun VideoPlayerScreen(onClose: () -> Unit) {
     val loop by container.videoFeed.loop.collectAsStateWithLifecycle()
     val shuffle by container.videoFeed.shuffle.collectAsStateWithLifecycle()
     val fill by container.videoFeed.fill.collectAsStateWithLifecycle()
+    val fillAspect by container.videoFeed.fillAspect.collectAsStateWithLifecycle()
     val state = feed ?: return
     if (state.items.isEmpty()) return
 
@@ -139,6 +141,8 @@ fun VideoPlayerScreen(onClose: () -> Unit) {
     var scrubFraction by remember { mutableFloatStateOf(0f) }
     var trackMenu by remember { mutableStateOf(TrackMenu.None) }
     var trackMenuAnchor by remember { mutableStateOf(Rect.Zero) }
+    var ratioMenu by remember { mutableStateOf(false) }
+    var ratioMenuAnchor by remember { mutableStateOf(Rect.Zero) }
     val sleepTimer by container.sleepTimer.timer.collectAsStateWithLifecycle()
     var sleepBubble by remember { mutableStateOf(false) }
     var videoSleepDeadline by remember { mutableLongStateOf(0L) }
@@ -231,6 +235,8 @@ fun VideoPlayerScreen(onClose: () -> Unit) {
                         isCurrent = page == pagerState.currentPage,
                         isPreload = page == pagerState.currentPage + 1,
                         fill = fill,
+                        // 横屏不套用竖屏比例限制；0 表示按原来的整屏裁切。
+                        maxAspect = if (landscape) 0f else fillAspect.ratio,
                         loop = loop,
                         randomStart = state.shuffled,
                         onAspect = { value -> if (page == pagerState.currentPage) aspect = value },
@@ -398,6 +404,12 @@ fun VideoPlayerScreen(onClose: () -> Unit) {
                             trackMenu = TrackMenu.Audio
                         },
                         onMoon = { sleepBubble = true },
+                        fillAspect = fillAspect,
+                        fillActive = fill,
+                        onFillAspect = { anchor ->
+                            ratioMenuAnchor = anchor
+                            ratioMenu = true
+                        },
                         modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
                         evenly = true,
                     )
@@ -453,6 +465,20 @@ fun VideoPlayerScreen(onClose: () -> Unit) {
             anchor = trackMenuAnchor,
             onDismiss = { trackMenu = TrackMenu.None },
         )
+
+        // 竖屏最大缩放比例菜单
+        if (ratioMenu) {
+            FillAspectDropdown(
+                anchor = ratioMenuAnchor,
+                current = fillAspect,
+                onSelect = {
+                    container.videoFeed.setFillAspect(it)
+                    // 选完立刻按新比例放大，用户能马上看到“多出来的画面”。
+                    container.videoFeed.setFill(true)
+                },
+                onDismiss = { ratioMenu = false },
+            )
+        }
 
         // 睡眠定时气泡（与音乐/听书共用同一个后台）
         if (sleepBubble) {
@@ -565,11 +591,16 @@ private fun VideoTrackToggles(
     onSubtitle: (Rect) -> Unit,
     onAudio: (Rect) -> Unit,
     onMoon: () -> Unit,
+    /** 只在竖屏传非空：显示“竖屏最大缩放比例”按钮。 */
+    fillAspect: VideoFillAspect? = null,
+    fillActive: Boolean = false,
+    onFillAspect: (Rect) -> Unit = {},
     modifier: Modifier = Modifier,
     evenly: Boolean = false,
 ) {
     var subtitleBounds by remember { mutableStateOf(Rect.Zero) }
     var audioBounds by remember { mutableStateOf(Rect.Zero) }
+    var fillAspectBounds by remember { mutableStateOf(Rect.Zero) }
     Row(
         modifier.padding(horizontal = if (evenly) 0.dp else 8.dp, vertical = 2.dp),
         horizontalArrangement = if (evenly) {
@@ -592,6 +623,44 @@ private fun VideoTrackToggles(
         VideoToggle(Icons.Filled.Repeat, "循环", loop, true, onLoop)
         VideoToggle(Icons.Filled.Shuffle, "随机", shuffle, true, onShuffle)
         VideoToggle(Icons.Filled.Bedtime, "睡眠定时", moonActive, true, onMoon)
+        if (fillAspect != null) {
+            VideoRatioToggle(
+                text = fillAspect.label,
+                active = fillActive,
+                onClick = { onFillAspect(fillAspectBounds) },
+                onBounds = { fillAspectBounds = it },
+            )
+        }
+    }
+}
+
+/** 竖屏最大缩放比例按钮：按钮本身就是当前比例的文字。 */
+@Composable
+private fun VideoRatioToggle(
+    text: String,
+    active: Boolean,
+    onClick: () -> Unit,
+    onBounds: (Rect) -> Unit,
+) {
+    Box(
+        Modifier.size(38.dp)
+            .onGloballyPositioned { onBounds(it.boundsInWindow()) }
+            .clip(RoundedCornerShape(7.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text,
+            color = if (active) Ios5Colors.TabIconOnTop else Color.White.copy(alpha = 0.72f),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = Ios5Sans,
+            maxLines = 1,
+        )
     }
 }
 
@@ -713,6 +782,33 @@ private fun TrackMenuDropdown(
                         TrackMenu.Audio -> player?.setAudioTrack(track.id)
                         TrackMenu.None -> Unit
                     }
+                    onDismiss()
+                },
+            )
+        }
+    }
+}
+
+/** 竖屏最大缩放比例菜单：1:1 / 3:4 / 9:16 / 9:21。 */
+@Composable
+private fun FillAspectDropdown(
+    anchor: Rect,
+    current: VideoFillAspect,
+    onSelect: (VideoFillAspect) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Ios5ArrowPopup(
+        anchor = anchor,
+        onDismiss = onDismiss,
+        title = "竖屏最大比例",
+    ) {
+        VideoFillAspect.entries.forEachIndexed { index, aspect ->
+            if (index > 0) Ios5PopoverDivider()
+            Ios5PopoverItem(
+                text = aspect.label,
+                selected = aspect == current,
+                onClick = {
+                    onSelect(aspect)
                     onDismiss()
                 },
             )

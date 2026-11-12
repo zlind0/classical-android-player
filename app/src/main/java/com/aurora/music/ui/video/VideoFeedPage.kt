@@ -1,14 +1,18 @@
 package com.aurora.music.ui.video
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -36,6 +40,8 @@ internal fun VideoFeedPage(
     isCurrent: Boolean,
     isPreload: Boolean,
     fill: Boolean,
+    /** 竖屏放大时允许的最大裁切比例（宽/高）；0 表示不限制（横屏）。 */
+    maxAspect: Float,
     loop: Boolean,
     randomStart: Boolean,
     onAspect: (Float) -> Unit,
@@ -62,6 +68,8 @@ internal fun VideoFeedPage(
     var started by remember(url) { mutableStateOf(false) }
     var positioned by remember(url) { mutableStateOf(false) }
     var videoLayout by remember(url) { mutableStateOf<VLCVideoLayout?>(null) }
+    // 本页视频自身的宽高比；和下面 maxAspect 一起决定放大时画面盒子的比例。
+    var videoAspect by remember(url) { mutableFloatStateOf(0f) }
 
     /**
      * 双击缩放/上次退出时保存的画面比例。
@@ -119,9 +127,11 @@ internal fun VideoFeedPage(
         val listener = MediaPlayer.EventListener { event ->
             when (event.type) {
                 MediaPlayer.Event.Playing -> {
+                    val aspect = engine.videoAspect(player)
+                    if (aspect > 0f) videoAspect = aspect
                     if (!positioned) {
                         positioned = true
-                        aspectNow(engine.videoAspect(player))
+                        aspectNow(aspect)
                     }
                     ensureAudioTrackSelected()
                     // 音量在音频输出真正建立后再落一次，避免预加载静音后恢复时偶发没声音。
@@ -135,7 +145,9 @@ internal fun VideoFeedPage(
                     progressNow(player.time, player.length, true)
                 }
                 MediaPlayer.Event.LengthChanged -> {
-                    if (!positioned) aspectNow(engine.videoAspect(player))
+                    val aspect = engine.videoAspect(player)
+                    if (aspect > 0f) videoAspect = aspect
+                    if (!positioned) aspectNow(aspect)
                     applyRandomStartIfNeeded()
                     // 视频尺寸已知后 `setVideoScale` 才会走 Android View 布局这条路。
                     applyVideoScale()
@@ -217,18 +229,32 @@ internal fun VideoFeedPage(
         applyVideoScale()
     }
 
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { ctx ->
-            VLCVideoLayout(ctx).also { layout ->
-                videoLayout = layout
-                layout.post { ensureViewsAttached() }
-            }
-        },
-        onRelease = { layout ->
-            if (videoLayout === layout) videoLayout = null
-        },
-    )
+    // 竖屏放大时把画面限制在一个居中的盒子里：
+    // 盒子比例 = min(视频自身比例, 用户选择的最大比例)。
+    // 横屏视频（比例更大）会裁左右；竖屏视频（比例更小）盒子等于视频比例，绝不裁上下。
+    val videoBoxAspect = if (fill && maxAspect > 0f && videoAspect > 0f) {
+        minOf(videoAspect, maxAspect)
+    } else {
+        0f
+    }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        AndroidView(
+            modifier = if (videoBoxAspect > 0f) {
+                Modifier.aspectRatio(videoBoxAspect)
+            } else {
+                Modifier.fillMaxSize()
+            },
+            factory = { ctx ->
+                VLCVideoLayout(ctx).also { layout ->
+                    videoLayout = layout
+                    layout.post { ensureViewsAttached() }
+                }
+            },
+            onRelease = { layout ->
+                if (videoLayout === layout) videoLayout = null
+            },
+        )
+    }
 }
 
 /** 把毫秒格式化成 `m:ss` / `h:mm:ss`。 */

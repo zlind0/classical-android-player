@@ -7,6 +7,19 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+/**
+ * 竖屏双击放大时画面最多裁到的比例（宽:高）。
+ *
+ * 比例越“宽”（1:1）裁掉的左右画面越少、上下留黑越多；越“窄”（9:21）越接近铺满竖屏。
+ * 竖屏视频比所选比例更窄时不会为了填满比例去裁上下，只会按视频自身比例显示。
+ */
+enum class VideoFillAspect(val label: String, val ratio: Float) {
+    Square("1:1", 1f),
+    ThreeFour("3:4", 3f / 4f),
+    NineSixteen("9:16", 9f / 16f),
+    NineTwentyOne("9:21", 9f / 21f),
+}
+
 /** 一次短视频播放现场：服务器 + 目录 + 当前条目列表。 */
 data class VideoFeedState(
     val deviceId: String = "",
@@ -61,6 +74,13 @@ class VideoFeedController(
     private val _fill = MutableStateFlow(prefs.getBoolean("fill", false))
     val fill: StateFlow<Boolean> = _fill.asStateFlow()
 
+    /** 竖屏双击放大时的最大裁切比例，落盘沿用。 */
+    private val _fillAspect = MutableStateFlow(
+        VideoFillAspect.entries.firstOrNull { it.name == prefs.getString("fill_aspect", null) }
+            ?: VideoFillAspect.NineTwentyOne,
+    )
+    val fillAspect: StateFlow<VideoFillAspect> = _fillAspect.asStateFlow()
+
     fun setLoop(value: Boolean) {
         _loop.value = value
         prefs.edit().putBoolean("loop", value).apply()
@@ -74,6 +94,12 @@ class VideoFeedController(
     fun setFill(value: Boolean) {
         _fill.value = value
         prefs.edit().putBoolean("fill", value).apply()
+    }
+
+    fun setFillAspect(value: VideoFillAspect) {
+        if (_fillAspect.value == value) return
+        _fillAspect.value = value
+        prefs.edit().putString("fill_aspect", value.name).apply()
     }
 
     /** 从文件浏览器里点某个视频：播放这个目录的视频，从它开始。 */
