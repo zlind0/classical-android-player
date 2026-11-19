@@ -58,6 +58,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aurora.music.AuroraApplication
+import com.aurora.music.R
 import com.aurora.music.data.audiobook.AudiobookBook
 import com.aurora.music.ui.components.MarqueeText
 import com.aurora.music.ui.components.TrackArtwork
@@ -306,6 +307,7 @@ fun Ios5AudiobookPlayerPage(
                             Modifier.fillMaxSize(),
                             corner = 0.dp,
                             fullQuality = true,
+                            placeholderRes = R.drawable.audiobook,
                         )
                     }
                 }

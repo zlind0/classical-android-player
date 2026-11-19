@@ -149,6 +149,10 @@ data class RemoteChapterWire(
     val trackNumber: Int = 0,
     val durationSec: Int = 0,
     val size: Long = 0L,
+    /** m4b 内嵌章节：文件内起点毫秒（普通文件为 0）。 */
+    val startMs: Long = 0L,
+    /** m4b 内嵌章节：文件内终点毫秒（0 = 播到文件末尾）。 */
+    val endMs: Long = 0L,
 )
 
 data class RemoteAudiobookWire(

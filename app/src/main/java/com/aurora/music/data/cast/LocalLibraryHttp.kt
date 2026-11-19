@@ -117,6 +117,8 @@ class LocalLibraryHttpProvider(
                         trackNumber = c.trackNumber,
                         durationSec = c.durationSec,
                         size = c.size,
+                        startMs = c.startMs,
+                        endMs = c.endMs,
                     )
                 },
             )
@@ -293,7 +295,16 @@ class LocalLibraryHttpProvider(
                     "audiobook" -> runCatching { audiobookProvider().firstOrNull { it.id == key }?.coverPath }.getOrNull()
                     else -> null
                 }
-                if (cover.isNullOrBlank()) sendDefaultArt(out) else sendImageUri(out, cover)
+                if (cover.isNullOrBlank()) {
+                    sendDefaultArt(
+                        out,
+                        when (kind) {
+                            "ebook" -> com.aurora.music.R.drawable.book
+                            "audiobook" -> com.aurora.music.R.drawable.audiobook
+                            else -> com.aurora.music.R.drawable.default_cover
+                        },
+                    )
+                } else sendImageUri(out, cover)
                 true
             }
             else -> false
@@ -362,10 +373,10 @@ class LocalLibraryHttpProvider(
         }
     }
 
-    private fun sendDefaultArt(out: OutputStream) {
+    private fun sendDefaultArt(out: OutputStream, res: Int = com.aurora.music.R.drawable.default_cover) {
         val bytes = runCatching {
             val bmp = android.graphics.BitmapFactory.decodeResource(
-                appContext.resources, com.aurora.music.R.drawable.default_cover,
+                appContext.resources, res,
             ) ?: return@runCatching null
             java.io.ByteArrayOutputStream().use { bos ->
                 bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bos)

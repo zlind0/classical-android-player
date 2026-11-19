@@ -80,6 +80,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import com.aurora.music.AuroraApplication
+import com.aurora.music.R
 import com.aurora.music.data.LibrarySource
 import com.aurora.music.data.cast.CastContentType
 import com.aurora.music.data.lookupMergedTitle
@@ -128,7 +129,12 @@ fun Ios5MiniStrip(
             .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TrackArtwork(song, Modifier.size(38.dp), corner = 8.dp)
+        TrackArtwork(
+            song,
+            Modifier.size(38.dp),
+            corner = 8.dp,
+            placeholderRes = if (state.abookId != null) R.drawable.audiobook else R.drawable.default_cover,
+        )
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -821,7 +827,13 @@ fun Ios5LandscapeSidePlayer(
                     Modifier.fillMaxWidth().height(coverSide),
                     contentAlignment = Alignment.Center,
                 ) {
-                    TrackArtwork(song, Modifier.size(coverSide), corner = 0.dp, fullQuality = true)
+                    TrackArtwork(
+                        song,
+                        Modifier.size(coverSide),
+                        corner = 0.dp,
+                        fullQuality = true,
+                        placeholderRes = if (mode == NowPlayingMode.AUDIOBOOK) R.drawable.audiobook else R.drawable.default_cover,
+                    )
                     if (mode.isReceive && caption.isNotBlank()) {
                         Text(
                             caption,

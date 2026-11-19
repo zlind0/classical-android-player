@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aurora.music.AuroraApplication
+import com.aurora.music.R
 import com.aurora.music.data.cast.RemoteDownloadKind
 import com.aurora.music.data.ebook.EBOOK_SHELF_ROOT_ID
 import com.aurora.music.ui.components.Artwork
@@ -289,11 +290,13 @@ internal fun EbookRow(
             com.aurora.music.ui.components.Ios5RemoteStatusIcon()
             Spacer(Modifier.width(8.dp))
         }
-        if (coverPath.isNotBlank()) {
-            Artwork(coverPath, accentFor(accentKey), Modifier.size(44.dp, 60.dp), corner = 4.dp)
-        } else {
-            Icon(Icons.Filled.Book, null, tint = Ios5Colors.TextSecondary, modifier = Modifier.size(44.dp))
-        }
+        Artwork(
+            url = coverPath,
+            accent = accentFor(accentKey),
+            modifier = Modifier.size(44.dp, 60.dp),
+            corner = 4.dp,
+            placeholderRes = R.drawable.book,
+        )
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(

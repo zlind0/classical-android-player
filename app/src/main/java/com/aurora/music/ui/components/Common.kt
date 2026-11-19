@@ -47,6 +47,7 @@ fun Artwork(
     corner: Dp = 12.dp,
     contentScale: ContentScale = ContentScale.Crop,
     fullQuality: Boolean = false,
+    placeholderRes: Int = R.drawable.default_cover,
 ) {
     // Keep flush artwork and circular avatars intact; frame music covers to match the identity.
     val artCorner = if (corner == 0.dp || corner >= 22.dp) corner else when (LocalUiPrefs.current.themeStyle) {
@@ -59,7 +60,7 @@ fun Artwork(
     // 曾经加载失败的 URI 会被记住，后面直接给默认图，不再发第二次请求。
     if (url.isBlank() || failedArtwork.contains(url)) {
         Image(
-            painter = painterResource(R.drawable.default_cover),
+            painter = painterResource(placeholderRes),
             contentDescription = null,
             contentScale = contentScale,
             modifier = modifier.clip(RoundedCornerShape(artCorner)),
@@ -83,7 +84,7 @@ fun Artwork(
             modifier = Modifier.fillMaxSize(),
             loading = {
                 Image(
-                    painter = painterResource(R.drawable.default_cover),
+                    painter = painterResource(placeholderRes),
                     contentDescription = null,
                     contentScale = contentScale,
                     modifier = Modifier.fillMaxSize(),
@@ -93,7 +94,7 @@ fun Artwork(
                 // 纯内存标记，不触发重组；下次直接走上面的默认图分支
                 failedArtwork.add(url)
                 Image(
-                    painter = painterResource(R.drawable.default_cover),
+                    painter = painterResource(placeholderRes),
                     contentDescription = null,
                     contentScale = contentScale,
                     modifier = Modifier.fillMaxSize(),

@@ -33,6 +33,9 @@ data class SavedTrack(
     val liked: Boolean = false,
     val explicit: Boolean = false,
     val genre: String? = "",
+    // 有声书 m4b 内嵌章节：文件内播放区间（毫秒）。end = 0 表示播到文件末尾。
+    val clipStartMs: Long = 0L,
+    val clipEndMs: Long = 0L,
 ) {
     fun toSong(): Song = Song(
         id = id ?: "", title = title ?: "", artist = artist ?: "", album = album ?: "",
@@ -40,6 +43,7 @@ data class SavedTrack(
         accent = accentFor(id ?: ""), streamUrl = streamUrl ?: "", albumId = albumId ?: "", artistId = artistId ?: "",
         suffix = suffix ?: "", bitrateKbps = bitrateKbps, sampleRateHz = sampleRateHz, bitDepth = bitDepth,
         replayGainTrack = replayGainTrack, replayGainAlbum = replayGainAlbum, path = path ?: "", genre = genre ?: "",
+        clipStartMs = clipStartMs, clipEndMs = clipEndMs,
     )
 }
 
@@ -48,7 +52,7 @@ fun Song.toSavedTrack(): SavedTrack = SavedTrack(
     albumId = albumId, artistId = artistId, suffix = suffix, path = path, durationSec = durationSec,
     bitrateKbps = bitrateKbps, sampleRateHz = sampleRateHz, bitDepth = bitDepth,
     replayGainTrack = replayGainTrack, replayGainAlbum = replayGainAlbum, liked = liked, explicit = explicit,
-    genre = genre,
+    genre = genre, clipStartMs = clipStartMs, clipEndMs = clipEndMs,
 )
 
 data class SavedQueue(

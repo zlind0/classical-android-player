@@ -431,7 +431,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             val gain = prog?.gain ?: 1f
             c.playbackParameters = PlaybackParameters(speed, 1f)
             container.abookSession.setActive(abookId, gain)
-            container.abookSession.setCurrentPath(songs[idx].path)
+            container.abookSession.setCurrentChapter(songs[idx].path, songs[idx].clipStartMs)
             val delivery = deliverQueue(songs, idx, sq.positionSec.toLong() * 1000)
             c.repeatMode = when (sq.repeat) { 1 -> Player.REPEAT_MODE_ALL; 2 -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_OFF }
             c.prepare()   // buffer at saved position
@@ -485,6 +485,8 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
                 streamUrl = mi.localConfiguration?.uri?.toString() ?: "",
                 replayGainTrack = md.extras?.getFloat("rgTrack", 0f) ?: 0f,
                 replayGainAlbum = md.extras?.getFloat("rgAlbum", 0f) ?: 0f,
+                clipStartMs = mi.clippingConfiguration.startPositionMs.coerceAtLeast(0L),
+                clipEndMs = mi.clippingConfiguration.endPositionMs.takeIf { it > 0L } ?: 0L,
             )
         }
         songById = songs.associateBy { it.id }
@@ -525,6 +527,8 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
                     path = ch.path,
                     accent = com.aurora.music.util.accentFor(ch.path),
                     trackNumber = ch.trackNumber,
+                    clipStartMs = ch.startMs,
+                    clipEndMs = ch.endMs,
                 )
             }
             if (songs.isEmpty()) return@launch
@@ -539,7 +543,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             c.playbackParameters = PlaybackParameters(speed, 1f)
             _state.update { it.copy(abookId = bookId, abookSpeed = speed, abookGain = gain) }
             syncFromController()
-            container.abookSession.setCurrentPath(_state.value.current.path)
+            container.abookSession.setCurrentChapter(_state.value.current.path, _state.value.current.clipStartMs)
         }
     }
 
@@ -698,6 +702,17 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun toMediaItem(song: Song): MediaItem = MediaItem.Builder()
         .setMediaId(song.id)
         .setUri(song.streamUrl)
+        .apply {
+            // 有声书 m4b 内嵌章节：只播本区间，播完自动进下一章。
+            if (song.clipEndMs > song.clipStartMs) {
+                setClippingConfiguration(
+                    MediaItem.ClippingConfiguration.Builder()
+                        .setStartPositionMs(song.clipStartMs.coerceAtLeast(0L))
+                        .setEndPositionMs(song.clipEndMs)
+                        .build(),
+                )
+            }
+        }
         .setMediaMetadata(
             MediaMetadata.Builder()
                 .setTitle(song.title)
@@ -779,7 +794,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             val clampedSpeed = speed.coerceIn(0.5f, 4f)
             val clampedGain = gain.coerceIn(0.5f, 2f)
             container.abookSession.setActive(bookId, clampedGain)
-            container.abookSession.setCurrentPath(songs[idx].path)
+            container.abookSession.setCurrentChapter(songs[idx].path, songs[idx].clipStartMs)
             // 共存：先等 service 丢掉独占焦点再起播，否则 GAIN 瞬间暂停站外
             val allowMix = runCatching { container.settingsStore.audiobookPrefs.first().allowMix }
                 .getOrDefault(false)
@@ -875,10 +890,10 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         val bookId = abookBookIdOf(mediaId) ?: return
         val song = songById[mediaId] ?: return
         // 迟到的旧书事件不再碰会话，避免污染当前书的增益/快进路径。
-        if (_state.value.abookId == bookId) container.abookSession.setCurrentPath(song.path)
+        if (_state.value.abookId == bookId) container.abookSession.setCurrentChapter(song.path, song.clipStartMs)
         // 切章即记新章 0 位（ticker 随后会跟进精确位置）
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { container.audiobookStore.savePos(bookId, song.path, 0L) }
+            runCatching { container.audiobookStore.savePos(bookId, song.path, song.clipStartMs, 0L) }
         }
     }
 
@@ -887,14 +902,14 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         val bookId = st.abookId ?: return
         val song = st.current
         if (!isAbookSong(song.id) || song.path.isBlank()) return
-        container.abookSession.setCurrentPath(song.path)
+        container.abookSession.setCurrentChapter(song.path, song.clipStartMs)
         // 双播时会话是书的朗读占位，controller.currentPosition 是朗读位置，不能当有声书进度；
         // 快照正好是音乐 player（本书章节）时用它。
         val ms = container.musicState.value
         val posMs = (if (ms.mediaId == song.id) ms.positionMs
             else (controller?.currentPosition ?: (st.positionSec * 1000).toLong())).coerceAtLeast(0L)
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { container.audiobookStore.savePos(bookId, song.path, posMs) }
+            runCatching { container.audiobookStore.savePos(bookId, song.path, song.clipStartMs, posMs) }
         }
     }
 
@@ -912,7 +927,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         val ms = container.musicState.value
         val posMs = (if (ms.mediaId == song.id) ms.positionMs
             else (c?.currentPosition ?: (st.positionSec * 1000).toLong())).coerceAtLeast(0L)
-        runCatching { container.audiobookStore.savePosSync(oldId, song.path, posMs) }
+        runCatching { container.audiobookStore.savePosSync(oldId, song.path, song.clipStartMs, posMs) }
     }
 
     private fun clearAbook() {

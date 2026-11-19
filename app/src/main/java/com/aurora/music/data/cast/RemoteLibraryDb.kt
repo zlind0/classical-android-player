@@ -35,7 +35,7 @@ internal data class RemoteLibrarySnapshot(
  */
 internal object RemoteLibraryDb {
 
-    private const val SCHEMA_VERSION = 6
+    private const val SCHEMA_VERSION = 7
     private const val DB_EXT = ".db"
 
     fun file(dir: File, deviceId: String): File = File(dir, safeId(deviceId) + DB_EXT)
@@ -132,7 +132,7 @@ internal object RemoteLibraryDb {
 
             val chaptersByBook = HashMap<Long, MutableList<RemoteChapterWire>>()
             it.rawQuery(
-                "SELECT bookOrd, path, title, trackNumber, durationSec, size FROM chapters " +
+                "SELECT bookOrd, path, title, trackNumber, durationSec, size, startMs, endMs FROM chapters " +
                     "ORDER BY bookOrd, ord",
                 null,
             ).use { c ->
@@ -143,6 +143,8 @@ internal object RemoteLibraryDb {
                         trackNumber = c.getInt(3),
                         durationSec = c.getInt(4),
                         size = c.getLong(5),
+                        startMs = c.getLong(6),
+                        endMs = c.getLong(7),
                     )
                 }
             }
@@ -296,6 +298,8 @@ internal object RemoteLibraryDb {
                         chapter.put("trackNumber", c.trackNumber)
                         chapter.put("durationSec", c.durationSec)
                         chapter.put("size", c.size)
+                        chapter.put("startMs", c.startMs)
+                        chapter.put("endMs", c.endMs)
                         it.insert("chapters", null, chapter)
                     }
                 }
@@ -391,7 +395,8 @@ internal object RemoteLibraryDb {
                     "CREATE TABLE chapters (" +
                         "bookOrd INTEGER NOT NULL, ord INTEGER NOT NULL, path TEXT NOT NULL, " +
                         "title TEXT NOT NULL, trackNumber INTEGER NOT NULL, durationSec INTEGER NOT NULL, " +
-                        "size INTEGER NOT NULL, PRIMARY KEY(bookOrd, ord))",
+                        "size INTEGER NOT NULL, startMs INTEGER NOT NULL, endMs INTEGER NOT NULL, " +
+                        "PRIMARY KEY(bookOrd, ord))",
                 )
                 db.execSQL(
                     "CREATE TABLE video_roots (" +

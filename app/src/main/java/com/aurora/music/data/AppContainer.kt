@@ -211,7 +211,8 @@ class AppContainer(context: Context) {
     // 有声书栈：独立 Room 库 + 仓库 + 扫描器（书=根下直接子目录，章=书内音频文件）
     private val audiobookDb: com.aurora.music.data.audiobook.AudiobookDb = Room.databaseBuilder(
         appContext, com.aurora.music.data.audiobook.AudiobookDb::class.java, "audiobook_library.db",
-    ).fallbackToDestructiveMigration().build()
+    ).addMigrations(com.aurora.music.data.audiobook.AudiobookDb.MIGRATION_1_2)
+        .fallbackToDestructiveMigration().build()
     val audiobookStore = com.aurora.music.data.audiobook.AudiobookStore(appContext, audiobookDb.audiobookDao())
     val audiobookScanner = com.aurora.music.data.audiobook.AudiobookScanner(audiobookStore, audiobookDb.audiobookDao())
 

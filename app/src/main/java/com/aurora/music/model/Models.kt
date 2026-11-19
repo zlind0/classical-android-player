@@ -35,6 +35,9 @@ data class Song(
     val available: Boolean = true,
     // AirPlay 接收且发送端没给封面：展示 AirPlay 专用占位图而不是通用默认封面
     val airplayPlaceholder: Boolean = false,
+    // 有声书 m4b 内嵌章节：文件内播放区间（毫秒）。endMs = 0 表示播到文件末尾。
+    val clipStartMs: Long = 0L,
+    val clipEndMs: Long = 0L,
 )
 
 data class Album(

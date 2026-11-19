@@ -41,6 +41,7 @@ fun TrackArtwork(
     corner: Dp = 12.dp,
     contentScale: ContentScale = ContentScale.Crop,
     fullQuality: Boolean = false,
+    placeholderRes: Int = R.drawable.default_cover,
 ) {
     val context = LocalContext.current
     // 上层新图目标 (songId, url)，url 空 = 无；底层已确认显示的 URL（"" = 默认图）
@@ -88,7 +89,7 @@ fun TrackArtwork(
             DefaultCover(
                 contentScale = contentScale,
                 corner = artCorner,
-                drawableRes = if (song.airplayPlaceholder) R.drawable.airplay_cover else R.drawable.default_cover,
+                drawableRes = if (song.airplayPlaceholder) R.drawable.airplay_cover else placeholderRes,
             )
         }
         // 上层只加载本首的目标；切歌瞬间旧目标即下线，绝不把旧歌盖到新歌上

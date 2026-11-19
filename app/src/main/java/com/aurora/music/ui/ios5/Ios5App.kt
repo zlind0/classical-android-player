@@ -601,15 +601,22 @@ fun Ios5App() {
                 path = c.path,
                 accent = com.aurora.music.util.accentFor(c.path),
                 trackNumber = c.trackNumber,
+                clipStartMs = c.startMs,
+                clipEndMs = c.endMs,
             )
         }
         val savedPath = prog?.currentPath.orEmpty()
-        // 先按完整路径找回；书目录改名/大小小差异导致对不上时按文件名兜底，别静默从头开始。
-        val idx = book.chapters.indexOfFirst { it.path == savedPath }.takeIf { it >= 0 }
-            ?: savedPath.substringAfterLast('/').takeIf { it.isNotEmpty() }?.let { name ->
-                book.chapters.indexOfFirst { it.path.substringAfterLast('/') == name }
-            }?.takeIf { it >= 0 } ?: 0
-        val pos = if (book.chapters.getOrNull(idx)?.path == savedPath) prog?.positionMs ?: 0L else 0L
+        val savedStart = prog?.currentStartMs ?: 0L
+        // 先按 (完整路径, 文件内起点) 找回；重扫后章节边界变化时退回该文件第一章；
+        // 书目录改名/大小小差异导致对不上时按文件名兜底，别静默从头开始。
+        val exact = book.chapters.indexOfFirst { it.path == savedPath && it.startMs == savedStart }
+            .takeIf { it >= 0 }
+        val sameFile = book.chapters.indexOfFirst { it.path == savedPath }.takeIf { it >= 0 }
+        val byName = savedPath.substringAfterLast('/').takeIf { it.isNotEmpty() }?.let { name ->
+            book.chapters.indexOfFirst { it.path.substringAfterLast('/') == name }
+        }?.takeIf { it >= 0 }
+        val idx = exact ?: sameFile ?: byName ?: 0
+        val pos = if (exact != null) prog?.positionMs ?: 0L else 0L
         container.haptic()
         if (!playerVM.hasController()) confirm("正在连接播放服务，连上就播")
         playerVM.playAudiobook(bookId, songs, idx, pos, prog?.speed ?: 1f, prog?.gain ?: 1f)
@@ -1818,10 +1825,13 @@ fun Ios5App() {
                                         trackNumber = c.trackNumber,
                                         durationSec = c.durationSec,
                                         size = c.size,
+                                        startMs = c.startMs,
+                                        endMs = c.endMs,
                                     )
                                 },
                                 coverPath = e.coverUrl,
                                 currentPath = e.chapters.getOrNull(e.currentIndex)?.path.orEmpty(),
+                                currentStartMs = e.chapters.getOrNull(e.currentIndex)?.startMs ?: 0L,
                                 positionMs = e.positionMs,
                                 lastPlayedAt = e.lastPlayedAt,
                             )
@@ -2000,10 +2010,13 @@ fun Ios5App() {
                                     trackNumber = c.trackNumber,
                                     durationSec = c.durationSec,
                                     size = c.size,
+                                    startMs = c.startMs,
+                                    endMs = c.endMs,
                                 )
                             },
                             coverPath = e.coverUrl,
                             currentPath = e.chapters.getOrNull(e.currentIndex)?.path.orEmpty(),
+                            currentStartMs = e.chapters.getOrNull(e.currentIndex)?.startMs ?: 0L,
                             positionMs = e.positionMs,
                             lastPlayedAt = e.lastPlayedAt,
                         )

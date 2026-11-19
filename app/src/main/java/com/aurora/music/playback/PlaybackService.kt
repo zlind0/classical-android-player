@@ -892,8 +892,9 @@ class PlaybackService : MediaLibraryService() {
         val bookId = mediaId.removePrefix(com.aurora.music.data.audiobook.ABOOK_ID_PREFIX)
             .substringBeforeLast('#', "").ifBlank { return }
         val path = container.abookSession.currentPath.value.ifBlank { return }
+        val startMs = container.abookSession.currentStartMs.value
         scope.launch(Dispatchers.IO) {
-            runCatching { container.audiobookStore.savePos(bookId, path, pos) }
+            runCatching { container.audiobookStore.savePos(bookId, path, startMs, pos) }
         }
     }
 

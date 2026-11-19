@@ -16,7 +16,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 // 有声书仓库：扫描根 CRUD、书/章节组装（含关键字过滤）、每书记忆。
-// 章节排序：trackNumber 优先（缺失沉底），其次完整 path 自然序。
+// 章节排序：先按"文件"分组（trackNumber 优先、缺失沉底，其次完整 path 自然序），
+// 文件内再按 startMs 排（普通文件只有一行）。
 class AudiobookStore(context: Context, private val dao: AudiobookDao) {
 
     private val appContext = context.applicationContext
@@ -75,14 +76,8 @@ class AudiobookStore(context: Context, private val dao: AudiobookDao) {
             val rows = dao.chaptersOfRoot(r.id)
             val byBook = rows.groupBy { it.bookId }
             for ((bookId, rs) in byBook) {
-                val sorted = rs.sortedWith { a, b ->
-                    val ta = if (a.trackNumber == 0) Int.MAX_VALUE else a.trackNumber
-                    val tb = if (b.trackNumber == 0) Int.MAX_VALUE else b.trackNumber
-                    if (ta != tb) ta.compareTo(tb) else naturalStringOrder.compare(a.path, b.path)
-                }
-                val total = sorted.map {
-                    AudiobookChapter(it.path, it.title, it.trackNumber, it.durationSec, it.size, it.lastModified)
-                }
+                val sorted = sortedRows(rs)
+                val total = sorted.map { it.toChapter() }
                 val skipped = total.count { chapterSkipped(it.displayTitle, skipKeywords) }
                 val kept = total.filterNot { chapterSkipped(it.displayTitle, skipKeywords) }
                 if (kept.isEmpty()) continue
@@ -95,6 +90,7 @@ class AudiobookStore(context: Context, private val dao: AudiobookDao) {
                         chapters = kept,
                         coverPath = bookCover(bookId),
                         currentPath = prog?.currentPath.orEmpty(),
+                        currentStartMs = prog?.currentStartMs ?: 0L,
                         positionMs = prog?.positionMs ?: 0L,
                         speed = prog?.speed ?: 1f,
                         gain = prog?.gain ?: 1f,
@@ -108,6 +104,25 @@ class AudiobookStore(context: Context, private val dao: AudiobookDao) {
         _books.value = out
         _counts.value = countMap
         _recents.value = out.filter { it.lastPlayedAt > 0 }.sortedByDescending { it.lastPlayedAt }.take(5)
+    }
+
+    /**
+     * 章节排序：文件即组。组的顺序沿用旧的 trackNumber 规则；同一文件里的多章按起点先后。
+     * 同 trackNumber 的不同文件按 path 自然序，不会因为 trackNumber 撞车而把两本书交错。
+     */
+    private fun sortedRows(rows: List<AudiobookChapterRow>): List<AudiobookChapterRow> {
+        val groups = rows.groupBy { it.path }
+        val orderedGroups = groups.values.sortedWith { a, b ->
+            val ta = a.minOf { it.trackNumber }.let { if (it == 0) Int.MAX_VALUE else it }
+            val tb = b.minOf { it.trackNumber }.let { if (it == 0) Int.MAX_VALUE else it }
+            if (ta != tb) ta.compareTo(tb) else naturalStringOrder.compare(a.first().path, b.first().path)
+        }
+        return orderedGroups.flatMap { g ->
+            if (g.size <= 1) g else g.sortedWith { a, b ->
+                if (a.startMs != b.startMs) a.startMs.compareTo(b.startMs)
+                else naturalStringOrder.compare(a.key, b.key)
+            }
+        }
     }
 
     suspend fun addRoot(path: String, displayName: String, type: StorageType): AudiobookRoot? =
@@ -151,29 +166,24 @@ class AudiobookStore(context: Context, private val dao: AudiobookDao) {
     suspend fun chaptersOfBookFiltered(bookId: String): List<AudiobookChapter> =
         withContext(Dispatchers.IO) {
             _books.value.firstOrNull { it.id == bookId }?.chapters
-                ?: dao.chaptersOfBook(bookId).sortedWith { a, b ->
-                    val ta = if (a.trackNumber == 0) Int.MAX_VALUE else a.trackNumber
-                    val tb = if (b.trackNumber == 0) Int.MAX_VALUE else b.trackNumber
-                    if (ta != tb) ta.compareTo(tb) else naturalStringOrder.compare(a.path, b.path)
-                }.map {
-                    AudiobookChapter(it.path, it.title, it.trackNumber, it.durationSec, it.size, it.lastModified)
-                }.filterNot { chapterSkipped(it.displayTitle, skipKeywords) }
+                ?: sortedRows(dao.chaptersOfBook(bookId)).map { it.toChapter() }
+                    .filterNot { chapterSkipped(it.displayTitle, skipKeywords) }
         }
 
-    // ---- 记忆（按 path，不存 index） ----
+    // ---- 记忆（按 path + 文件内起点，不存 index） ----
 
-    fun savePos(bookId: String, path: String, posMs: Long) {
+    fun savePos(bookId: String, path: String, startMs: Long, posMs: Long) {
         scope.launch(Dispatchers.IO) {
             progressMutex.withLock {
-                dao.upsertPos(bookId, path, posMs.coerceAtLeast(0L), System.currentTimeMillis())
+                dao.upsertPos(bookId, path, startMs.coerceAtLeast(0L), posMs.coerceAtLeast(0L), System.currentTimeMillis())
             }
             refreshRecentsOnly()
         }
     }
 
-    suspend fun savePosSync(bookId: String, path: String, posMs: Long) = withContext(Dispatchers.IO) {
+    suspend fun savePosSync(bookId: String, path: String, startMs: Long, posMs: Long) = withContext(Dispatchers.IO) {
         progressMutex.withLock {
-            dao.upsertPos(bookId, path, posMs.coerceAtLeast(0L), System.currentTimeMillis())
+            dao.upsertPos(bookId, path, startMs.coerceAtLeast(0L), posMs.coerceAtLeast(0L), System.currentTimeMillis())
         }
         refreshRecentsOnly()
     }
@@ -198,6 +208,7 @@ class AudiobookStore(context: Context, private val dao: AudiobookDao) {
             .map { (b, p) ->
                 b.copy(
                     currentPath = p?.currentPath.orEmpty(),
+                    currentStartMs = p?.currentStartMs ?: 0L,
                     positionMs = p?.positionMs ?: 0L,
                     speed = p?.speed ?: 1f,
                     gain = p?.gain ?: 1f,
@@ -205,6 +216,18 @@ class AudiobookStore(context: Context, private val dao: AudiobookDao) {
                 )
             }
     }
+
+    private fun AudiobookChapterRow.toChapter(): AudiobookChapter =
+        AudiobookChapter(
+            path = path,
+            title = title,
+            trackNumber = trackNumber,
+            durationSec = durationSec,
+            size = size,
+            lastModified = lastModified,
+            startMs = startMs,
+            endMs = endMs,
+        )
 
     private fun bookCover(bookDir: String): String {
         val jpgs = runCatching {

@@ -1327,6 +1327,8 @@ class RemoteLibraryManager(
                 path = localChapter.orEmpty(),
                 accent = accentFor(c.path),
                 trackNumber = c.trackNumber,
+                clipStartMs = c.startMs,
+                clipEndMs = c.endMs,
                 // 离线时只有已下载/已缓存的章节可点；其余 UI 会按 available=false 显示灰色。
                 available = localChapter != null || lib.online || chapterCached(entry.deviceId, c.path),
             )
