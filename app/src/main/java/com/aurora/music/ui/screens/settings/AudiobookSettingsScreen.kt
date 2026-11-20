@@ -30,6 +30,7 @@ import com.aurora.music.data.SettingsStore
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5GlossButton
+import com.aurora.music.ui.ios5.Ios5NavRow
 import com.aurora.music.ui.ios5.Ios5SettingsPage
 import com.aurora.music.ui.ios5.Ios5SliderRow
 import com.aurora.music.ui.ios5.Ios5StaticText
@@ -45,6 +46,7 @@ import kotlinx.coroutines.launch
 fun AudiobookSettingsScreen(
     contentPadding: PaddingValues,
     onBack: () -> Unit,
+    onOpenSubtitles: () -> Unit = {},
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val p by container.settingsStore.audiobookPrefs.collectAsStateWithLifecycle(
@@ -55,6 +57,13 @@ fun AudiobookSettingsScreen(
 
     val bottomPad = contentPadding.calculateBottomPadding()
     Ios5SettingsPage(title = "有声书设置", onBack = onBack) {
+        ios5Section("离线字幕") {
+            Ios5NavRow(
+                title = "字幕与模型",
+                subtitle = "SenseVoice / Whisper，按需下载；播放页封面处显示上句 / 本句 / 下句",
+                onClick = onOpenSubtitles,
+            )
+        }
         ios5Section("与其他应用") {
             Ios5SwitchRow(
                 title = "音乐共存",

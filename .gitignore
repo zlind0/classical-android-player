@@ -18,3 +18,4 @@ lib-titlemerge/build/
 desktop-app/src-tauri/target/
 relay-server/target/
 relay-server/tmp/
+app/libs/*.aar

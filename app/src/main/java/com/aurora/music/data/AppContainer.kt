@@ -216,6 +216,10 @@ class AppContainer(context: Context) {
     val audiobookStore = com.aurora.music.data.audiobook.AudiobookStore(appContext, audiobookDb.audiobookDao())
     val audiobookScanner = com.aurora.music.data.audiobook.AudiobookScanner(audiobookStore, audiobookDb.audiobookDao())
 
+    // 有声书离线字幕：ASR 权重下载器 + 字幕缓存（运行时随包，权重按需下）
+    val asrModels = com.aurora.music.data.subtitle.AsrModelStore(appContext)
+    val subtitleStore = com.aurora.music.data.subtitle.SubtitleStore(appContext)
+
     // 曲库来源开关（默认 MEDIastore）。两个栈各自独立，切换 = 换 backend + 按源加载。
     private val _librarySource = MutableStateFlow(LibrarySource.MEDIastore)
     val librarySource: StateFlow<LibrarySource> = _librarySource.asStateFlow()

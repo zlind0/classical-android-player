@@ -463,6 +463,12 @@ class SettingsStore(private val context: Context) {
         val ABOOK_DUCK_OTHERS = booleanPreferencesKey("abook_duck_others")
         val ABOOK_SEEK_SEC = intPreferencesKey("abook_seek_sec")
         val ABOOK_SKIP_KEYWORDS = stringSetPreferencesKey("abook_skip_keywords")
+        // 有声书离线字幕（ASR）
+        val SUB_ENABLED = booleanPreferencesKey("sub_enabled")
+        val SUB_MODEL_ID = stringPreferencesKey("sub_model_id")
+        val SUB_LOOKAHEAD_SEC = intPreferencesKey("sub_lookahead_sec")
+        val SUB_THREADS = intPreferencesKey("sub_threads")
+        val SUB_SOURCE = stringPreferencesKey("sub_source")
         val EEXPORT_USE_INTERNAL = booleanPreferencesKey("eexport_use_internal")
         val EEXPORT_INTERNAL_CODE = stringPreferencesKey("eexport_internal_code")
         val EEXPORT_ENGINE = stringPreferencesKey("eexport_engine")
@@ -1079,6 +1085,37 @@ class SettingsStore(private val context: Context) {
     suspend fun setAbookSkipKeywords(v: Set<String>) = context.dataStore.edit {
         it[Keys.ABOOK_SKIP_KEYWORDS] = v.map { s -> s.trim() }.filter { s -> s.isNotEmpty() }.toSet()
     }
+
+    // ---- 有声书离线字幕（ASR，权重按需下载） ----
+
+    data class SubtitlePrefs(
+        /** 播放页是否提供字幕（关掉则隐藏字幕键，同时停止后台转写） */
+        val enabled: Boolean = true,
+        /** 当前使用的模型 id；空 = 自动取第一个已安装的 */
+        val modelId: String = "",
+        /** 提前识别量（秒）：字幕始终领先播放位置这么多 */
+        val lookAheadSec: Int = 60,
+        /** 推理线程数 */
+        val threads: Int = 2,
+        /** 下载源（mirror / hf） */
+        val source: String = "mirror",
+    )
+
+    val subtitlePrefs: Flow<SubtitlePrefs> = context.dataStore.data.map { p ->
+        SubtitlePrefs(
+            enabled = p[Keys.SUB_ENABLED] ?: true,
+            modelId = p[Keys.SUB_MODEL_ID] ?: "",
+            lookAheadSec = (p[Keys.SUB_LOOKAHEAD_SEC] ?: 60).coerceIn(20, 300),
+            threads = (p[Keys.SUB_THREADS] ?: 2).coerceIn(1, 6),
+            source = p[Keys.SUB_SOURCE] ?: "mirror",
+        )
+    }.distinctUntilChanged()
+
+    suspend fun setSubtitleEnabled(v: Boolean) = context.dataStore.edit { it[Keys.SUB_ENABLED] = v }
+    suspend fun setSubtitleModelId(v: String) = context.dataStore.edit { it[Keys.SUB_MODEL_ID] = v.trim() }
+    suspend fun setSubtitleLookAhead(v: Int) = context.dataStore.edit { it[Keys.SUB_LOOKAHEAD_SEC] = v.coerceIn(20, 300) }
+    suspend fun setSubtitleThreads(v: Int) = context.dataStore.edit { it[Keys.SUB_THREADS] = v.coerceIn(1, 6) }
+    suspend fun setSubtitleSource(v: String) = context.dataStore.edit { it[Keys.SUB_SOURCE] = v.trim() }
 
     // ---- 电子书转有声书设置（转换页，默认语速 1.1x，默认不覆盖） ----
 

@@ -31,20 +31,22 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.outlined.FormatListNumbered
-import androidx.compose.material.icons.outlined.HelpOutline
+import androidx.compose.material.icons.outlined.Subtitles
+import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -70,6 +72,7 @@ import com.aurora.music.ui.ios5.Ios5Switch
 import com.aurora.music.viewmodel.PlayerUiState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 private val iPodBlack = Brush.verticalGradient(
@@ -100,8 +103,7 @@ fun Ios5AudiobookPlayerPage(
     onGain: (Float) -> Unit,
     onToggleMix: () -> Unit,
     onOpenQueue: () -> Unit,
-    introActive: Boolean = false,
-    onIntroClick: () -> Unit = {},
+    onOpenSubtitleSettings: () -> Unit = {},
     /** 远程书离线时：未缓存的章节显示灰色（true = 可选中）。 */
     chapterAvailable: (Int) -> Boolean = { true },
 ) {
@@ -109,8 +111,50 @@ fun Ios5AudiobookPlayerPage(
     var bubble by remember { mutableStateOf<AbookBubble?>(null) }
 
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
+    val appCtx = LocalContext.current.applicationContext
     val abookPrefs by container.settingsStore.audiobookPrefs.collectAsStateWithLifecycle(
         initialValue = com.aurora.music.data.SettingsStore.AudiobookPrefs(),
+    )
+    val subPrefs by container.settingsStore.subtitlePrefs.collectAsStateWithLifecycle(
+        initialValue = com.aurora.music.data.SettingsStore.SubtitlePrefs(),
+    )
+    val modelStates by container.asrModels.states.collectAsStateWithLifecycle()
+    val activeSubModel = remember(subPrefs.modelId, modelStates) {
+        container.asrModels.pickUsable(subPrefs.modelId)
+    }
+    var showSubs by rememberSaveable {
+        mutableStateOf(com.aurora.music.data.subtitle.SubtitleUiMemory.overlayOpen)
+    }
+    LaunchedEffect(subPrefs.enabled) {
+        if (!subPrefs.enabled) showSubs = false
+    }
+    val chapter = book.chapters.getOrNull(state.currentIndex)
+
+    val subSession = remember(
+        book.id, chapter?.key, showSubs, activeSubModel?.id, subPrefs.lookAheadSec, subPrefs.threads,
+    ) {
+        if (!showSubs || activeSubModel == null || chapter == null) null
+        else com.aurora.music.data.subtitle.SubtitleSession(
+            context = appCtx,
+            store = container.subtitleStore,
+            models = container.asrModels,
+            spec = activeSubModel,
+            bookId = book.id,
+            chapter = chapter,
+            lookAheadSec = subPrefs.lookAheadSec,
+            threads = subPrefs.threads,
+        )
+    }
+    LaunchedEffect(subSession) { subSession?.start() }
+    DisposableEffect(subSession) {
+        onDispose { subSession?.close() }
+    }
+    LaunchedEffect(subSession, state.positionSec) {
+        subSession?.update(state.positionSec.toInt())
+    }
+    val emptySubState = remember { MutableStateFlow(com.aurora.music.data.subtitle.SubtitleSession.UiState()) }
+    val subState by (subSession?.state ?: emptySubState).collectAsStateWithLifecycle(
+        com.aurora.music.data.subtitle.SubtitleSession.UiState(),
     )
     val step = abookPrefs.seekSec
 
@@ -244,18 +288,25 @@ fun Ios5AudiobookPlayerPage(
                                 onClick = { bubble = AbookBubble.SPEED },
                             ).padding(9.dp),
                     )
-                    // 介绍
-                    Icon(
-                        if (introActive) Icons.Filled.Stop else Icons.Outlined.HelpOutline,
-                        if (introActive) "停止介绍" else "章节介绍",
-                        tint = if (introActive) Color(0xFFD63A3A) else Color(0xFF6B7280),
-                        modifier = Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape)
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() },
-                                onClick = onIntroClick,
-                            ).padding(9.dp),
-                    )
+                    // 字幕（离线 ASR）：点一下用 80% 黑遮罩盖住封面显示上/本/下三行
+                    if (subPrefs.enabled) {
+                        Icon(
+                            if (showSubs) Icons.Filled.Subtitles else Icons.Outlined.Subtitles,
+                            "字幕",
+                            tint = if (showSubs) Color(0xFF0A60D6) else Color(0xFF6B7280),
+                            modifier = Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape)
+                                .clickable(
+                                    indication = null,
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    onClick = {
+                                        showSubs = !showSubs
+                                        com.aurora.music.data.subtitle.SubtitleUiMemory.overlayOpen = showSubs
+                                    },
+                                ).padding(9.dp),
+                        )
+                    } else {
+                        Spacer(Modifier.size(40.dp))
+                    }
                     // 音量（本书增益）
                     Icon(
                         Icons.Filled.VolumeUp, "音量",
@@ -309,6 +360,19 @@ fun Ios5AudiobookPlayerPage(
                             fullQuality = true,
                             placeholderRes = R.drawable.audiobook,
                         )
+                        if (showSubs) {
+                            AudiobookSubtitleOverlay(
+                                sub = subState,
+                                positionSec = state.positionSec,
+                                lookAheadSec = subPrefs.lookAheadSec,
+                                modelTitle = activeSubModel?.title?.substringBefore("（") ?: "未选模型",
+                                hasModel = activeSubModel != null && chapter != null,
+                                unavailableReason = if (chapter == null) {
+                                    "当前章节没有本地音频文件，无法生成字幕。"
+                                } else "",
+                                onOpenSettings = onOpenSubtitleSettings,
+                            )
+                        }
                     }
                 }
             }

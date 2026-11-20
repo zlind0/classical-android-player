@@ -1,3 +1,9 @@
+import java.io.File
+import java.net.URI
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -39,8 +45,9 @@ android {
         versionCode = 1
         versionName = "1.0"
         vectorDrawables { useSupportLibrary = true }
-        // Native AcoustID/Chromaprint fingerprinter (4.4c). arm64 for the phone, x86_64 for emulators.
-        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        // Native AcoustID/Chromaprint fingerprinter (4.4c). ABI 由下面的 splits 决定
+        // （arm64-v8a 给真机、x86_64 给模拟器），这里不再重复声明 abiFilters，
+        // 否则 Gradle 会报 "conflicting configuration"。
         // About page shows which commit is under test; injected at build time.
         buildConfigField("String", "GIT_HASH", "\"${gitHash()}\"")
     }
@@ -96,6 +103,16 @@ android {
         // Classical fork regression baseline (plan §66 v0.1.0): pre-existing findings frozen here.
         baseline = file("lint-baseline.xml")
     }
+    // ASR 运行时（sherpa-onnx，含 ONNX Runtime）只按 ABI 分包，避免把用不到的 .so 打进同一个 APK。
+    // arm64 手机装 app-arm64-v8a-*.apk，x86_64 模拟器装 app-x86_64-*.apk。
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "x86_64")
+            isUniversalApk = false
+        }
+    }
     sourceSets {
         named("main") {
             // Offline AutoEq database, regenerated from third_party/AutoEq on every build.
@@ -120,6 +137,81 @@ android {
         }
     }
 }
+
+// ---- ASR runtime (sherpa-onnx AAR): downloaded at build time, not stored in git ----
+// 52 MB 的预编译包（4 个 ABI + ONNX Runtime），官方只发 GitHub release、没有 Maven 坐标。
+// 仓库里只保留版本号和 SHA-256：换版本时改这两行即可，克隆体积不随版本膨胀。
+// 国内镜像可用 -PsherpaAarUrl=... 覆盖（例如 ghproxy 前缀）。
+val sherpaAarVersion = "2.0.2"
+val sherpaAarSha256 = "6420cfb86c2ef8462dadd77b2202b7430487bdfb2bc715e9ce2864871209a80e"
+val sherpaAarFile = layout.projectDirectory.file("libs/sherpa-onnx-$sherpaAarVersion.aar").asFile
+val sherpaAarUrl = (findProperty("sherpaAarUrl") as String?)
+    ?: "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaAarVersion/" +
+    "sherpa-onnx-$sherpaAarVersion.aar"
+
+fun sha256Of(file: File): String {
+    val md = MessageDigest.getInstance("SHA-256")
+    file.inputStream().use { input ->
+        val buf = ByteArray(1 shl 20)
+        while (true) {
+            val n = input.read(buf)
+            if (n < 0) break
+            md.update(buf, 0, n)
+        }
+    }
+    return md.digest().joinToString("") { "%02x".format(it) }
+}
+
+val fetchSherpaAar by tasks.registering {
+    description = "Downloads and verifies the sherpa-onnx Android AAR used by offline subtitles."
+    group = "build"
+    outputs.file(sherpaAarFile)
+    outputs.upToDateWhen { sherpaAarFile.isFile && sha256Of(sherpaAarFile) == sherpaAarSha256 }
+    doLast {
+        if (sherpaAarFile.isFile && sha256Of(sherpaAarFile) == sherpaAarSha256) return@doLast
+        sherpaAarFile.parentFile.mkdirs()
+        // 临时文件放 build 目录（temporaryDir），下完校验通过才 rename 成正式文件
+        val part = File(temporaryDir, sherpaAarFile.name + ".part")
+        part.parentFile?.mkdirs()
+        logger.lifecycle("Downloading sherpa-onnx $sherpaAarVersion AAR (52 MB): $sherpaAarUrl")
+        val conn = URI(sherpaAarUrl).toURL().openConnection().apply {
+            connectTimeout = 30_000
+            readTimeout = 120_000
+            setRequestProperty("User-Agent", "nostalgiaPod-build")
+        }
+        conn.getInputStream().use { input ->
+            part.outputStream().use { out ->
+                val buf = ByteArray(1 shl 20)
+                var total = 0L
+                var lastLog = 0L
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                    total += n
+                    if (total - lastLog >= 10L * 1024 * 1024) {
+                        logger.lifecycle("  ${total / 1048576} MB")
+                        lastLog = total
+                    }
+                }
+            }
+        }
+        val actual = sha256Of(part)
+        if (actual != sherpaAarSha256) {
+            throw GradleException(
+                "sherpa-onnx AAR checksum mismatch: expected $sherpaAarSha256, got $actual. " +
+                    "Delete ${part.absolutePath} and retry (or pass -PsherpaAarUrl=<mirror>)."
+            )
+        }
+        Files.move(part.toPath(), sherpaAarFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        logger.lifecycle("sherpa-onnx AAR ready: ${sherpaAarFile.absolutePath}")
+    }
+}
+
+// 依赖解析发生在任务图构建之后：preBuild 和 AAR 元数据检查都先等下载完成。
+tasks.matching {
+    it.name == "preBuild" || it.name.matches(Regex("check.*AarMetadata"))
+}.configureEach { dependsOn(fetchSherpaAar) }
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
@@ -176,6 +268,10 @@ dependencies {
     // FFmpeg decoder (Jellyfin build) — float32 output for all formats, required for bit-perfect
     // non-local / non-FLAC content through the USB driver. Picked up by EXTENSION_RENDERER_MODE_PREFER.
     implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.5.0+1")
+    // 离线字幕：sherpa-onnx 2.0.2 官方 AAR（SenseVoice/Whisper + ONNX Runtime）。
+    // AAR 不进仓库：由下面的 fetchSherpaAar 在构建时下载并校验 SHA-256；
+    // 模型权重和 VAD 由 App 运行时按需下载（见 AsrModelStore）。
+    implementation(files(sherpaAarFile))
     debugImplementation(libs.androidx.ui.tooling)
     testImplementation("junit:junit:4.13.2")
     // JVM 单测解析 EPUB 用（XmlPullParser 接口实现；APK 内仍用系统 kxml）
