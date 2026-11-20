@@ -94,8 +94,13 @@ class SubtitleEngine(
         vad = Vad(null, vc)
     }
 
-    /** 喂 16 kHz 单声道采样，返回本次切出来的整句字幕（绝对章节秒）。 */
-    fun feed(pcm: FloatArray, flush: Boolean = false): List<SubtitleCue> {
+    /**
+     * 喂 16 kHz 单声道采样，返回本次切出来的 VAD 片段（绝对章节秒）。
+     *
+     * 没有识别出文字的片段（text 为空）也照样返回：调用方会把它一起存盘，
+     * 表示这段已经识别过、没有可显示的内容。
+     */
+    fun feed(pcm: FloatArray, flush: Boolean = false): List<SubtitleSegment> {
         val detector = vad ?: return emptyList()
         val rec = recognizer ?: return emptyList()
 
@@ -117,7 +122,7 @@ class SubtitleEngine(
             }
             detector.flush()
         }
-        val out = ArrayList<SubtitleCue>(4)
+        val out = ArrayList<SubtitleSegment>(4)
         while (!detector.empty()) {
             val seg = detector.front()
             detector.pop()
@@ -130,10 +135,8 @@ class SubtitleEngine(
                 android.util.Log.w("SubtitleEngine", "decode failed", t)
                 ""
             }
-            if (text.isNotBlank()) {
-                val start = epochBaseSec + seg.start / 16000.0
-                out += SubtitleCueSplitter.split(text, start, start + seg.samples.size / 16000.0)
-            }
+            val start = epochBaseSec + seg.start / 16000.0
+            out += SubtitleSegment(start, start + seg.samples.size / 16000.0, text)
         }
         return out
     }
