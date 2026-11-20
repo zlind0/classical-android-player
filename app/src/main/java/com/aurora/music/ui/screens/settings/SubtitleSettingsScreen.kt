@@ -95,7 +95,6 @@ fun SubtitleSettingsScreen(
                     }
                 },
             )
-            Ios5StaticText("字幕始终领先播放位置这么多秒。越大越不容易卡顿，代价是 CPU 先干活；默认 60 秒。")
             Ios5CellDivider()
             Ios5SliderRow(
                 title = "识别线程",
@@ -113,7 +112,7 @@ fun SubtitleSettingsScreen(
         ios5Section("模型") {
             Ios5StaticText(
                 if (activeSpec != null) "当前使用：${activeSpec.title}（${activeSpec.sizeMb} MB）"
-                else "还没有可用的模型，先下载一个（只需下载一次，之后完全离线）。",
+                else "还没有可用的模型。",
             )
             AsrModelCatalog.all.forEach { spec ->
                 Ios5CellDivider()
@@ -157,7 +156,6 @@ fun SubtitleSettingsScreen(
                 }
                 Ios5CellDivider()
             }
-            Ios5StaticText("ModelScope 的 iic/SenseVoiceSmall 只有 PyTorch 权重，Android 需要 sherpa-onnx 的 ONNX，所以这里走 HuggingFace；国内用 hf-mirror 镜像。")
         }
 
         ios5Section("字幕缓存") {
@@ -178,8 +176,6 @@ fun SubtitleSettingsScreen(
                 )
             }
         }
-
-        ios5FootNote("字幕在本机生成，不上传音频。每章转好的字幕会缓存，重新听同一章不用再算。")
         item { Spacer(Modifier.height(contentPadding.calculateBottomPadding())) }
     }
 }
