@@ -104,14 +104,23 @@ android {
     lint {
         // Classical fork regression baseline (plan §66 v0.1.0): pre-existing findings frozen here.
         baseline = file("lint-baseline.xml")
+        // Skip expensive lintVitalAnalyzeRelease (~40s) on local release installs;
+        // pass -PrunReleaseLint=true (or run :app:lintRelease) when needed.
+        checkReleaseBuilds = (findProperty("runReleaseLint") as String?)?.toBoolean() == true
     }
     // ASR 运行时（sherpa-onnx，含 ONNX Runtime）只按 ABI 分包，避免把用不到的 .so 打进同一个 APK。
     // arm64 手机装 app-arm64-v8a-*.apk，x86_64 模拟器装 app-x86_64-*.apk。
+    // Pass -PabiFilters=arm64-v8a to build/install a single ABI locally.
+    val abiSplitList = (findProperty("abiFilters") as String?)
+        ?.split(",")
+        ?.map { it.trim() }
+        ?.filter { it.isNotEmpty() }
+        ?: listOf("arm64-v8a", "x86_64")
     splits {
         abi {
             isEnable = true
             reset()
-            include("arm64-v8a", "x86_64")
+            include(*abiSplitList.toTypedArray())
             isUniversalApk = false
         }
     }
@@ -286,19 +295,21 @@ dependencies {
 
 // Offline AutoEq database: bundles every ParametricEQ preset from the
 // third_party/AutoEq submodule into an index + blobs pair shipped in the APK
-// assets. The task always runs (not incremental) so each APK build re-bundles
-// the current submodule checkout; the script itself takes ~2s for ~9k presets.
+// assets. Incremental based on the packer script and AutoEq results directory.
 val generatedAutoEqDir = layout.buildDirectory.dir("generated/autoeq")
 val buildAutoEqDb by tasks.registering(Exec::class) {
     description = "Bundles third_party/AutoEq presets into APK assets."
+    val scriptFile = rootProject.file("scripts/build_autoeq_pack.py")
+    val autoEqRoot = rootProject.file("third_party/AutoEq")
+    inputs.file(scriptFile)
+    inputs.dir(File(autoEqRoot, "results"))
+    outputs.dir(generatedAutoEqDir)
     commandLine(
         "python3",
-        rootProject.file("scripts/build_autoeq_pack.py").absolutePath,
-        "--autoeq-root", rootProject.file("third_party/AutoEq").absolutePath,
+        scriptFile.absolutePath,
+        "--autoeq-root", autoEqRoot.absolutePath,
         "--out-dir", generatedAutoEqDir.get().asFile.absolutePath,
     )
-    outputs.upToDateWhen { false }
-    outputs.dir(generatedAutoEqDir)
 }
 tasks.named("preBuild") { dependsOn(buildAutoEqDb) }
 // The asset round-trip test reads the real generated pack.
