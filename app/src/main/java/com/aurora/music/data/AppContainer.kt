@@ -220,6 +220,10 @@ class AppContainer(context: Context) {
     val asrModels = com.aurora.music.data.subtitle.AsrModelStore(appContext)
     val subtitleStore = com.aurora.music.data.subtitle.SubtitleStore(appContext)
 
+    // 有声书多模态翻译：权重下载器留在主进程；LiteRT-LM 引擎在 :llm 服务进程里。
+    val llmModels = com.aurora.music.data.llm.LlmModelStore(appContext)
+    val llmClient = com.aurora.music.data.llm.service.LlmClient(appContext)
+
     // 曲库来源开关（默认 MEDIastore）。两个栈各自独立，切换 = 换 backend + 按源加载。
     private val _librarySource = MutableStateFlow(LibrarySource.MEDIastore)
     val librarySource: StateFlow<LibrarySource> = _librarySource.asStateFlow()

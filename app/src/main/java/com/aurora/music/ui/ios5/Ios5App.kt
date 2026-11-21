@@ -1298,6 +1298,12 @@ fun Ios5App() {
                                 onBack = { navController.popBackStack() },
                             )
                         }
+                        composable(Ios5Routes.SETTINGS_MULTIMODAL) {
+                            com.aurora.music.ui.screens.settings.MultimodalSettingsScreen(
+                                contentPadding = PaddingValues(0.dp),
+                                onBack = { navController.popBackStack() },
+                            )
+                        }
                         composable(Ios5Routes.SETTINGS_STORAGE) {
                             com.aurora.music.ui.screens.settings.StorageSettingsScreen(
                                 contentPadding = PaddingValues(0.dp),
@@ -1868,6 +1874,10 @@ fun Ios5App() {
                             onOpenSubtitleSettings = {
                                 playerVM.setExpanded(false)
                                 navController.navigate(Ios5Routes.SETTINGS_AUDIOBOOK_SUBTITLES)
+                            },
+                            onOpenMultimodalSettings = {
+                                playerVM.setExpanded(false)
+                                navController.navigate(Ios5Routes.SETTINGS_MULTIMODAL)
                             },
                             chapterAvailable = { i ->
                                 val e = remoteAbookEntry

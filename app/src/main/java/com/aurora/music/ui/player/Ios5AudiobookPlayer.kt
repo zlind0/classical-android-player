@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.outlined.FormatListNumbered
 import androidx.compose.material.icons.outlined.Subtitles
@@ -45,6 +46,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -62,6 +64,9 @@ import androidx.compose.ui.unit.sp
 import com.aurora.music.AuroraApplication
 import com.aurora.music.R
 import com.aurora.music.data.audiobook.AudiobookBook
+import com.aurora.music.data.llm.LlmGenerationPrefs
+import com.aurora.music.data.llm.TranslationSession
+import com.aurora.music.data.llm.TranslationUiMemory
 import com.aurora.music.ui.components.MarqueeText
 import com.aurora.music.ui.components.TrackArtwork
 import com.aurora.music.ui.components.formatTime
@@ -104,6 +109,7 @@ fun Ios5AudiobookPlayerPage(
     onToggleMix: () -> Unit,
     onOpenQueue: () -> Unit,
     onOpenSubtitleSettings: () -> Unit = {},
+    onOpenMultimodalSettings: () -> Unit = {},
     /** 远程书离线时：未缓存的章节显示灰色（true = 可选中）。 */
     chapterAvailable: (Int) -> Boolean = { true },
 ) {
@@ -125,15 +131,37 @@ fun Ios5AudiobookPlayerPage(
     var showSubs by rememberSaveable {
         mutableStateOf(com.aurora.music.data.subtitle.SubtitleUiMemory.overlayOpen)
     }
+    var showTranslate by rememberSaveable {
+        mutableStateOf(TranslationUiMemory.open)
+    }
     LaunchedEffect(subPrefs.enabled) {
         if (!subPrefs.enabled) showSubs = false
     }
     val chapter = book.chapters.getOrNull(state.currentIndex)
 
+    val llmPrefs by container.settingsStore.multimodalPrefs.collectAsStateWithLifecycle(
+        initialValue = com.aurora.music.data.SettingsStore.MultimodalPrefs(),
+    )
+    val llmStates by container.llmModels.states.collectAsStateWithLifecycle()
+    val activeLlm = remember(llmPrefs.modelId, llmStates) {
+        container.llmModels.pickUsable(llmPrefs.modelId)
+    }
+
+    // 字幕和翻译共用同一份「已解码 PCM」：翻译按 VAD 边界切块时直接从这里取，
+    // 不再为每一段重新 seek + 新建 MediaCodec。
+    val pcmWindow = remember(book.id, chapter?.key) {
+        com.aurora.music.data.subtitle.DecodedPcmWindow()
+    }
+    val sliceStore = remember(book.id, chapter?.key) {
+        chapter?.let { com.aurora.music.data.llm.AudioSliceStore(appCtx, it) }
+    }
+
+    // 翻译需要 ASR 给出的句级边界；字幕层没开也照样在后台转写。
+    val captionsOn = showSubs || showTranslate
     val subSession = remember(
-        book.id, chapter?.key, showSubs, activeSubModel?.id, subPrefs.lookAheadSec, subPrefs.threads,
+        book.id, chapter?.key, captionsOn, activeSubModel?.id, subPrefs.lookAheadSec, subPrefs.threads,
     ) {
-        if (!showSubs || activeSubModel == null || chapter == null) null
+        if (!captionsOn || activeSubModel == null || chapter == null) null
         else com.aurora.music.data.subtitle.SubtitleSession(
             context = appCtx,
             store = container.subtitleStore,
@@ -143,6 +171,7 @@ fun Ios5AudiobookPlayerPage(
             chapter = chapter,
             lookAheadSec = subPrefs.lookAheadSec,
             threads = subPrefs.threads,
+            pcmWindow = pcmWindow,
         )
     }
     LaunchedEffect(subSession) { subSession?.start() }
@@ -156,6 +185,48 @@ fun Ios5AudiobookPlayerPage(
     val subState by (subSession?.state ?: emptySubState).collectAsStateWithLifecycle(
         com.aurora.music.data.subtitle.SubtitleSession.UiState(),
     )
+
+    val cuesState = rememberUpdatedState(subState.cues)
+    val translationSession = remember(
+        book.id, chapter?.key, showTranslate, activeLlm?.id, activeSubModel?.id,
+        llmPrefs.targetAudioSec, llmPrefs.targetLanguage, llmPrefs.maxOutputTokens,
+        llmPrefs.contextTokens, llmPrefs.temperature, llmPrefs.useGpu,
+    ) {
+        if (!showTranslate || activeLlm == null || activeSubModel == null || chapter == null) null
+        else TranslationSession(
+            cuesProvider = { cuesState.value },
+            client = container.llmClient,
+            spec = activeLlm,
+            prefs = LlmGenerationPrefs(
+                maxOutputTokens = llmPrefs.maxOutputTokens,
+                contextTokens = llmPrefs.contextTokens,
+                temperature = llmPrefs.temperature,
+                useGpu = llmPrefs.useGpu,
+            ),
+            targetAudioSec = llmPrefs.targetAudioSec,
+            targetLanguage = llmPrefs.targetLanguage,
+            slices = sliceStore!!,
+            pcmWindow = pcmWindow,
+        )
+    }
+    LaunchedEffect(translationSession) { translationSession?.start() }
+    DisposableEffect(translationSession) {
+        onDispose { translationSession?.close() }
+    }
+    // 翻译层留在界面上时模型常驻内存（翻译请求之间不卸载）；
+    // 只有关掉翻译层或切出 App 满 30 秒，LlmClient 才释放引擎。
+    val translationActive = translationSession != null
+    DisposableEffect(translationActive) {
+        container.llmClient.setTranslationActive(translationActive)
+        onDispose { container.llmClient.setTranslationActive(false) }
+    }
+    LaunchedEffect(translationSession, state.positionSec) {
+        translationSession?.update(state.positionSec)
+    }
+    val emptyTranslationState = remember { MutableStateFlow(TranslationSession.UiState()) }
+    val translationState by (translationSession?.state ?: emptyTranslationState)
+        .collectAsStateWithLifecycle(TranslationSession.UiState())
+
     val step = abookPrefs.seekSec
 
     val remaining = (state.durationSec - state.positionSec.toInt()).coerceAtLeast(0)
@@ -307,6 +378,21 @@ fun Ios5AudiobookPlayerPage(
                     } else {
                         Spacer(Modifier.size(40.dp))
                     }
+                    // 翻译（多模态大模型）：字幕右侧的「文A」，点开在封面区显示译文
+                    Icon(
+                        Icons.Filled.Translate,
+                        "翻译",
+                        tint = if (showTranslate) Color(0xFF0A60D6) else Color(0xFF6B7280),
+                        modifier = Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape)
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() },
+                                onClick = {
+                                    showTranslate = !showTranslate
+                                    TranslationUiMemory.open = showTranslate
+                                },
+                            ).padding(9.dp),
+                    )
                     // 音量（本书增益）
                     Icon(
                         Icons.Filled.VolumeUp, "音量",
@@ -360,7 +446,22 @@ fun Ios5AudiobookPlayerPage(
                             fullQuality = true,
                             placeholderRes = R.drawable.audiobook,
                         )
-                        if (showSubs) {
+                        if (showTranslate) {
+                            AudiobookTranslationOverlay(
+                                state = translationState,
+                                modelTitle = activeLlm?.shortTitle ?: "未选模型",
+                                hasModel = activeLlm != null,
+                                hasAsr = activeSubModel != null && chapter != null,
+                                unavailableReason = if (chapter == null) {
+                                    "当前章节没有本地音频文件，无法翻译。"
+                                } else "",
+                                asrError = if (subState.status ==
+                                    com.aurora.music.data.subtitle.SubtitleSession.Status.ERROR
+                                ) subState.message else "",
+                                onOpenSettings = onOpenMultimodalSettings,
+                                onOpenSubtitleSettings = onOpenSubtitleSettings,
+                            )
+                        } else if (showSubs) {
                             AudiobookSubtitleOverlay(
                                 sub = subState,
                                 positionSec = state.positionSec,

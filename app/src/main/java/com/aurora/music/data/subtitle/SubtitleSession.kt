@@ -39,6 +39,8 @@ class SubtitleSession(
     private val chapter: AudiobookChapter,
     private val lookAheadSec: Int,
     private val threads: Int,
+    /** 可选：把解码出的 PCM 顺手留给翻译层切片，避免同一段音频解码两次。 */
+    private val pcmWindow: DecodedPcmWindow? = null,
 ) {
 
     enum class Status { LOADING, GENERATING, READY, ERROR }
@@ -209,6 +211,8 @@ class SubtitleSession(
             return
         }
         val pcm = if (n == buf.size) buf else buf.copyOf(n)
+        // 这份 PCM 已经解出来了，顺手给翻译层留着按 VAD 边界切块，别再解一遍。
+        pcmWindow?.append(decodedUntil, pcm)
         val got = eng.feed(pcm)
         appendSegments(got)
         decodedUntil += n / 16000.0

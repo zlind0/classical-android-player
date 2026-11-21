@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.aurora.music.data.llm.llmGpuCrashMarker
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.Flow
@@ -469,6 +470,15 @@ class SettingsStore(private val context: Context) {
         val SUB_LOOKAHEAD_SEC = intPreferencesKey("sub_lookahead_sec")
         val SUB_THREADS = intPreferencesKey("sub_threads")
         val SUB_SOURCE = stringPreferencesKey("sub_source")
+        // 有声书多模态翻译（Gemma 4 / LiteRT-LM）
+        val LLM_MODEL_ID = stringPreferencesKey("llm_model_id")
+        val LLM_SOURCE = stringPreferencesKey("llm_source")
+        val LLM_TARGET_AUDIO_SEC = intPreferencesKey("llm_target_audio_sec")
+        val LLM_MAX_OUTPUT_TOKENS = intPreferencesKey("llm_max_output_tokens")
+        val LLM_CONTEXT_TOKENS = intPreferencesKey("llm_context_tokens")
+        val LLM_TEMPERATURE = floatPreferencesKey("llm_temperature")
+        val LLM_USE_GPU = booleanPreferencesKey("llm_use_gpu")
+        val LLM_TARGET_LANGUAGE = stringPreferencesKey("llm_target_language")
         val EEXPORT_USE_INTERNAL = booleanPreferencesKey("eexport_use_internal")
         val EEXPORT_INTERNAL_CODE = stringPreferencesKey("eexport_internal_code")
         val EEXPORT_ENGINE = stringPreferencesKey("eexport_engine")
@@ -1116,6 +1126,63 @@ class SettingsStore(private val context: Context) {
     suspend fun setSubtitleLookAhead(v: Int) = context.dataStore.edit { it[Keys.SUB_LOOKAHEAD_SEC] = v.coerceIn(20, 300) }
     suspend fun setSubtitleThreads(v: Int) = context.dataStore.edit { it[Keys.SUB_THREADS] = v.coerceIn(1, 6) }
     suspend fun setSubtitleSource(v: String) = context.dataStore.edit { it[Keys.SUB_SOURCE] = v.trim() }
+
+    // ---- 有声书多模态翻译（Gemma 4 音频输入） ----
+
+    data class MultimodalPrefs(
+        /** 当前激活的模型 id；空 = 自动取第一个已安装的 */
+        val modelId: String = "",
+        /** 下载源（mirror / hf） */
+        val source: String = "mirror",
+        /** 目标翻译时长（秒）：把 VAD 片段尽量拼到这么长，最大 30（Gemma 音频上限） */
+        val targetAudioSec: Int = 30,
+        /** 单段译文最大输出 token */
+        val maxOutputTokens: Int = 1024,
+        /** 模型上下文长度 */
+        val contextTokens: Int = 8192,
+        /** 采样温度：翻译任务用低温 */
+        val temperature: Float = 0.3f,
+        /** 优先 GPU；GPU 崩溃会留下标记，下次自动降级 CPU */
+        val useGpu: Boolean = true,
+        /** 翻译目标语言 */
+        val targetLanguage: String = "简体中文",
+    )
+
+    val multimodalPrefs: Flow<MultimodalPrefs> = context.dataStore.data.map { p ->
+        MultimodalPrefs(
+            modelId = p[Keys.LLM_MODEL_ID] ?: "",
+            source = p[Keys.LLM_SOURCE] ?: "mirror",
+            targetAudioSec = (p[Keys.LLM_TARGET_AUDIO_SEC] ?: 30).coerceIn(5, 30),
+            maxOutputTokens = (p[Keys.LLM_MAX_OUTPUT_TOKENS] ?: 1024).coerceIn(128, 8192),
+            contextTokens = (p[Keys.LLM_CONTEXT_TOKENS] ?: 8192).coerceIn(2048, 32768),
+            temperature = (p[Keys.LLM_TEMPERATURE] ?: 0.3f).coerceIn(0f, 2f),
+            useGpu = p[Keys.LLM_USE_GPU] ?: true,
+            targetLanguage = p[Keys.LLM_TARGET_LANGUAGE] ?: "简体中文",
+        )
+    }.distinctUntilChanged()
+
+    suspend fun setMultimodalModelId(v: String) = context.dataStore.edit { it[Keys.LLM_MODEL_ID] = v.trim() }
+    suspend fun setMultimodalSource(v: String) = context.dataStore.edit { it[Keys.LLM_SOURCE] = v.trim() }
+    suspend fun setMultimodalTargetAudioSec(v: Int) = context.dataStore.edit {
+        it[Keys.LLM_TARGET_AUDIO_SEC] = v.coerceIn(5, 30)
+    }
+    suspend fun setMultimodalMaxOutputTokens(v: Int) = context.dataStore.edit {
+        it[Keys.LLM_MAX_OUTPUT_TOKENS] = v.coerceIn(128, 8192)
+    }
+    suspend fun setMultimodalContextTokens(v: Int) = context.dataStore.edit {
+        it[Keys.LLM_CONTEXT_TOKENS] = v.coerceIn(2048, 32768)
+    }
+    suspend fun setMultimodalTemperature(v: Float) = context.dataStore.edit {
+        it[Keys.LLM_TEMPERATURE] = v.coerceIn(0f, 2f)
+    }
+    suspend fun setMultimodalUseGpu(v: Boolean) {
+        context.dataStore.edit { it[Keys.LLM_USE_GPU] = v }
+        // 用户明确重新开启 GPU：清掉「上次 GPU 崩过」的标记，再试一次。
+        if (v) runCatching { llmGpuCrashMarker(context).delete() }
+    }
+    suspend fun setMultimodalTargetLanguage(v: String) = context.dataStore.edit {
+        it[Keys.LLM_TARGET_LANGUAGE] = v.trim().ifBlank { "简体中文" }
+    }
 
     // ---- 电子书转有声书设置（转换页，默认语速 1.1x，默认不覆盖） ----
 

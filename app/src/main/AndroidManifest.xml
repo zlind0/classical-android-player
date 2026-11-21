@@ -51,6 +51,15 @@
         android:requestLegacyExternalStorage="true"
         android:theme="@style/Theme.Aurora">
 
+        <!-- LiteRT-LM 的 GPU 后端（OpenCL）要显式声明可以加载的厂商库；
+             缺了这两项时引擎能初始化，但第一次推理会报找不到 OpenCL。 -->
+        <uses-native-library
+            android:name="libvndksupport.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libOpenCL.so"
+            android:required="false" />
+
         <!-- 允许 Android Studio / simpleperf 对 release 包做采样性能分析（API 29+；旧系统忽略）。
              只对 shell（adb）开放，不影响普通用户。 -->
         <profileable
@@ -135,6 +144,13 @@
             android:name=".data.ebook.export.EbookExportService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- 多模态大模型：独立 :llm 进程，避免 3-5 GB 模型把主进程拖垮/带崩 -->
+        <service
+            android:name=".data.llm.service.LlmService"
+            android:exported="false"
+            android:process=":llm"
+            android:stopWithTask="false" />
 
         <activity
             android:name=".playback.AlarmActivity"

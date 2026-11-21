@@ -94,6 +94,8 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+        // LiteRT-LM ships Kotlin 2.4 metadata; this project still builds with Kotlin 2.0.
+        freeCompilerArgs += "-Xskip-metadata-version-check"
     }
     buildFeatures {
         compose = true
@@ -134,6 +136,8 @@ android {
             pickFirsts += "**/libspeexdsp.so"
             // libVLC 与其他 AAR 共用 libc++ 运行时。
             pickFirsts += "**/libc++_shared.so"
+            // LiteRT-LM 与其它运行时可能重复携带同名 JNI 库。
+            pickFirsts += "**/liblitertlm_jni.so"
         }
     }
 }
@@ -272,6 +276,8 @@ dependencies {
     // AAR 不进仓库：由下面的 fetchSherpaAar 在构建时下载并校验 SHA-256；
     // 模型权重和 VAD 由 App 运行时按需下载（见 AsrModelStore）。
     implementation(files(sherpaAarFile))
+    // 多模态大模型：Gemma 4 / Gemma 3n 的 LiteRT-LM 运行时（音频输入 + 流式文本输出）。
+    implementation(libs.litertlm)
     debugImplementation(libs.androidx.ui.tooling)
     testImplementation("junit:junit:4.13.2")
     // JVM 单测解析 EPUB 用（XmlPullParser 接口实现；APK 内仍用系统 kxml）

@@ -2,4 +2,3 @@
 - Don't commit unless told.
 - this project is named nostalgiaPod or pod, not aurora
 - if you need vlc's source code, you can see /Users/lin/Documents/Code/vlc-android
-- if you need to test compilation, use `./gradlew installRelease` and check if it finishes successfully or no devices connected. both are signs of successful compilation.

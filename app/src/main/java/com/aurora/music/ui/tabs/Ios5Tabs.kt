@@ -518,6 +518,8 @@ fun SettingsTab(
                     Ios5Cell(title = "有声书来源", subtitle = "目录 / 扫描", onClick = { onOpen(Ios5Routes.SETTINGS_AUDIOBOOK_SOURCES) })
                     Ios5CellDivider()
                     Ios5Cell(title = "有声书设置", subtitle = "共存 / 步长 / 跳过", onClick = { onOpen(Ios5Routes.SETTINGS_AUDIOBOOK) })
+                    Ios5CellDivider()
+                    Ios5Cell(title = "多模态大模型", subtitle = "Gemma 4 / 实时翻译", onClick = { onOpen(Ios5Routes.SETTINGS_MULTIMODAL) })
                 }
             }
             item {
