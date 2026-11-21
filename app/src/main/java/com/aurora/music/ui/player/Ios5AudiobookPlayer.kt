@@ -146,6 +146,10 @@ fun Ios5AudiobookPlayerPage(
     val activeLlm = remember(llmPrefs.modelId, llmStates) {
         container.llmModels.pickUsable(llmPrefs.modelId)
     }
+    // 「调试信息」是进程级开关：诊断日志和翻译层底部的模型 / 切片信息都由它控制。
+    LaunchedEffect(llmPrefs.debugInfo) {
+        com.aurora.music.data.llm.LlmDebug.enabled = llmPrefs.debugInfo
+    }
 
     // 字幕和翻译共用同一份「已解码 PCM」：翻译按 VAD 边界切块时直接从这里取，
     // 不再为每一段重新 seek + 新建 MediaCodec。
@@ -458,6 +462,7 @@ fun Ios5AudiobookPlayerPage(
                                 asrError = if (subState.status ==
                                     com.aurora.music.data.subtitle.SubtitleSession.Status.ERROR
                                 ) subState.message else "",
+                                debug = llmPrefs.debugInfo,
                                 onOpenSettings = onOpenMultimodalSettings,
                                 onOpenSubtitleSettings = onOpenSubtitleSettings,
                             )

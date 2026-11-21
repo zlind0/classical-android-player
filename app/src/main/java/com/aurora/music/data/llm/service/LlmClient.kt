@@ -11,6 +11,7 @@ import android.os.Looper
 import android.os.Message
 import android.os.Messenger
 import android.os.RemoteException
+import com.aurora.music.data.llm.LlmDebug
 import com.aurora.music.data.llm.LlmGenerationPrefs
 import com.aurora.music.data.llm.LlmModelSpec
 import java.io.File
@@ -288,6 +289,8 @@ class LlmClient(private val context: Context) {
             putFloat(LlmProtocol.KEY_TOP_P, prefs.topP)
             putFloat(LlmProtocol.KEY_TEMPERATURE, prefs.temperature)
             putBoolean(LlmProtocol.KEY_USE_GPU, prefs.useGpu)
+            // :llm 是独立进程，调试开关得随请求一起带过去。
+            putBoolean(LlmProtocol.KEY_DEBUG, LlmDebug.enabled)
         }
 
     private fun send(msg: Message) {

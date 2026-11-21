@@ -46,6 +46,8 @@ fun AudiobookTranslationOverlay(
     hasAsr: Boolean,
     unavailableReason: String = "",
     asrError: String = "",
+    /** 调试信息：显示模型状态和当前 / 下一段切片（设置里开关控制）。 */
+    debug: Boolean = false,
     onOpenSettings: () -> Unit,
     onOpenSubtitleSettings: () -> Unit,
     modifier: Modifier = Modifier,
@@ -108,18 +110,54 @@ fun AudiobookTranslationOverlay(
             state.status == TranslationSession.Status.READY -> "$modelTitle · 已翻译"
             else -> "$modelTitle"
         }
-        Text(
-            status,
-            color = Color.White.copy(alpha = 0.35f),
-            fontSize = 10.sp,
-            fontFamily = Ios5Sans,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-        )
+        if (debug) {
+            // 调试信息（设置 → 多模态大模型 → 调试信息）：
+            // 模型状态 + 当前段 / 下一段的起止时间和调度状态。
+            Column(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                DebugLine(status)
+                DebugLine(sliceLine("当前", state.currentSlice))
+                DebugLine(sliceLine("下一段", state.nextSlice))
+            }
+        }
     }
+}
+
+@Composable
+private fun DebugLine(text: String) {
+    Text(
+        text,
+        color = Color.White.copy(alpha = 0.35f),
+        fontSize = 10.sp,
+        fontFamily = Ios5Sans,
+        textAlign = TextAlign.Center,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+private fun sliceLine(label: String, slice: TranslationSession.SliceInfo?): String {
+    if (slice == null) return "$label —"
+    return "$label ${clock(slice.start)}–${clock(slice.end)} · ${sliceStateLabel(slice.state)}"
+}
+
+/** 章节内秒数 → m:ss。 */
+private fun clock(sec: Double): String {
+    val s = sec.toInt().coerceAtLeast(0)
+    return "${s / 60}:${(s % 60).toString().padStart(2, '0')}"
+}
+
+private fun sliceStateLabel(state: TranslationSession.SliceState): String = when (state) {
+    TranslationSession.SliceState.PENDING -> "未切"
+    TranslationSession.SliceState.SLICED -> "已切好"
+    TranslationSession.SliceState.PREPARING -> "准备中"
+    TranslationSession.SliceState.GENERATING -> "翻译中"
+    TranslationSession.SliceState.DONE -> "完成"
+    TranslationSession.SliceState.FAILED -> "失败"
 }
 
 @Composable

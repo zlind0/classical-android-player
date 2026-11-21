@@ -81,7 +81,7 @@ class AudioSliceStore(
             val pcm = window?.read(startSec, endSec)
             if (pcm != null) {
                 WavEncoder.writeFile(tmp, pcm)
-                Log.i(
+                LlmDebug.i(
                     TAG,
                     "slice $key from decoded window " +
                         "dur=${(endSec - startSec).toInt()}s in ${System.currentTimeMillis() - started}ms",
@@ -91,7 +91,7 @@ class AudioSliceStore(
                     tmp.delete()
                     return null
                 }
-                Log.i(
+                LlmDebug.i(
                     TAG,
                     "slice $key decoded from source " +
                         "dur=${(endSec - startSec).toInt()}s in ${System.currentTimeMillis() - started}ms",

@@ -479,6 +479,8 @@ class SettingsStore(private val context: Context) {
         val LLM_TEMPERATURE = floatPreferencesKey("llm_temperature")
         val LLM_USE_GPU = booleanPreferencesKey("llm_use_gpu")
         val LLM_TARGET_LANGUAGE = stringPreferencesKey("llm_target_language")
+        /** 调试信息：诊断日志 + 播放页底部的模型 / 切片状态。 */
+        val LLM_DEBUG_INFO = booleanPreferencesKey("llm_debug_info")
         val EEXPORT_USE_INTERNAL = booleanPreferencesKey("eexport_use_internal")
         val EEXPORT_INTERNAL_CODE = stringPreferencesKey("eexport_internal_code")
         val EEXPORT_ENGINE = stringPreferencesKey("eexport_engine")
@@ -1146,6 +1148,8 @@ class SettingsStore(private val context: Context) {
         val useGpu: Boolean = true,
         /** 翻译目标语言 */
         val targetLanguage: String = "简体中文",
+        /** 调试信息：输出诊断日志，并在翻译层底部显示模型 / 切片状态 */
+        val debugInfo: Boolean = false,
     )
 
     val multimodalPrefs: Flow<MultimodalPrefs> = context.dataStore.data.map { p ->
@@ -1158,6 +1162,7 @@ class SettingsStore(private val context: Context) {
             temperature = (p[Keys.LLM_TEMPERATURE] ?: 0.3f).coerceIn(0f, 2f),
             useGpu = p[Keys.LLM_USE_GPU] ?: true,
             targetLanguage = p[Keys.LLM_TARGET_LANGUAGE] ?: "简体中文",
+            debugInfo = p[Keys.LLM_DEBUG_INFO] ?: false,
         )
     }.distinctUntilChanged()
 
@@ -1182,6 +1187,9 @@ class SettingsStore(private val context: Context) {
     }
     suspend fun setMultimodalTargetLanguage(v: String) = context.dataStore.edit {
         it[Keys.LLM_TARGET_LANGUAGE] = v.trim().ifBlank { "简体中文" }
+    }
+    suspend fun setMultimodalDebugInfo(v: Boolean) = context.dataStore.edit {
+        it[Keys.LLM_DEBUG_INFO] = v
     }
 
     // ---- 电子书转有声书设置（转换页，默认语速 1.1x，默认不覆盖） ----

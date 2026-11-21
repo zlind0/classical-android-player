@@ -11,6 +11,7 @@ import android.os.Messenger
 import android.os.RemoteException
 import android.os.SystemClock
 import android.util.Log
+import com.aurora.music.data.llm.LlmDebug
 import com.aurora.music.data.llm.LlmGenerationPrefs
 import com.aurora.music.data.llm.LlmModelCatalog
 import com.aurora.music.data.llm.LlmRuntime
@@ -61,7 +62,7 @@ class LlmService : Service() {
         })
         messenger = Messenger(handler)
         startIdleWatchdog()
-        Log.i(TAG, "service created pid=${android.os.Process.myPid()}")
+        LlmDebug.i(TAG, "service created pid=${android.os.Process.myPid()}")
     }
 
     /**
@@ -79,7 +80,7 @@ class LlmService : Service() {
                 if (jobs.isNotEmpty()) continue
                 if (loadJob?.isActive == true) continue
                 if (state == LlmProtocol.STATE_IDLE) continue
-                Log.i(TAG, "no ping for ${idleFor}ms, unloading model")
+                LlmDebug.i(TAG, "no ping for ${idleFor}ms, unloading model")
                 handleUnload()
             }
         }
@@ -94,6 +95,10 @@ class LlmService : Service() {
         val reply = msg.replyTo
         if (reply != null) clients += reply
         val data = msg.data ?: Bundle()
+        // 调试开关随 LOAD / TRANSLATE 下发；Ping 不带数据，沿用上一次的值。
+        if (data.containsKey(LlmProtocol.KEY_DEBUG)) {
+            LlmDebug.enabled = data.getBoolean(LlmProtocol.KEY_DEBUG, false)
+        }
         when (msg.what) {
             LlmProtocol.MSG_LOAD -> {
                 lastActivityMs = SystemClock.elapsedRealtime()
@@ -131,13 +136,13 @@ class LlmService : Service() {
                 // 也不要闪一下「正在加载模型…」。
                 if (runtime.isLoaded(spec, prefs)) {
                     broadcast(LlmProtocol.STATE_READY, "")
-                    Log.i(TAG, "model already resident ${spec.id}")
+                    LlmDebug.i(TAG, "model already resident ${spec.id}")
                     return@launch
                 }
                 broadcast(LlmProtocol.STATE_LOADING, "正在加载模型…")
                 runtime.ensureLoaded(spec, prefs)
                 broadcast(LlmProtocol.STATE_READY, "")
-                Log.i(TAG, "model ready ${spec.id}")
+                LlmDebug.i(TAG, "model ready ${spec.id}")
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
@@ -159,6 +164,7 @@ class LlmService : Service() {
             return
         }
         val prefs = prefsFrom(data)
+        val t0 = SystemClock.elapsedRealtime()
         jobs[requestId] = scope.launch {
             try {
                 // 正常情况下引擎常驻，这里只是交给客户端一个准确的加载态；
@@ -167,6 +173,8 @@ class LlmService : Service() {
                     broadcast(LlmProtocol.STATE_LOADING, "正在加载模型…")
                 }
                 val audio = File(audioPath).readBytes()
+                val readMs = SystemClock.elapsedRealtime() - t0
+                LlmDebug.i(TAG, "request $requestId audio=${audio.size / 1024}KB read=${readMs}ms")
                 val result = runtime.translate(
                     spec = spec,
                     prefs = prefs,
@@ -215,7 +223,7 @@ class LlmService : Service() {
         broadcast(LlmProtocol.STATE_IDLE, "")
         scope.launch {
             runtime.release()
-            Log.i(TAG, "model released")
+            LlmDebug.i(TAG, "model released")
         }
     }
 
@@ -267,7 +275,7 @@ class LlmService : Service() {
     }
 
     override fun onDestroy() {
-        Log.i(TAG, "service destroyed")
+        LlmDebug.i(TAG, "service destroyed")
         scope.cancel()
         jobs.values.forEach { it.cancel() }
         jobs.clear()

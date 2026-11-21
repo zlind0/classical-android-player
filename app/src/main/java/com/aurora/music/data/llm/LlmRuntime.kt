@@ -1,6 +1,7 @@
 package com.aurora.music.data.llm
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Content
@@ -17,6 +18,7 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CompletableDeferred
@@ -51,8 +53,16 @@ class LlmRuntime(private val context: Context) {
         onModelReady: () -> Unit = {},
         onToken: (String) -> Unit,
     ): String = withContext(Dispatchers.IO) {
+        // 诊断用：等运行时锁（上一段收尾）/ 取引擎 / 建会话 / 音频编码到首个 token。
+        val t0 = SystemClock.elapsedRealtime()
+        var tLock = t0
+        var tEngine = t0
+        var tConv = t0
+        val tFirst = AtomicLong(0)
         mutex.withLock {
+            tLock = SystemClock.elapsedRealtime()
             val engine = ensureEngine(spec, prefs)
+            tEngine = SystemClock.elapsedRealtime()
             val conversation = engine.createConversation(
                 ConversationConfig(
                     samplerConfig = SamplerConfig(
@@ -65,6 +75,7 @@ class LlmRuntime(private val context: Context) {
                     extraContext = mapOf("enable_thinking" to false),
                 ),
             )
+            tConv = SystemClock.elapsedRealtime()
             onModelReady()
 
             val finished = AtomicBoolean(false)
@@ -87,6 +98,7 @@ class LlmRuntime(private val context: Context) {
                             override fun onMessage(message: Message) {
                                 val delta = message.toString()
                                 if (delta.isEmpty()) return
+                                tFirst.compareAndSet(0, SystemClock.elapsedRealtime())
                                 acc.append(delta)
                                 if (!cont.isCancelled) onToken(delta)
                             }
@@ -121,6 +133,15 @@ class LlmRuntime(private val context: Context) {
             // 这次 GPU 推理完整跑完了，说明驱动没被这组权重/这条路径带崩；
             // 清掉标记，下次冷启动可以继续用 GPU。
             if (loaded?.gpu == true) runCatching { llmGpuCrashMarker(context).delete() }
+            val tEnd = SystemClock.elapsedRealtime()
+            val first = tFirst.get()
+            LlmDebug.i(
+                TAG,
+                "translate wait=${tLock - t0}ms engine=${tEngine - tLock}ms " +
+                    "conv=${tConv - tEngine}ms " +
+                    "first=${if (first > 0) first - t0 else -1}ms " +
+                    "total=${tEnd - t0}ms out=${text.length}字",
+            )
             text
         }
     }
@@ -208,7 +229,7 @@ class LlmRuntime(private val context: Context) {
             runCatching { engine.close() }
             throw t
         }
-        Log.i(TAG, "loaded ${spec.id} backend=${if (useGpu) "GPU" else "CPU"} ctx=${prefs.contextTokens}")
+        LlmDebug.i(TAG, "loaded ${spec.id} backend=${if (useGpu) "GPU" else "CPU"} ctx=${prefs.contextTokens}")
         return engine
     }
 

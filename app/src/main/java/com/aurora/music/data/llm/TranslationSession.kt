@@ -1,11 +1,13 @@
 package com.aurora.music.data.llm
 
+import android.os.SystemClock
 import android.util.Log
 import com.aurora.music.data.llm.service.LlmClient
 import com.aurora.music.data.llm.service.LlmLoadStatus
 import com.aurora.music.data.subtitle.DecodedPcmWindow
 import com.aurora.music.data.subtitle.SubtitleCue
 import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.ceil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -46,11 +48,24 @@ class TranslationSession(
 
     enum class Status { WAITING, LOADING, GENERATING, READY, ERROR }
 
+    /** 调试信息里显示的一段音频的状态。 */
+    enum class SliceState { PENDING, SLICED, PREPARING, GENERATING, DONE, FAILED }
+
+    data class SliceInfo(
+        val start: Double,
+        val end: Double,
+        val state: SliceState,
+    )
+
     data class UiState(
         val status: Status = Status.WAITING,
         val text: String = "",
         val message: String = "",
         val modelTitle: String = "",
+        /** 调试信息：当前播放位置所在的一段。 */
+        val currentSlice: SliceInfo? = null,
+        /** 调试信息：已经规划好、接下来要翻译的一段。 */
+        val nextSlice: SliceInfo? = null,
     )
 
     data class Chunk(
@@ -79,6 +94,20 @@ class TranslationSession(
     private var workerKey: String? = null
     private var workerVisible = false
     private var workerAcc = StringBuilder()
+
+    /** 调试信息：当前 worker 处在「准备这一段」还是「正在理解语音」。 */
+    @Volatile
+    private var workerStage = SliceState.PREPARING
+
+    /** 调试信息：下一段（已经算好时间点，可能还没切音频）。 */
+    @Volatile
+    private var nextSlice: Chunk? = null
+
+    // 上一次发布的状态：调试信息刷新时只换切片部分，不打断正在显示的译文。
+    @Volatile private var lastStatus = Status.WAITING
+    @Volatile private var lastText = ""
+    @Volatile private var lastMessage = ""
+
     private var gotPosition = false
 
     /** 根据 cue 提前算好的切片计划（签名用来避免每 250ms 重复提交）。 */
@@ -137,6 +166,7 @@ class TranslationSession(
             activeChunk = chunk
             if (chunk == null) {
                 activeKey = null
+                nextSlice = null
                 val load = client.state.value
                 when {
                     load.load == LlmLoadStatus.ERROR -> publish(
@@ -181,13 +211,17 @@ class TranslationSession(
             // 播放走到时只剩发请求，不在播放位置现场解码。
             planAhead(cues, chunk)
 
+            val next = nextChunk(cues, chunk)
+            nextSlice = next
             // 当前块已经有结果、且没有任务在跑：提前翻译下一块（不展示）。
-            if (workerJob?.isActive != true) {
-                val next = nextChunk(cues, chunk)
-                if (next != null && cache[next.key] == null && next.key !in failed) {
-                    startWorker(next, visible = false)
-                }
+            if (workerJob?.isActive != true &&
+                next != null && cache[next.key] == null && next.key !in failed
+            ) {
+                startWorker(next, visible = false)
             }
+            // 调试信息要跟着切片 / worker 状态变，但不能盖掉正在流式显示的译文：
+            // 只重新发布同一份状态，切片部分由 emit() 现算。
+            if (LlmDebug.enabled) emit()
             delay(250)
         }
     }
@@ -199,17 +233,25 @@ class TranslationSession(
         workerKey = key
         workerVisible = visible
         workerAcc = acc
+        workerStage = SliceState.PREPARING
         failed.remove(key)
         if (visible && activeKey == key) {
             // 模型通常已经常驻，别把每个新块的准备阶段都显示成「加载模型」。
             val loadingModel = client.state.value.load != LlmLoadStatus.READY
             publish(Status.LOADING, "", if (loadingModel) "正在加载模型…" else "正在准备这一段…")
         }
+        // 诊断用：把「准备这一段」拆成 切片 / 等上一段收尾+建会话 / 音频编码+首个 token。
+        // 三段各自的实际耗时只打日志，不影响调度。
+        val t0 = SystemClock.elapsedRealtime()
+        val tSlice = AtomicLong(0)
+        val tReady = AtomicLong(0)
+        val tFirst = AtomicLong(0)
         val job = scope.launch {
             try {
                 // 大概率已经由 planAhead 提前切好；没有才现切（并且优先用已解码 PCM）。
                 val audio = slices.ensure(key, chunk.start, chunk.end, pcmWindow)
                     ?: throw IllegalStateException("这一段没有可读取的音频")
+                tSlice.set(SystemClock.elapsedRealtime())
                 val prompt = buildPrompt()
                 val result = client.translate(
                     spec = spec,
@@ -217,11 +259,14 @@ class TranslationSession(
                     audioFile = audio,
                     prompt = prompt,
                     onReady = {
+                        tReady.compareAndSet(0, SystemClock.elapsedRealtime())
+                        if (workerKey == key) workerStage = SliceState.GENERATING
                         if (workerVisible && activeKey == key) {
                             publish(Status.GENERATING, acc.toString(), "正在理解语音…")
                         }
                     },
                     onToken = { delta ->
+                        tFirst.compareAndSet(0, SystemClock.elapsedRealtime())
                         acc.append(delta)
                         if (workerVisible && activeKey == key) {
                             publish(Status.GENERATING, acc.toString(), "")
@@ -232,7 +277,9 @@ class TranslationSession(
                 if (workerVisible && activeKey == key) {
                     publish(Status.READY, result)
                 }
+                logTiming(key, visible, chunk, t0, tSlice, tReady, tFirst, "ok")
             } catch (c: CancellationException) {
+                logTiming(key, visible, chunk, t0, tSlice, tReady, tFirst, "cancelled")
                 throw c
             } catch (t: Throwable) {
                 Log.w(TAG, "translate ${chunk.key} failed", t)
@@ -240,12 +287,42 @@ class TranslationSession(
                 if (workerVisible && activeKey == key) {
                     publish(Status.ERROR, "", t.message ?: "翻译失败")
                 }
+                logTiming(key, visible, chunk, t0, tSlice, tReady, tFirst, "error=${t.message}")
             }
         }
         workerJob = job
     }
 
+    private fun logTiming(
+        key: String,
+        visible: Boolean,
+        chunk: Chunk,
+        t0: Long,
+        tSlice: AtomicLong,
+        tReady: AtomicLong,
+        tFirst: AtomicLong,
+        tail: String,
+    ) {
+        if (!LlmDebug.enabled) return
+        val slice = tSlice.get()
+        val ready = tReady.get()
+        val first = tFirst.get()
+        LlmDebug.i(
+            TAG,
+            "chunk $key visible=$visible dur=${(chunk.end - chunk.start).toInt()}s " +
+                "slice=${if (slice > 0) slice - t0 else -1}ms " +
+                "ready=${if (ready > 0) ready - t0 else -1}ms " +
+                "first=${if (first > 0) first - t0 else -1}ms " +
+                "total=${SystemClock.elapsedRealtime() - t0}ms $tail",
+        )
+    }
+
     private fun cancelWorker() {
+        if (workerVisible && workerJob?.isActive == true) {
+            // 播放已经走过这一段、模型还没译完：已生成的部分会被丢掉重来，
+            // 这条日志能看出「慢到跟不上播放」发生得有多频繁。
+            LlmDebug.i(TAG, "cancel unfinished visible chunk $workerKey")
+        }
         workerJob?.cancel()
         workerJob = null
         workerKey = null
@@ -253,12 +330,40 @@ class TranslationSession(
     }
 
     private fun publish(status: Status, text: String, message: String = "") {
+        lastStatus = status
+        lastText = text
+        lastMessage = message
+        emit()
+    }
+
+    /** 发布当前状态；切片信息每次现算，调试信息开关关掉时完全不碰文件系统。 */
+    private fun emit() {
+        val debug = LlmDebug.enabled
         _state.value = UiState(
-            status = status,
-            text = text,
-            message = message,
+            status = lastStatus,
+            text = lastText,
+            message = lastMessage,
             modelTitle = spec.shortTitle,
+            currentSlice = if (debug) {
+                activeChunk?.let { SliceInfo(it.start, it.end, sliceState(it)) }
+            } else {
+                null
+            },
+            nextSlice = if (debug) {
+                nextSlice?.let { SliceInfo(it.start, it.end, sliceState(it)) }
+            } else {
+                null
+            },
         )
+    }
+
+    /** 这一段在调度上的位置：没切 / 已切 / 准备中 / 翻译中 / 完成 / 失败。 */
+    private fun sliceState(chunk: Chunk): SliceState = when {
+        cache.containsKey(chunk.key) -> SliceState.DONE
+        chunk.key in failed -> SliceState.FAILED
+        workerKey == chunk.key && workerJob?.isActive == true -> workerStage
+        slices.peek(chunk.key) != null -> SliceState.SLICED
+        else -> SliceState.PENDING
     }
 
     private fun buildPrompt(): String {

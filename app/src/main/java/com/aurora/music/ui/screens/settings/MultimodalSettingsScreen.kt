@@ -220,6 +220,17 @@ fun MultimodalSettingsScreen(
                         "重新关掉再打开上面的开关，可以清掉标记、再试一次 GPU。",
                 )
             }
+            Ios5CellDivider()
+            Ios5SwitchRow(
+                title = "调试信息",
+                subtitle = "打开后在播放页翻译层底部显示模型状态、当前段和下一段的起止时间与进度，" +
+                    "同时输出诊断日志（logcat 过滤 TranslationSession / LlmService / LlmRuntime / AudioSliceStore）。",
+                checked = prefs.debugInfo,
+                onCheckedChange = { v ->
+                    com.aurora.music.data.llm.LlmDebug.enabled = v
+                    scope.launch { container.settingsStore.setMultimodalDebugInfo(v) }
+                },
+            )
         }
 
         ios5Section("占用") {

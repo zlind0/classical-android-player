@@ -30,6 +30,9 @@ object LlmProtocol {
     const val KEY_TOP_P = "top_p"
     const val KEY_TEMPERATURE = "temperature"
     const val KEY_USE_GPU = "use_gpu"
+
+    /** 调试信息开关：打开后 :llm 进程才输出诊断日志。 */
+    const val KEY_DEBUG = "debug"
     const val KEY_REQUEST_ID = "request_id"
     const val KEY_AUDIO_PATH = "audio_path"
 
