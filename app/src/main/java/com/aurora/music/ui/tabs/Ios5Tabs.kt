@@ -457,6 +457,15 @@ fun SettingsTab(
     val context = androidx.compose.ui.platform.LocalContext.current
     val container = (context.applicationContext as AuroraApplication).container
     val session by container.settingsStore.session.collectAsStateWithLifecycle(initialValue = null)
+    // 多模态大模型一行的灰色副标题：显示当前实际在用的模型名字。
+    val llmPrefs by container.settingsStore.multimodalPrefs.collectAsStateWithLifecycle(
+        initialValue = com.aurora.music.data.SettingsStore.MultimodalPrefs(),
+    )
+    val llmStates by container.llmModels.states.collectAsStateWithLifecycle()
+    val activeLlm = remember(llmPrefs.modelId, llmStates) {
+        container.llmModels.pickUsable(llmPrefs.modelId)
+    }
+    val llmSubtitle = activeLlm?.let { "采用 ${it.shortTitle}" } ?: "尚未下载模型"
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "设置")
         LazyColumn(
@@ -519,7 +528,7 @@ fun SettingsTab(
                     Ios5CellDivider()
                     Ios5Cell(title = "有声书设置", subtitle = "共存 / 步长 / 跳过", onClick = { onOpen(Ios5Routes.SETTINGS_AUDIOBOOK) })
                     Ios5CellDivider()
-                    Ios5Cell(title = "多模态大模型", subtitle = "Gemma 4 / 实时翻译", onClick = { onOpen(Ios5Routes.SETTINGS_MULTIMODAL) })
+                    Ios5Cell(title = "多模态大模型", subtitle = llmSubtitle, onClick = { onOpen(Ios5Routes.SETTINGS_MULTIMODAL) })
                 }
             }
             item {

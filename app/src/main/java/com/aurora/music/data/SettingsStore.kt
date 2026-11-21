@@ -481,6 +481,10 @@ class SettingsStore(private val context: Context) {
         val LLM_TARGET_LANGUAGE = stringPreferencesKey("llm_target_language")
         /** 调试信息：诊断日志 + 播放页底部的模型 / 切片状态。 */
         val LLM_DEBUG_INFO = booleanPreferencesKey("llm_debug_info")
+        /** 有声书提前翻译时间（秒）：后台预翻至少覆盖播放位置之后这么久。 */
+        val LLM_PRE_TRANSLATE_SEC = intPreferencesKey("llm_pre_translate_sec")
+        /** 点开翻译时暂停播放，直到当前一句翻译完成。 */
+        val LLM_PAUSE_UNTIL_FIRST = booleanPreferencesKey("llm_pause_until_first")
         val EEXPORT_USE_INTERNAL = booleanPreferencesKey("eexport_use_internal")
         val EEXPORT_INTERNAL_CODE = stringPreferencesKey("eexport_internal_code")
         val EEXPORT_ENGINE = stringPreferencesKey("eexport_engine")
@@ -1150,6 +1154,10 @@ class SettingsStore(private val context: Context) {
         val targetLanguage: String = "简体中文",
         /** 调试信息：输出诊断日志，并在翻译层底部显示模型 / 切片状态 */
         val debugInfo: Boolean = false,
+        /** 提前翻译时间（秒）：后台预翻尽量覆盖播放位置之后这么久（20–120，默认 40） */
+        val preTranslateSec: Int = 40,
+        /** 点开翻译时暂停播放，直到播放位置所在的那一句翻译完成（默认开） */
+        val pauseUntilFirst: Boolean = true,
     )
 
     val multimodalPrefs: Flow<MultimodalPrefs> = context.dataStore.data.map { p ->
@@ -1163,6 +1171,8 @@ class SettingsStore(private val context: Context) {
             useGpu = p[Keys.LLM_USE_GPU] ?: true,
             targetLanguage = p[Keys.LLM_TARGET_LANGUAGE] ?: "简体中文",
             debugInfo = p[Keys.LLM_DEBUG_INFO] ?: false,
+            preTranslateSec = (p[Keys.LLM_PRE_TRANSLATE_SEC] ?: 40).coerceIn(20, 120),
+            pauseUntilFirst = p[Keys.LLM_PAUSE_UNTIL_FIRST] ?: true,
         )
     }.distinctUntilChanged()
 
@@ -1190,6 +1200,12 @@ class SettingsStore(private val context: Context) {
     }
     suspend fun setMultimodalDebugInfo(v: Boolean) = context.dataStore.edit {
         it[Keys.LLM_DEBUG_INFO] = v
+    }
+    suspend fun setMultimodalPreTranslateSec(v: Int) = context.dataStore.edit {
+        it[Keys.LLM_PRE_TRANSLATE_SEC] = v.coerceIn(20, 120)
+    }
+    suspend fun setMultimodalPauseUntilFirst(v: Boolean) = context.dataStore.edit {
+        it[Keys.LLM_PAUSE_UNTIL_FIRST] = v
     }
 
     // ---- 电子书转有声书设置（转换页，默认语速 1.1x，默认不覆盖） ----

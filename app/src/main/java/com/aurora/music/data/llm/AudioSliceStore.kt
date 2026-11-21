@@ -148,7 +148,7 @@ class AudioSliceStore(
     private companion object {
         const val TAG = "AudioSliceStore"
 
-        /** 每章最多保留的切片文件（30 秒切片约 1 MB）。 */
-        const val MAX_FILES = 8
+        /** 每章最多保留的切片文件（30 秒切片约 1 MB）。要够放「提前翻译时间」内的所有切片。 */
+        const val MAX_FILES = 32
     }
 }

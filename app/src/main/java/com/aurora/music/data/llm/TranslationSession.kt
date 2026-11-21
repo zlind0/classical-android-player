@@ -43,7 +43,8 @@ object TranslationUiMemory {
  *
  * 从端点到端点把连续的 cue 拼到 [targetAudioSec]（最多 30 秒，Gemma 的音频输入
  * 上限）为一个翻译块，把这一块的原始音频送给多模态模型，流式显示译文；当前块开始
- * 出结果后，立刻后台翻译下一块，只放进缓存，等播放位置走到下一块再显示。
+ * 出结果后，立刻在后台按「提前翻译时间」连续翻译后面的多块（至少一块），只放进缓存，
+ * 等播放位置走到时再显示。
  *
  * 只有在「合并决策不会因为后续 cue 而改变」时才提交下一块（[isSettled]）。
  * 打开翻译 / 切章节 / 拖进度之后，落地的那一块通常等不到推理结束就播完了，
@@ -56,6 +57,10 @@ class TranslationSession(
     private val prefs: LlmGenerationPrefs,
     private val targetAudioSec: Int,
     private val targetLanguage: String,
+    /** 提前翻译时间（秒）：后台预翻至少覆盖当前位置之后这么久，且至少一句。 */
+    private val preTranslateSec: Int = 40,
+    /** 刚打开翻译时也立刻翻译当前块（「暂停直到第一句翻译完毕」用），而不是跳过它。 */
+    private val translateCurrentOnStart: Boolean = false,
     private val slices: AudioSliceStore,
     /** 字幕管线已经解好的 PCM；命中时切片不再重新解码。 */
     private val pcmWindow: DecodedPcmWindow? = null,
@@ -142,6 +147,9 @@ class TranslationSession(
 
     /** 打开翻译 / 切章节 / 拖进度之后的落地块：只定位、不翻译。 */
     @Volatile private var skipKey: String? = null
+
+    /** [translateCurrentOnStart] 只在第一次落地时生效，之后恢复「落地块跳过」的常规策略。 */
+    private var firstFocusPending = translateCurrentOnStart
 
     /** 落地时刻（elapsedRealtime），用来判断「还是没有下一块可追」。 */
     private var skipAt = 0L
@@ -282,20 +290,29 @@ class TranslationSession(
 
             if (jumped) {
                 // 刚落到新位置：当前块不翻——它通常等不到结果就播完了，直接追下一块。
-                skipKey = if (cache[key] == null) key else null
+                // 例外：翻译层刚打开、且开着「暂停直到第一句翻译完毕」，
+                // 当前块就是用户在等的那一句，必须马上开翻。
+                val focus = firstFocusPending
+                firstFocusPending = false
+                skipKey = if (cache[key] == null && !focus) key else null
                 skipAt = now
             }
-            // 落地块要马上有下一块可追，所以这里允许先提交「还没完全定稿」的下一块；
+            // 从当前块往后拼出覆盖「提前翻译时间」的若干块（至少一块）。
+            // 第一块允许临时定稿，让落地块后面马上有可追的下一块；
             // 它一旦提交就冻结，不会因为后续 cue 再变，只是可能比目标时长短一点。
-            val next = nextChunk(
+            val ahead = aheadChunks(
                 cues,
                 chunk,
-                allowProvisional = jumped || skipKey == key,
+                allowProvisionalFirst = jumped || skipKey == key,
             )
+            val next = ahead.firstOrNull()
+            // 先把当前块、再把后面一段时间的端点定下来并提前切好音频。放在启动可见
+            // worker 之前：跳转后旧位置的切片任务会立刻被取消，当前块优先占住解码锁。
+            planAhead(chunk, ahead)
             if (jumped) {
-                // 旧位置的可见任务已经没有意义；正在为「本块 / 下一块」跑的任务保留。
+                // 旧位置的可见任务已经没有意义；正在为「本块 / 后面任意预翻块」跑的任务保留。
                 val useful = workerJob?.isActive == true &&
-                    (workerKey == key || workerKey == next?.key)
+                    (workerKey == key || ahead.any { it.key == workerKey })
                 if (!useful) cancelWorker()
             }
 
@@ -304,8 +321,10 @@ class TranslationSession(
                 val cached = cache[key]
                 when {
                     cached != null -> {
-                        // 正在为下一块预翻的任务是有效的，留着；其余（旧位置）丢掉。
-                        if (workerKey != next?.key) cancelWorker()
+                        // 后台预翻的块只要还在「当前位置之后」就仍然有效，留着；其余（旧位置）丢掉。
+                        val keepWorker = workerJob?.isActive == true &&
+                            ahead.any { it.key == workerKey }
+                        if (!keepWorker) cancelWorker()
                         skipKey = null
                         publish(Status.READY, cached)
                     }
@@ -331,30 +350,28 @@ class TranslationSession(
                 }
             }
 
-            // 只要 cue 一到就把后面几块的切片时间点定下来并提前切好音频，
+            // 只要 cue 一到就把后面一段时间的端点定下来并提前切好音频，
             // 播放走到时只剩发请求，不在播放位置现场解码。
-            planAhead(cues, chunk)
-
             nextSlice = next
             // 只有真正的拖动/跳转需要冷却，正常播放（位置每 200ms 都在动）不受影响。
             val seekQuiet = now - lastSeekAt >= SEEK_SETTLE_MS
-            if (seekQuiet) {
-                // 当前块已经有结果、且没有任务在跑：立刻提前翻译下一块（不展示）。
-                // 单人模型请求是串行的，所以这里等的就是「上一块正在流式输出」。
-                if (workerJob?.isActive != true &&
-                    next != null && cache[next.key] == null && next.key !in failed
-                ) {
-                    startWorker(next, visible = false)
-                }
+            if (seekQuiet && workerJob?.isActive != true) {
                 // 被跳过的落地块没有下一块可追（或用户停在这里不动）时补翻它，
                 // 免得章节尾 / 暂停时整段没有译文。
                 val skipped = skipKey == key && cache[key] == null && key !in failed
-                if (workerJob?.isActive != true && skipped &&
+                if (skipped &&
                     (now - lastPosChangeAt >= PAUSE_TRANSLATE_MS ||
                         (chunk.endIndex + 1 >= cues.size && now - skipAt >= SKIP_WAIT_MS))
                 ) {
                     skipKey = null
                     startWorker(chunk, visible = true)
+                } else {
+                    // 单人模型请求是串行的：先排最近的未翻块；它完成后，
+                    // 下一轮循环会继续吃 ahead 里剩下的块，直到覆盖提前翻译时间。
+                    val candidate = ahead.firstOrNull {
+                        cache[it.key] == null && it.key !in failed && it.key != skipKey
+                    }
+                    if (candidate != null) startWorker(candidate, visible = false)
                 }
             }
             // 调试信息要跟着切片 / worker 状态变，但不能盖掉正在流式显示的译文：
@@ -713,30 +730,57 @@ class TranslationSession(
     }
 
     /**
-     * cue 一到就把后面若干块的端点定下来并提前切好音频（端点固定 → 切一次就够，
+     * 从 [current] 后面开始，按「提前翻译时间」收集需要预翻的块。
+     *
+     * 累计覆盖 [preTranslateSec]（至少返回一块，也就是至少提前翻下一句）；块数上限
+     * [MAX_PLAN_CHUNKS]，防止极短句把计划拉得过长。第一块可以临时定稿，后续块必须
+     * 已经定稿（[isSettled]），否则时间轴还会变，提前切好的音频就白切了。
+     */
+    private fun aheadChunks(
+        cues: List<SubtitleCue>,
+        current: Chunk,
+        allowProvisionalFirst: Boolean = false,
+    ): List<Chunk> {
+        val leadMs = preTranslateSec
+            .coerceIn(MIN_PRE_TRANSLATE_SEC, MAX_PRE_TRANSLATE_SEC)
+            .toLong() * 1000L
+        // 从「现在听到的位置」算起，保证后台预翻覆盖播放位置之后整整一个提前量；
+        // 循环至少跑一次，所以哪怕提前量很小也一定提前翻下一句。
+        val posMs = (position.value * 1000).roundToLong().coerceAtLeast(current.startMs)
+        val targetEnd = posMs + leadMs
+        val out = ArrayList<Chunk>(4)
+        var c = current
+        while (out.size < MAX_PLAN_CHUNKS) {
+            val next = nextChunk(
+                cues,
+                c,
+                allowProvisional = allowProvisionalFirst && out.isEmpty(),
+            ) ?: break
+            out += next
+            c = next
+            if (next.endMs >= targetEnd) break
+        }
+        return out
+    }
+
+    /**
+     * 把当前块和提前规划出来的块统一切好音频（端点固定 → 切一次就够，
      * 播放位置走到时不会重新算），播放走到该块时只剩发翻译请求。
      *
-     * [nextChunk] 只返回定稿的块，所以这里不会把「还会变长」的临时块切下来。
+     * 当前块排在最前面：跳转 / 刚打开翻译时旧位置的切片任务可能还占着解码锁，
+     * 先取消它，再按「当前 → 最近 → 更远」的顺序切，保证要显示的这一段最先就绪。
      * 切音频优先用字幕管线已经解过的 PCM（[pcmWindow]），窗口没覆盖才回退解码。
      */
-    private fun planAhead(cues: List<SubtitleCue>, current: Chunk) {
-        val ahead = ArrayList<Chunk>(PLAN_CHUNKS)
-        var c = current
-        while (ahead.size < PLAN_CHUNKS) {
-            val next = nextChunk(cues, c) ?: break
-            ahead += next
-            c = next
-        }
-        val signature = ahead.joinToString("|") { it.key }
+    private fun planAhead(current: Chunk, ahead: List<Chunk>) {
+        val signature = (current.key + "|" + ahead.joinToString("|") { it.key })
         if (signature == planSignature) return
         planSignature = signature
         sliceJob?.cancel()
-        if (ahead.isEmpty()) {
-            sliceJob = null
-            return
-        }
+        val all = ArrayList<Chunk>(ahead.size + 1)
+        all += current
+        all += ahead
         sliceJob = scope.launch(Dispatchers.IO) {
-            for (chunk in ahead) {
+            for (chunk in all) {
                 slices.ensure(chunk.key, chunk.start, chunk.end, pcmWindow)
             }
         }
@@ -745,8 +789,12 @@ class TranslationSession(
     private companion object {
         const val TAG = "TranslationSession"
 
-        /** 提前规划/切片的块数（每块最多 30 秒，3 块约 1.5 分钟）。 */
-        const val PLAN_CHUNKS = 3
+        /** 提前翻译时间的上下限（与设置页滑块一致）。 */
+        const val MIN_PRE_TRANSLATE_SEC = 20
+        const val MAX_PRE_TRANSLATE_SEC = 120
+
+        /** 最多提前规划 / 切片的块数；正常 30 秒一块时 24 块已经覆盖 12 分钟。 */
+        const val MAX_PLAN_CHUNKS = 24
 
         /** 两句之间静音超过这么久就不拼进同一块（用端点当分界）。 */
         const val MAX_GAP_SEC = 8.0

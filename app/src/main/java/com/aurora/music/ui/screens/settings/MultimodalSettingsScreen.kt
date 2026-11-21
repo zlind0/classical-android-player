@@ -160,6 +160,33 @@ fun MultimodalSettingsScreen(
                 },
             )
             Ios5CellDivider()
+            Ios5SliderRow(
+                title = "有声书提前翻译时间",
+                valueLabel = "${prefs.preTranslateSec} 秒",
+                value = prefs.preTranslateSec.toFloat(),
+                range = 20f..120f,
+                // 20..120 step 10 → 11 个位置 → steps = 9
+                steps = 9,
+                onValueChangeFinished = {},
+                onValueChange = { v ->
+                    scope.launch {
+                        container.settingsStore.setMultimodalPreTranslateSec((v / 10).roundToInt() * 10)
+                    }
+                },
+            )
+            Ios5CellDivider()
+            Ios5SwitchRow(
+                title = "暂停直到第一句翻译完毕",
+                subtitle = "正常播放时点开翻译，会先暂停；等播放位置所在的那一句翻译完成后自动继续播放。",
+                checked = prefs.pauseUntilFirst,
+                onCheckedChange = { scope.launch { container.settingsStore.setMultimodalPauseUntilFirst(it) } },
+            )
+            Ios5CellDivider()
+            Ios5StaticText(
+                "后台会把播放位置之后「提前翻译时间」内的句子逐块翻好并写入缓存，" +
+                    "至少提前一句；模型比播放慢时只能尽力而为。",
+            )
+            Ios5CellDivider()
             LanguageRows(
                 current = prefs.targetLanguage,
                 onSelect = { scope.launch { container.settingsStore.setMultimodalTargetLanguage(it) } },

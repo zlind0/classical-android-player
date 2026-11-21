@@ -134,6 +134,9 @@ fun Ios5AudiobookPlayerPage(
     var showTranslate by rememberSaveable {
         mutableStateOf(TranslationUiMemory.open)
     }
+    // 「暂停直到第一句翻译完毕」：点开翻译后暂停播放，等当前块翻译完再自动继续。
+    // 不放进 rememberSaveable：页面重建时不自动恢复播放，避免状态对不上。
+    var pauseGate by remember { mutableStateOf(false) }
     LaunchedEffect(subPrefs.enabled) {
         if (!subPrefs.enabled) showSubs = false
     }
@@ -168,8 +171,15 @@ fun Ios5AudiobookPlayerPage(
 
     // 翻译需要 ASR 给出的句级边界；字幕层没开也照样在后台转写。
     val captionsOn = showSubs || showTranslate
+    // 翻译只能在 ASR 已经识别出来的句子范围内提前翻，所以开着翻译时让字幕的
+    // 提前识别量至少追上「提前翻译时间」（多留 30 秒给 VAD 收尾和句子闭合）。
+    val asrLookAhead = if (showTranslate) {
+        maxOf(subPrefs.lookAheadSec, llmPrefs.preTranslateSec + 30)
+    } else {
+        subPrefs.lookAheadSec
+    }
     val subSession = remember(
-        book.id, chapter?.key, captionsOn, activeSubModel?.id, subPrefs.lookAheadSec, subPrefs.threads,
+        book.id, chapter?.key, captionsOn, activeSubModel?.id, asrLookAhead, subPrefs.threads,
     ) {
         if (!captionsOn || activeSubModel == null || chapter == null) null
         else com.aurora.music.data.subtitle.SubtitleSession(
@@ -179,7 +189,7 @@ fun Ios5AudiobookPlayerPage(
             spec = activeSubModel,
             bookId = book.id,
             chapter = chapter,
-            lookAheadSec = subPrefs.lookAheadSec,
+            lookAheadSec = asrLookAhead,
             threads = subPrefs.threads,
             pcmWindow = pcmWindow,
         )
@@ -201,6 +211,7 @@ fun Ios5AudiobookPlayerPage(
         book.id, chapter?.key, showTranslate, activeLlm?.id, activeSubModel?.id,
         llmPrefs.targetAudioSec, llmPrefs.targetLanguage, llmPrefs.maxOutputTokens,
         llmPrefs.contextTokens, llmPrefs.temperature, llmPrefs.useGpu,
+        llmPrefs.preTranslateSec,
     ) {
         if (!showTranslate || activeLlm == null || activeSubModel == null || chapter == null) null
         else TranslationSession(
@@ -215,6 +226,9 @@ fun Ios5AudiobookPlayerPage(
             ),
             targetAudioSec = llmPrefs.targetAudioSec,
             targetLanguage = llmPrefs.targetLanguage,
+            preTranslateSec = llmPrefs.preTranslateSec,
+            // 打开翻译层时如果已经进入「暂停等第一句」，落地块要直接开翻而不是跳过。
+            translateCurrentOnStart = pauseGate && llmPrefs.pauseUntilFirst,
             slices = sliceStore!!,
             pcmWindow = pcmWindow,
             processedUntilProvider = { subStateRef.value.processedUntil },
@@ -239,6 +253,31 @@ fun Ios5AudiobookPlayerPage(
     val emptyTranslationState = remember { MutableStateFlow(TranslationSession.UiState()) }
     val translationState by (translationSession?.state ?: emptyTranslationState)
         .collectAsStateWithLifecycle(TranslationSession.UiState())
+
+    // 自动续播时要读最新的播放状态，不能用 effect 启动时的快照。
+    val isPlayingNow by rememberUpdatedState(state.isPlaying)
+    // 「暂停直到第一句翻译完毕」：当前块 READY（或失败）后自动继续播放。
+    // 先等刚才那次暂停真正生效，避免两次 onTogglePlay 互相抵消。
+    LaunchedEffect(pauseGate, translationState.status) {
+        if (!pauseGate) return@LaunchedEffect
+        if (translationState.status != TranslationSession.Status.READY &&
+            translationState.status != TranslationSession.Status.ERROR
+        ) {
+            return@LaunchedEffect
+        }
+        while (isPlayingNow) kotlinx.coroutines.delay(50)
+        pauseGate = false
+        onTogglePlay()
+    }
+    // 兜底：整章没有可翻译的句子等情况永远不会 READY，最多等 90 秒就继续播放。
+    LaunchedEffect(pauseGate) {
+        if (!pauseGate) return@LaunchedEffect
+        kotlinx.coroutines.delay(90_000)
+        if (pauseGate) {
+            pauseGate = false
+            if (!isPlayingNow) onTogglePlay()
+        }
+    }
 
     val step = abookPrefs.seekSec
 
@@ -401,8 +440,25 @@ fun Ios5AudiobookPlayerPage(
                                 indication = null,
                                 interactionSource = remember { MutableInteractionSource() },
                                 onClick = {
-                                    showTranslate = !showTranslate
+                                    val turningOn = !showTranslate
+                                    showTranslate = turningOn
                                     TranslationUiMemory.open = showTranslate
+                                    if (!turningOn) {
+                                        // 关掉翻译层：之前若因为它暂停过，恢复播放。
+                                        if (pauseGate) {
+                                            pauseGate = false
+                                            if (!state.isPlaying) onTogglePlay()
+                                        }
+                                    } else if (llmPrefs.pauseUntilFirst &&
+                                        state.isPlaying &&
+                                        activeLlm != null &&
+                                        activeSubModel != null &&
+                                        chapter != null
+                                    ) {
+                                        // 正常播放时点开翻译：先暂停，等当前这一句翻译完再继续。
+                                        pauseGate = true
+                                        onTogglePlay()
+                                    }
                                 },
                             ).padding(9.dp),
                     )
@@ -528,7 +584,13 @@ fun Ios5AudiobookPlayerPage(
                     }
                     AbookPlayPauseIcon(
                         playing = state.isPlaying,
-                        modifier = Modifier.size(72.dp).clip(androidx.compose.foundation.shape.CircleShape).clickable(onClick = onTogglePlay).padding(10.dp),
+                        modifier = Modifier.size(72.dp).clip(androidx.compose.foundation.shape.CircleShape)
+                            .clickable {
+                                // 用户自己按了播放：取消「等第一句」的自动续播，避免再被暂停。
+                                pauseGate = false
+                                onTogglePlay()
+                            }
+                            .padding(10.dp),
                     )
                     AbookCellButton(onClick = { onSeekBy(step) }) {
                         SeekCircleIcon(seconds = step, forward = true, modifier = Modifier.size(54.dp))
