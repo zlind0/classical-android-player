@@ -9,6 +9,7 @@ import com.aurora.music.data.subtitle.SubtitleCue
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.ceil
+import kotlin.math.roundToLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,10 +30,14 @@ object TranslationUiMemory {
 /**
  * 有声书「边听边译」调度器。
  *
- * 字幕会话已经用 VAD 把章节切成了句级 cue。这里从当前句开始，把连续的 cue 拼到
- * [targetAudioSec]（最多 30 秒，Gemma 的音频输入上限）为一个翻译块，把这一块的
- * 原始音频送给多模态模型，流式显示译文；当前块开始出结果后，立刻后台翻译下一块，
- * 只放进缓存，等播放位置走到下一块再显示。
+ * 字幕会话已经用 VAD 把章节切成了句级 cue。时间轴按「VAD 空隙中点」切成固定端点：
+ * 相邻两句之间取静音的中点作为分界，这样每句都有自己确定的 [start, end) 区间，
+ * 播放位置落在哪个区间就是哪一段，不会因为从空隙哪一侧看过去而变样。
+ *
+ * 然后从端点到端点把连续的 cue 拼到 [targetAudioSec]（最多 30 秒，Gemma 的音频
+ * 输入上限）为一个翻译块，把这一块的原始音频送给多模态模型，流式显示译文；
+ * 当前块开始出结果后，立刻后台翻译下一块，只放进缓存，等播放位置走到下一块再显示。
+ * 缓存键就是端点毫秒值，端点稳定 → 同一段音频永远命中同一份缓存。
  */
 class TranslationSession(
     private val cuesProvider: () -> List<SubtitleCue>,
@@ -69,13 +74,16 @@ class TranslationSession(
     )
 
     data class Chunk(
-        val start: Double,
-        val end: Double,
+        /** 端点毫秒值：缓存键和切片都用它，避免浮点误差导致同一段变出两个 key。 */
+        val startMs: Long,
+        val endMs: Long,
         val sourceText: String,
         val startIndex: Int,
         val endIndex: Int,
     ) {
-        val key: String get() = "${(start * 1000).toLong()}-${(end * 1000).toLong()}"
+        val start: Double get() = startMs / 1000.0
+        val end: Double get() = endMs / 1000.0
+        val key: String get() = "$startMs-$endMs"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -151,17 +159,17 @@ class TranslationSession(
                 continue
             }
             val cues = normalizeCues(cuesProvider())
+            val bounds = boundsMs(cues)
             val pos = position.value.toDouble()
-            // 关键：播放中位置会不断前进，不能每 250ms 用「当前句」重新算块，
-            // 否则每个句子都会取消上一个 worker，模型永远停在「正在加载」。
-            // 只要还在当前块内就继续用同一个块；正常走过块尾才取下一块。
+            // 端点固定（取 VAD 空隙中点），位置落在哪个区间就是哪一段：
+            // 每 250ms 重算得到的是同一个 Chunk，不会因为从空隙另一侧看过去而变样。
+            // 播放还在当前块内就继续用它——最后一句之后的尾巴会在新 cue 到来时延长，
+            // 这种「还在进行中」的块不改，避免把正在跑的推理取消掉。
             val current = activeChunk
-            val chunk = when {
-                current == null -> chunkAt(cues, pos)
-                pos < current.start -> chunkAt(cues, pos)
-                pos < current.end -> current
-                pos - current.end <= 3.0 -> nextChunk(cues, current) ?: current
-                else -> chunkAt(cues, pos) // 大跨度拖动进度条
+            val chunk = if (current != null && pos >= current.start && pos < current.end) {
+                current
+            } else {
+                chunkAt(cues, bounds, pos)
             }
             activeChunk = chunk
             if (chunk == null) {
@@ -209,9 +217,9 @@ class TranslationSession(
 
             // 只要 cue 一到就把后面几块的切片时间点定下来并提前切好音频，
             // 播放走到时只剩发请求，不在播放位置现场解码。
-            planAhead(cues, chunk)
+            planAhead(cues, bounds, chunk)
 
-            val next = nextChunk(cues, chunk)
+            val next = nextChunk(cues, bounds, chunk)
             nextSlice = next
             // 当前块已经有结果、且没有任务在跑：提前翻译下一块（不展示）。
             if (workerJob?.isActive != true &&
@@ -404,64 +412,120 @@ class TranslationSession(
     }
 
     /**
-     * 从当前句开始，尽量拼满目标时长。
+     * 时间轴端点（毫秒）。相邻两句之间取 VAD 空隙的中点：
+     * 空隙的前半段算前一句，后半段算后一句，双方看到的是同一个分界点。
      *
-     * 下一句放进来会超过目标时长时，宁可少放这一句，也绝不截断它；
-     * 单句本身超过 30 秒的情况已经在 [normalizeCues] 里拆成多段。
+     * 端点只由「前后两句的边界」决定，所以只要这两句已经识别出来，端点就不会再变，
+     * 缓存键（[Chunk.startMs] / [Chunk.endMs]）也就稳定。
      */
-    private fun chunkFor(cues: List<SubtitleCue>, fromIndex: Int): Chunk? {
-        if (fromIndex !in cues.indices) return null
-        val startKey = (cues[fromIndex].start * 1000).toLong()
-        chosenByStart[startKey]?.let { return it }
-        val maxSec = targetAudioSec.coerceIn(5, LlmModelCatalog.MAX_AUDIO_SECONDS).toDouble()
-        val start = cues[fromIndex].start
-        var end = cues[fromIndex].end
-        val text = StringBuilder(cues[fromIndex].text)
-        var i = fromIndex + 1
-        while (i < cues.size) {
-            val next = cues[i]
-            // 放不下就停在这里：不裁剪下一段音频。
-            if (next.end - start > maxSec + 1e-6) break
-            if (next.start - end > 8.0) break // 中间静音太久，不跨段拼
-            end = next.end
-            if (text.isNotEmpty()) text.append(' ')
-            text.append(next.text)
-            i++
+    private fun boundsMs(cues: List<SubtitleCue>): LongArray {
+        val n = cues.size
+        val out = LongArray(n + 1)
+        if (n == 0) return out
+        out[0] = (cues[0].start * 1000).roundToLong().coerceAtLeast(0L)
+        for (i in 1 until n) {
+            val prevEndMs = (cues[i - 1].end * 1000).roundToLong()
+            val startMs = (cues[i].start * 1000).roundToLong()
+            // 空隙中点。ASR 片段偶尔轻微重叠时，端点最多退到上一段的端点，
+            // 保证端点单调、这一段的长度不为负。
+            val mid = (prevEndMs + startMs) / 2
+            out[i] = mid.coerceIn(out[i - 1], maxOf(startMs, out[i - 1]))
         }
-        val chunk = Chunk(
-            start = start,
-            end = end,
-            sourceText = text.toString(),
-            startIndex = fromIndex,
-            endIndex = (i - 1).coerceAtLeast(fromIndex),
-        )
-        chosenByStart[startKey] = chunk
-        return chunk
-    }
-
-    private fun chunkAt(cues: List<SubtitleCue>, positionSec: Double): Chunk? {
-        val idx = currentCueIndex(cues, positionSec)
-        return if (idx >= 0) chunkFor(cues, idx) else null
-    }
-
-    private fun nextChunk(cues: List<SubtitleCue>, current: Chunk): Chunk? {
-        val idx = cues.indexOfFirst { it.start >= current.end - 0.05 }
-        if (idx < 0) return null
-        return chunkFor(cues, idx)
+        out[n] = (cues[n - 1].end * 1000).roundToLong().coerceAtLeast(out[n - 1])
+        return out
     }
 
     /**
-     * VAD/ASR 一给出新 cue，就把当前块之后若干块的切片时间点定下来（[chunkFor]
-     * 会记住结果，后面实时播放不会再漂移），并提前把音频切好。
+     * 从 [fromIndex] 这一句所属的端点开始，按端点尽量拼满目标时长。
      *
-     * 切音频优先用字幕管线已经解过的 PCM（[pcmWindow]），窗口没覆盖才回退解码；
-     * 播放位置真正走到该块时，只剩下发翻译请求。
+     * 起点固定为 `bounds[fromIndex]`（空隙中点），终点固定为最后一句之后的端点，
+     * 所以同一段区间算多少次都是同一个 [Chunk]；放不下下一句时就切在它前面的端点，
+     * 绝不截断某一句。单句加上两侧静音超过 30 秒时只裁掉尾部静音，不会丢语音。
      */
-    private fun planAhead(cues: List<SubtitleCue>, current: Chunk) {
+    private fun chunkFor(cues: List<SubtitleCue>, bounds: LongArray, fromIndex: Int): Chunk? {
+        if (fromIndex !in cues.indices) return null
+        val maxMs = targetAudioSec
+            .coerceIn(5, LlmModelCatalog.MAX_AUDIO_SECONDS)
+            .toLong() * 1000L
+        // 这一句所属的端点到下一句端点的区间；超过上限时砍掉前导静音（语音本身
+        // 不超过 30 秒，见 normalizeCues），保证既不超上限、也不切掉语音。
+        val end0Ms = bounds[fromIndex + 1]
+        var startMs = bounds[fromIndex]
+        if (end0Ms - startMs > maxMs) startMs = end0Ms - maxMs
+        chosenByStart[startMs]?.let { return it }
+        var endMs = end0Ms
+        var toIndex = fromIndex
+        var i = fromIndex + 1
+        while (i < cues.size) {
+            // 中间静音太久就不跨段拼：那种地方留着端点切块更自然。
+            if (cues[i].start - cues[i - 1].end > MAX_GAP_SEC) break
+            // 放不下就停在这里：不裁剪下一段音频。
+            if (bounds[i + 1] - startMs > maxMs) break
+            endMs = bounds[i + 1]
+            toIndex = i
+            i++
+        }
+        val text = StringBuilder(cues[fromIndex].text)
+        for (k in fromIndex + 1..toIndex) {
+            if (text.isNotEmpty()) text.append(' ')
+            text.append(cues[k].text)
+        }
+        val chunk = Chunk(
+            startMs = startMs,
+            endMs = endMs,
+            sourceText = text.toString(),
+            startIndex = fromIndex,
+            endIndex = toIndex,
+        )
+        // 终点落在「最后一句」之后时，那是 ASR 前沿的临时边界（新 cue 一到就会变成
+        // 两句之间的中点），先别记住，等它变成真正的端点再缓存。
+        if (toIndex < cues.size - 1) chosenByStart[startMs] = chunk
+        return chunk
+    }
+
+    /**
+     * 播放位置所在的那一段：二分找最后一个 `bounds[i] <= pos` 的 i。
+     * 端点把时间轴铺满且不重叠，所以空隙里的位置也有唯一归属
+     * （前半段归前一句，后半段归后一句），不会出现「换个方向看就变成另一段」。
+     */
+    private fun chunkAt(cues: List<SubtitleCue>, bounds: LongArray, positionSec: Double): Chunk? {
+        if (cues.isEmpty()) return null
+        val posMs = (positionSec * 1000).roundToLong()
+        var lo = 0
+        var hi = cues.size - 1
+        var ans = -1
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            if (bounds[mid] <= posMs) {
+                ans = mid
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+        // ans < 0：第一句之前；没有对应的段。
+        if (ans < 0) return null
+        return chunkFor(cues, bounds, ans)
+    }
+
+    /** 当前块的下一个块：从它的终点端点开始，所以 `next.start == current.end`。 */
+    private fun nextChunk(cues: List<SubtitleCue>, bounds: LongArray, current: Chunk): Chunk? {
+        val idx = current.endIndex + 1
+        if (idx !in cues.indices) return null
+        return chunkFor(cues, bounds, idx)
+    }
+
+    /**
+     * cue 一到就把后面若干块的端点定下来并提前切好音频（端点固定 → 切一次就够，
+     * 播放位置走到时不会重新算），播放走到该块时只剩发翻译请求。
+     *
+     * 切音频优先用字幕管线已经解过的 PCM（[pcmWindow]），窗口没覆盖才回退解码。
+     */
+    private fun planAhead(cues: List<SubtitleCue>, bounds: LongArray, current: Chunk) {
         val plan = ArrayList<Chunk>(PLAN_CHUNKS)
         var c = current
         while (plan.size < PLAN_CHUNKS) {
-            val next = nextChunk(cues, c) ?: break
+            val next = nextChunk(cues, bounds, c) ?: break
             plan += next
             c = next
         }
@@ -480,28 +544,13 @@ class TranslationSession(
         }
     }
 
-    /** 最后一条 start <= position 的 cue；播放位置在第一句之前返回 -1。 */
-    private fun currentCueIndex(cues: List<SubtitleCue>, positionSec: Double): Int {
-        if (cues.isEmpty()) return -1
-        var lo = 0
-        var hi = cues.size - 1
-        var ans = -1
-        while (lo <= hi) {
-            val mid = (lo + hi) ushr 1
-            if (cues[mid].start <= positionSec) {
-                ans = mid
-                lo = mid + 1
-            } else {
-                hi = mid - 1
-            }
-        }
-        return ans
-    }
-
     private companion object {
         const val TAG = "TranslationSession"
 
         /** 提前规划/切片的块数（每块最多 30 秒，3 块约 1.5 分钟）。 */
         const val PLAN_CHUNKS = 3
+
+        /** 两句之间静音超过这么久就不拼进同一块（用端点当分界）。 */
+        const val MAX_GAP_SEC = 8.0
     }
 }
