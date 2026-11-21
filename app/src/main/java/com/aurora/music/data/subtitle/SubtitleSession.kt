@@ -49,6 +49,10 @@ class SubtitleSession(
         val status: Status = Status.LOADING,
         val cues: List<SubtitleCue> = emptyList(),
         val message: String = "",
+        /** 已经解码 + 识别到的最大章节秒：翻译层据此判断 cue 还会不会继续长。 */
+        val processedUntil: Double = 0.0,
+        /** 本章已读到结尾，不会再有新 cue。 */
+        val atEnd: Boolean = false,
     )
 
     private val chapterKey = abookChapterKey(chapter.path, chapter.startMs)
@@ -324,7 +328,14 @@ class SubtitleSession(
     }
 
     private fun publish(status: Status, message: String) {
-        _state.value = UiState(status = status, cues = uiCues, message = message)
+        _state.value = UiState(
+            status = status,
+            cues = uiCues,
+            message = message,
+            // spans 有序且已合并，最后一个就是「已处理到的最大章节秒」。
+            processedUntil = spans.lastOrNull()?.end ?: 0.0,
+            atEnd = eofSec != Double.MAX_VALUE,
+        )
     }
 
     private companion object {

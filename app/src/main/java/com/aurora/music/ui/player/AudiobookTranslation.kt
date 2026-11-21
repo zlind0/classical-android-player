@@ -158,6 +158,7 @@ private fun sliceStateLabel(state: TranslationSession.SliceState): String = when
     TranslationSession.SliceState.GENERATING -> "翻译中"
     TranslationSession.SliceState.DONE -> "完成"
     TranslationSession.SliceState.FAILED -> "失败"
+    TranslationSession.SliceState.SKIPPED -> "已跳过"
 }
 
 @Composable

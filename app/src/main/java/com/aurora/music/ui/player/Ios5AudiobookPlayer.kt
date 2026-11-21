@@ -159,6 +159,12 @@ fun Ios5AudiobookPlayerPage(
     val sliceStore = remember(book.id, chapter?.key) {
         chapter?.let { com.aurora.music.data.llm.AudioSliceStore(appCtx, it) }
     }
+    // 已完成的切块 + 译文，独立 SQLite 文件；清缓存 = 删这个文件。
+    val translationStore = remember(book.id, chapter?.key) {
+        chapter?.let {
+            com.aurora.music.data.llm.TranslationStore(appCtx, book.id, it.key)
+        }
+    }
 
     // 翻译需要 ASR 给出的句级边界；字幕层没开也照样在后台转写。
     val captionsOn = showSubs || showTranslate
@@ -190,7 +196,7 @@ fun Ios5AudiobookPlayerPage(
         com.aurora.music.data.subtitle.SubtitleSession.UiState(),
     )
 
-    val cuesState = rememberUpdatedState(subState.cues)
+    val subStateRef = rememberUpdatedState(subState)
     val translationSession = remember(
         book.id, chapter?.key, showTranslate, activeLlm?.id, activeSubModel?.id,
         llmPrefs.targetAudioSec, llmPrefs.targetLanguage, llmPrefs.maxOutputTokens,
@@ -198,7 +204,7 @@ fun Ios5AudiobookPlayerPage(
     ) {
         if (!showTranslate || activeLlm == null || activeSubModel == null || chapter == null) null
         else TranslationSession(
-            cuesProvider = { cuesState.value },
+            cuesProvider = { subStateRef.value.cues },
             client = container.llmClient,
             spec = activeLlm,
             prefs = LlmGenerationPrefs(
@@ -211,6 +217,9 @@ fun Ios5AudiobookPlayerPage(
             targetLanguage = llmPrefs.targetLanguage,
             slices = sliceStore!!,
             pcmWindow = pcmWindow,
+            processedUntilProvider = { subStateRef.value.processedUntil },
+            atEndProvider = { subStateRef.value.atEnd },
+            store = translationStore,
         )
     }
     LaunchedEffect(translationSession) { translationSession?.start() }

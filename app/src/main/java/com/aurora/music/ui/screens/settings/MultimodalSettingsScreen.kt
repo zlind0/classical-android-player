@@ -20,8 +20,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,6 +38,7 @@ import com.aurora.music.data.llm.LlmDownloadSources
 import com.aurora.music.data.llm.LlmModelCatalog
 import com.aurora.music.data.llm.LlmModelSpec
 import com.aurora.music.data.llm.LlmModelStore
+import com.aurora.music.data.llm.TranslationCache
 import com.aurora.music.data.llm.llmGpuCrashMarker
 import com.aurora.music.ui.ios5.Ios5ButtonTone
 import com.aurora.music.ui.ios5.Ios5CellDivider
@@ -67,6 +70,9 @@ fun MultimodalSettingsScreen(
     )
     val states by container.llmModels.states.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    var translationCacheBytes by remember {
+        mutableIntStateOf(TranslationCache.bytes(context).toInt())
+    }
     val gpuCrashed = remember(prefs.useGpu) {
         prefs.useGpu && llmGpuCrashMarker(context.applicationContext).exists()
     }
@@ -163,6 +169,27 @@ fun MultimodalSettingsScreen(
                 "Gemma 4 原生音频输入最长 30 秒/段。拼到目标时长时，如果下一句放不下，" +
                     "就少放这一句，绝不截断；单个 VAD 段本身超过 30 秒时会拆成多段分别翻译。",
             )
+        }
+
+        ios5Section("翻译缓存") {
+            Ios5StaticText(
+                if (translationCacheBytes <= 0) {
+                    "还没有翻译完成的片段。"
+                } else {
+                    "占用 ${(translationCacheBytes / 1024).coerceAtLeast(1)} KB（含切块区间与译文）。"
+                },
+            )
+            Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Ios5SmallButton(
+                    text = "清除全部翻译缓存",
+                    onClick = {
+                        TranslationCache.clear(context)
+                        translationCacheBytes = TranslationCache.bytes(context).toInt()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    tone = Ios5ButtonTone.Red,
+                )
+            }
         }
 
         ios5Section("推理参数") {
