@@ -33,6 +33,7 @@ import com.aurora.music.MainActivity
 import com.aurora.music.data.FloatingPrefs
 import com.aurora.music.data.MusicRepository
 import com.aurora.music.data.SettingsStore
+import com.aurora.music.model.Song
 import com.aurora.music.playback.PlaybackService
 import com.aurora.music.viewmodel.RepeatMode
 import kotlinx.coroutines.CoroutineScope
@@ -114,6 +115,22 @@ class FloatingWindowManager(
         }
         scope.launch {
             container.castHub.state.collect { onReceiveChanged() }
+        }
+        scope.launch {
+            // 歌曲介绍（问号）进行中：底栏问号显示成停止键。
+            container.songIntro.state.collect { s ->
+                _ui.update { it.copy(introActive = s.active) }
+            }
+        }
+        scope.launch {
+            // 后台点问号时 App 内 snackbar 看不见，改用 Toast 反馈失败原因。
+            container.songIntro.events.collect { msg ->
+                if (inBackground) {
+                    runCatching {
+                        android.widget.Toast.makeText(app, msg, android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
         }
         scope.launch {
             settings.floatingPrefs.collect { prefs ->
@@ -240,8 +257,11 @@ class FloatingWindowManager(
                     bookSentence = "",
                 )
             }
-            // 远程曲目不在本地库，别用本地 like 状态覆盖发送端下发的值。
-            lastSongId = ""
+            // 远程曲目不在本地库；切歌时中断正在进行的介绍，避免背景播报和远端新曲错位。
+            if (receive.id != lastSongId) {
+                lastSongId = receive.id
+                container.songIntro.onSongChanged(receive.id)
+            }
             return
         }
         val c = controller
@@ -294,18 +314,7 @@ class FloatingWindowManager(
         }
         if (id != lastSongId) {
             lastSongId = id
-            refreshLike(id)
-        }
-    }
-
-    private fun refreshLike(id: String) {
-        if (id.isEmpty()) {
-            _ui.update { it.copy(liked = false) }
-            return
-        }
-        scope.launch(Dispatchers.IO) {
-            val liked = runCatching { repository.likedSongIds(listOf(id)) }.getOrNull()?.contains(id) == true
-            _ui.update { if (lastSongId == id) it.copy(liked = liked) else it }
+            container.songIntro.onSongChanged(id)
         }
     }
 
@@ -313,6 +322,7 @@ class FloatingWindowManager(
         if (view != null) return
         // 挂窗之前先把当前来源（本机音乐/听书或投屏接收）刷进 UI 状态，避免首帧是上一首。
         syncState()
+        _ui.update { it.copy(introActive = container.songIntro.state.value.active) }
         val sizePx = clampPx(dpToPx(prefs.sizeDp))
         liveSizePx = sizePx
         _sizeDp.value = sizePx / density
@@ -358,9 +368,7 @@ class FloatingWindowManager(
                     onTogglePlay = { togglePlay() },
                     onNext = { next() },
                     onPrevious = { prev() },
-                    onToggleLike = { toggleLike() },
-                    onToggleShuffle = { toggleShuffle() },
-                    onCycleRepeat = { cycleRepeat() },
+                    onIntroClick = { toggleIntro() },
                 )
             }
         }
@@ -481,38 +489,45 @@ class FloatingWindowManager(
         )
     }
 
-    private fun toggleShuffle() {
-        val receive = container.receiveNowPlaying
-        if (receive.snapshot() != null) {
-            receive.toggleShuffle()
+    /**
+     * 问号：对本机或投屏接收中的当前曲目启动歌曲介绍；介绍进行中再点即停止。
+     * 本机曲目优先从库里取完整元数据（专辑/流派等），取不到再用播放快照兜底。
+     */
+    private fun toggleIntro() {
+        val intro = container.songIntro
+        if (intro.state.value.active) {
+            intro.cancel()
             return
         }
-        controller?.sendCustomCommand(
-            SessionCommand(PlaybackService.CMD_SHUFFLE, Bundle().apply { putInt("target", -1) }),
-            Bundle.EMPTY,
-        )
-    }
-
-    private fun cycleRepeat() {
-        val receive = container.receiveNowPlaying
-        if (receive.snapshot() != null) {
-            receive.cycleRepeat()
+        val receive = container.receiveNowPlaying.snapshot()
+        if (receive != null) {
+            intro.start(
+                Song(
+                    id = receive.id,
+                    title = receive.title.ifBlank { receive.source.label },
+                    artist = receive.artist.ifBlank { receive.senderName },
+                    album = receive.album,
+                    artworkUrl = receive.artUri,
+                    durationSec = (receive.durationMs / 1000L).toInt().coerceAtLeast(0),
+                ),
+            )
             return
         }
-        controller?.sendCustomCommand(SessionCommand(PlaybackService.CMD_REPEAT, Bundle.EMPTY), Bundle.EMPTY)
-    }
-
-    private fun toggleLike() {
-        val receive = container.receiveNowPlaying
-        if (receive.snapshot() != null) {
-            receive.toggleLike()
-            return
+        val ms = container.musicState.value
+        if (ms.mediaId.isBlank()) return
+        scope.launch {
+            val song = withContext(Dispatchers.IO) {
+                runCatching { repository.songFor(ms.mediaId) }.getOrNull()
+            } ?: Song(
+                id = ms.mediaId,
+                title = ms.title,
+                artist = ms.artist,
+                album = "",
+                artworkUrl = ms.artUri,
+                durationSec = 0,
+            )
+            intro.start(song)
         }
-        val id = lastSongId
-        if (id.isEmpty()) return
-        val now = !_ui.value.liked
-        _ui.update { it.copy(liked = now) }
-        scope.launch(Dispatchers.IO) { runCatching { repository.setStarred(id, now, "song") } }
     }
 
     private fun returnToApp() {

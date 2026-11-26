@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,6 +19,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -40,7 +47,6 @@ import androidx.compose.ui.unit.sp
 import com.aurora.music.ui.components.Artwork
 import com.aurora.music.ui.components.MarqueeText
 import com.aurora.music.ui.ios5.Ios5Sans
-import com.aurora.music.ui.player.Ios5TransportControls
 import com.aurora.music.viewmodel.RepeatMode
 import kotlin.math.abs
 
@@ -53,6 +59,8 @@ data class FloatingUiState(
     val repeat: RepeatMode = RepeatMode.OFF,
     val liked: Boolean = false,
     val hasTrack: Boolean = false,
+    /** 歌曲介绍（问号）正在进行：显示停止键。 */
+    val introActive: Boolean = false,
     /** 书在播：中间封面区域盖同色遮罩并显示当前朗读句。 */
     val bookActive: Boolean = false,
     val bookSentence: String = "",
@@ -81,9 +89,7 @@ fun FloatingWindowContent(
     onTogglePlay: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
-    onToggleLike: () -> Unit,
-    onToggleShuffle: () -> Unit,
-    onCycleRepeat: () -> Unit,
+    onIntroClick: () -> Unit,
 ) {
     val tScale = (sizeDp.value / 280f).coerceIn(0.62f, 1.5f)
     val fontScale = (sizeDp.value / 280f).coerceIn(0.8f, 1.25f)
@@ -162,33 +168,73 @@ fun FloatingWindowContent(
                     )
                 }
             }
-            // 底栏：与横屏控制栏同构的五组走带键
-            Box(
-                Modifier.fillMaxWidth()
-                    .background(Color(0xFF14161B).copy(alpha = 0.62f))
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() },
-                        onClick = {},
+            // 底栏：不在听书状态时显示 问号 / 上一首 / 播放 / 下一首（space-around）。
+            // 听书时中间是朗读句，不显示音乐走带键。
+            if (!state.bookActive) {
+                Box(
+                    Modifier.fillMaxWidth()
+                        .background(Color(0xFF14161B).copy(alpha = 0.62f))
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() },
+                            onClick = {},
+                        )
+                        .padding(vertical = 4.dp),
+                ) {
+                    FloatingTransportBar(
+                        isPlaying = state.isPlaying,
+                        introActive = state.introActive,
+                        onIntroClick = onIntroClick,
+                        onTogglePlay = onTogglePlay,
+                        onNext = onNext,
+                        onPrevious = onPrevious,
+                        scale = tScale,
                     )
-                    .padding(vertical = 4.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Ios5TransportControls(
-                    isPlaying = state.isPlaying,
-                    shuffle = state.shuffle,
-                    repeat = state.repeat,
-                    isLiked = state.liked,
-                    onTogglePlay = onTogglePlay,
-                    onNext = onNext,
-                    onPrevious = onPrevious,
-                    onToggleLike = onToggleLike,
-                    onToggleShuffle = onToggleShuffle,
-                    onCycleRepeat = onCycleRepeat,
-                    scale = tScale,
-                )
+                }
             }
         }
+    }
+}
+
+/** 悬浮窗底栏：问号 / 上一首 / 播放暂停 / 下一首，四组按 space-around 铺开。 */
+@Composable
+private fun FloatingTransportBar(
+    isPlaying: Boolean,
+    introActive: Boolean,
+    onIntroClick: () -> Unit,
+    onTogglePlay: () -> Unit,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
+    scale: Float,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 6.dp * scale),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceAround,
+    ) {
+        Icon(
+            if (introActive) Icons.Filled.Stop else Icons.Outlined.HelpOutline,
+            if (introActive) "停止介绍" else "歌曲介绍",
+            tint = if (introActive) Color(0xFFD63A3A) else Color(0xFF8E8E93),
+            modifier = Modifier.size(34.dp * scale).clip(CircleShape)
+                .clickable(onClick = onIntroClick).padding(6.dp * scale),
+        )
+        Icon(
+            Icons.Filled.SkipPrevious, "上一首", tint = Color.White,
+            modifier = Modifier.size(38.dp * scale).clip(CircleShape)
+                .clickable(onClick = onPrevious).padding(6.dp * scale),
+        )
+        Icon(
+            if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+            if (isPlaying) "暂停" else "播放", tint = Color.White,
+            modifier = Modifier.size(50.dp * scale).clip(CircleShape)
+                .clickable(onClick = onTogglePlay).padding(6.dp * scale),
+        )
+        Icon(
+            Icons.Filled.SkipNext, "下一首", tint = Color.White,
+            modifier = Modifier.size(38.dp * scale).clip(CircleShape)
+                .clickable(onClick = onNext).padding(6.dp * scale),
+        )
     }
 }
 
