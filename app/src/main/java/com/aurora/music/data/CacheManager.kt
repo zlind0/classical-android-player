@@ -21,8 +21,13 @@ enum class CacheCategory(
     /** 远程音乐 / 有声书边播边缓存（Media3 SimpleCache）。 */
     REMOTE_MEDIA("remote_media", defaultMaxMb = 1024, defaultMaxAgeDays = 14),
 
-    /** 远程设备资料库 SQLite 快照、远程封面与中继快照。 */
-    REMOTE_LIBRARY("remote_library", defaultMaxMb = 256, defaultMaxAgeDays = 30),
+    /**
+     * 远程设备资料库 SQLite 快照、远程封面与中继快照。
+     *
+     * 默认只按“最后一次成功连接”计时 7 天清理，不按容量淘汰：
+     * 只要设备每天都能连上，[RemoteLibraryManager] 就会刷新 lastSeenAt，缓存不会被删。
+     */
+    REMOTE_LIBRARY("remote_library", defaultMaxMb = 0, defaultMaxAgeDays = 7),
 
     /** 远程服务器上打开但未显式下载的电子书临时文件。 */
     REMOTE_EBOOKS("remote_ebooks", defaultMaxMb = 256, defaultMaxAgeDays = 30),
@@ -33,8 +38,16 @@ enum class CacheCategory(
     /** 本地/远程电子书全文解析与分页断点缓存、书籍封面。 */
     EBOOK_PARSE("ebook_parse", defaultMaxMb = 128, defaultMaxAgeDays = 30),
 
-    /** 图片磁盘缓存（Coil）与音频内嵌封面去重缓存。 */
+    /** Coil 磁盘图片缓存（列表/详情页图片）。 */
     IMAGE_AND_ART("image_art", defaultMaxMb = 512, defaultMaxAgeDays = 30),
+
+    /**
+     * 音频内嵌封面去重缓存（cacheDir/track_art/c/<md5>.jpg）。
+     *
+     * 内容寻址、多首歌共享同一张图，重建时需要重新读取每个音频文件，代价高，
+     * 所以默认既不按容量淘汰，也不按时间过期；用户仍可手动清理。
+     */
+    EMBEDDED_ART("embedded_art", defaultMaxMb = 0, defaultMaxAgeDays = 0),
 
     /** AirPlay 投屏接收到的曲目封面图片。 */
     AIRPLAY_ART("airplay_art", defaultMaxMb = 64, defaultMaxAgeDays = 7),
@@ -240,10 +253,14 @@ class CacheManager(
                 count = CachePruner.fileCount(parseDir) + CachePruner.fileCount(coverDir)
             }
             CacheCategory.IMAGE_AND_ART -> {
-                val imgDir = File(appContext.cacheDir, "image_cache")
-                val artDir = File(appContext.cacheDir, "track_art")
-                bytes = CachePruner.dirSize(imgDir) + CachePruner.dirSize(artDir)
-                count = CachePruner.fileCount(imgDir) + CachePruner.fileCount(artDir)
+                val dir = File(appContext.cacheDir, "image_cache")
+                bytes = CachePruner.dirSize(dir)
+                count = CachePruner.fileCount(dir)
+            }
+            CacheCategory.EMBEDDED_ART -> {
+                val dir = File(appContext.cacheDir, "track_art")
+                bytes = CachePruner.dirSize(dir)
+                count = CachePruner.fileCount(dir)
             }
             CacheCategory.AIRPLAY_ART -> {
                 val dir = File(appContext.filesDir, "cast_art")
@@ -288,6 +305,8 @@ class CacheManager(
                     loader.memoryCache?.clear()
                 }
                 runCatching { File(appContext.cacheDir, "image_cache").deleteRecursively() }
+            }
+            CacheCategory.EMBEDDED_ART -> {
                 runCatching { File(appContext.cacheDir, "track_art").deleteRecursively() }
                 TrackArtworkCache.invalidateAll()
             }
@@ -314,11 +333,17 @@ class CacheManager(
     private fun enforceSync(category: CacheCategory, policy: CachePolicy) {
         val maxBytes = policy.maxBytes
         val maxAgeMs = policy.maxAgeMs
-        if (maxBytes <= 0L && maxAgeMs <= 0L) return
         val now = System.currentTimeMillis()
+        // 远程资料库的 TTL 存在 manager 里（同步循环自己也会定时清理），
+        // 所以即使策略是“不限大小 / 永不过期”也必须把 0 传下去，不能提前返回。
+        if (category == CacheCategory.REMOTE_LIBRARY) {
+            remoteLibrary.pruneWithPolicy(maxBytes, maxAgeMs, now)
+            return
+        }
+        if (maxBytes <= 0L && maxAgeMs <= 0L) return
         when (category) {
             CacheCategory.REMOTE_MEDIA -> RemoteMediaCache.trim(maxBytes, maxAgeMs, now)
-            CacheCategory.REMOTE_LIBRARY -> remoteLibrary.pruneWithPolicy(maxBytes, maxAgeMs, now)
+            CacheCategory.REMOTE_LIBRARY -> Unit
             CacheCategory.REMOTE_EBOOKS -> remoteLibrary.pruneRemoteEbooks(maxBytes, maxAgeMs, now)
             CacheCategory.RANDOM_FEED -> {
                 val dir = File(appContext.cacheDir, "feed_books")
@@ -335,16 +360,17 @@ class CacheManager(
                 CachePruner.pruneFilesInDir(coverDir, remainingBudget, maxAgeMs, now)
             }
             CacheCategory.IMAGE_AND_ART -> {
-                val artDir = File(appContext.cacheDir, "track_art/c")
                 val imgDir = File(appContext.cacheDir, "image_cache")
-                val artBudget = if (maxBytes > 0L) maxBytes / 2 else 0L
-                CachePruner.pruneFilesInDir(artDir, artBudget, maxAgeMs, now)
                 // Coil DiskCache 自身已按 maxSizeBytes 做 LRU，这里补做 TTL 清理
                 if (maxAgeMs > 0L) {
                     CachePruner.pruneFilesInDir(imgDir, 0L, maxAgeMs, now) {
                         it.isFile && !it.name.equals("journal", ignoreCase = true)
                     }
                 }
+            }
+            CacheCategory.EMBEDDED_ART -> {
+                val artDir = File(appContext.cacheDir, "track_art/c")
+                CachePruner.pruneFilesInDir(artDir, maxBytes, maxAgeMs, now)
             }
             CacheCategory.AIRPLAY_ART -> {
                 val dir = File(appContext.filesDir, "cast_art")

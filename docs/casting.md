@@ -150,7 +150,7 @@ setVideoSurface + 一组 listener 回调），并用 `CastSessionArbiter` 处理
 - 每 15 秒问一次对端 `/library/version`；变了才拉 `/library/all`。
 - 拉到的快照按设备存成独立 SQLite（`remote_library/<sha1(deviceId)>.db`），
   表用 `ord` 序号主键保留对端顺序，整份事务重建。
-- 连续 2 轮失败才标记离线（防止 Wi-Fi 漫游抖动）；30 天未访问删除缓存。
+- 连续 2 轮失败才标记离线（防止 Wi-Fi 漫游抖动）；7 天未成功连接删除缓存。
 - 远程库**不并入本地库**，在 UI 里作为独立设备分区展示，离线时灰显。
 
 ### 4.2 虚拟 URL：让传输层可替换

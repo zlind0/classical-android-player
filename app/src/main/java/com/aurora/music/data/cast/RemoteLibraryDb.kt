@@ -341,7 +341,7 @@ internal object RemoteLibraryDb {
         }
     }
 
-    /** 30 天过期：连接都已关闭，直接删掉数据库文件（含可能残留的 journal/wal）。 */
+    /** 缓存过期（默认 7 天未成功连接）：连接都已关闭，直接删掉数据库文件（含可能残留的 journal/wal）。 */
     fun delete(dir: File, deviceId: String) {
         val f = file(dir, deviceId)
         runCatching {

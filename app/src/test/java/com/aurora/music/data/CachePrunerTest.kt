@@ -24,6 +24,17 @@ class CachePrunerTest {
     }
 
     @Test
+    fun defaultPoliciesKeepEmbeddedArtAndExpireRemoteLibraryByConnection() {
+        val embedded = CacheCategory.EMBEDDED_ART.defaultPolicy()
+        assertEquals(0, embedded.maxMb)
+        assertEquals(0, embedded.maxAgeDays)
+
+        val remoteLibrary = CacheCategory.REMOTE_LIBRARY.defaultPolicy()
+        assertEquals(0, remoteLibrary.maxMb)
+        assertEquals(7, remoteLibrary.maxAgeDays)
+    }
+
+    @Test
     fun ttlDeletesExpiredEntriesRegardlessOfSize() {
         val now = 1_000_000_000L
         val dayMs = 24L * 60L * 60L * 1000L

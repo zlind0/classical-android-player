@@ -16,8 +16,8 @@ import okhttp3.Request
  * 两个端点，切换传输方式后同一个封面依然命中同一份文件，不必重新下载。
  * 下载地址仍由调用方按当前端点拼出来。
  *
- * 存到 filesDir/remote_library/art/<device>/<sha1(deviceId|key)>.img，设备 30 天不连接时
- * 由 [RemoteLibraryManager] 调 [clearDevice] 一起删掉。
+ * 存到 filesDir/remote_library/art/<device>/<sha1(deviceId|key)>.img，设备连续 7 天
+ * 没有成功连接时由 [RemoteLibraryManager] 调 [clearDevice] 一起删掉。
  */
 object RemoteArtCache {
 

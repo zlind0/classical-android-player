@@ -872,6 +872,7 @@ private fun categoryTitleRes(cat: CacheCategory): Int = when (cat) {
     CacheCategory.RANDOM_FEED -> R.string.cache_cat_random_feed_title
     CacheCategory.EBOOK_PARSE -> R.string.cache_cat_ebook_parse_title
     CacheCategory.IMAGE_AND_ART -> R.string.cache_cat_image_art_title
+    CacheCategory.EMBEDDED_ART -> R.string.cache_cat_embedded_art_title
     CacheCategory.AIRPLAY_ART -> R.string.cache_cat_airplay_art_title
     CacheCategory.SUBTITLES_AND_AI -> R.string.cache_cat_subtitles_ai_title
     CacheCategory.LLM_COMPILE -> R.string.cache_cat_llm_compile_title
@@ -885,6 +886,7 @@ private fun categoryDescRes(cat: CacheCategory): Int = when (cat) {
     CacheCategory.RANDOM_FEED -> R.string.cache_cat_random_feed_desc
     CacheCategory.EBOOK_PARSE -> R.string.cache_cat_ebook_parse_desc
     CacheCategory.IMAGE_AND_ART -> R.string.cache_cat_image_art_desc
+    CacheCategory.EMBEDDED_ART -> R.string.cache_cat_embedded_art_desc
     CacheCategory.AIRPLAY_ART -> R.string.cache_cat_airplay_art_desc
     CacheCategory.SUBTITLES_AND_AI -> R.string.cache_cat_subtitles_ai_desc
     CacheCategory.LLM_COMPILE -> R.string.cache_cat_llm_compile_desc

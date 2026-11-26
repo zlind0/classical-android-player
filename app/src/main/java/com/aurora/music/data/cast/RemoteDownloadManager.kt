@@ -761,7 +761,7 @@ class RemoteDownloadManager(context: Context) {
         val realUrl = RemoteMediaCache.resolveUrl(url)
         val ok = if (realUrl.startsWith("file:")) {
             // 封面可能已经在本地封面缓存里（file://）：复制一份进下载目录，
-            // 免得 30 天过期清掉封面缓存后下载条目跟着掉图。
+            // 免得 7 天未连接过期清掉封面缓存后下载条目跟着掉图。
             copyLocal(File(Uri.parse(realUrl).path.orEmpty()), tmp, onProgress)
         } else {
             fetchHttp(realUrl, tmp, expectedBytes, onProgress)

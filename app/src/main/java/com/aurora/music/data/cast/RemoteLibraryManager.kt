@@ -143,6 +143,13 @@ class RemoteLibraryManager(
     private val offlineStrikes = ConcurrentHashMap<String, Int>()
 
     /**
+     * 每台设备最近一次把 lastSeenAt 落盘的时间。
+     * 内存里的 lastSeenAt 每轮同步都会刷新，不能拿它判断“距上次落盘多久”，
+     * 否则长驻进程里磁盘上的时间会一直停在上次启动时，7 天 TTL 会误删还在用的缓存。
+     */
+    private val lastSeenPersistedAt = ConcurrentHashMap<String, Long>()
+
+    /**
      * 每台设备最近一次局域网端点。
      * 走中继时 payload.host 会被写成 127.0.0.1，单独记一份，
      * 切回 Wi‑Fi 时不用等 mDNS/UDP 重新发现就能直接连。
@@ -347,9 +354,11 @@ class RemoteLibraryManager(
             )
             payloads[endpoint.id] = updated
             offlineStrikes.remove(endpoint.id)
-            // lastSeen 每 15 秒写一次盘没必要；一小时落一次足够判断 30 天过期。
-            if (!sameEndpoint || now - cached.lastSeenAt > LAST_SEEN_SAVE_INTERVAL_MS) {
+            // lastSeen 每 15 秒写一次盘没必要；一小时落一次足够判断 7 天过期。
+            // 注意要和“上次落盘时间”比，而不是内存里刚刷新过的 lastSeenAt。
+            if (!sameEndpoint || now - (lastSeenPersistedAt[endpoint.id] ?: 0L) > LAST_SEEN_SAVE_INTERVAL_MS) {
                 RemoteLibraryDb.updateMeta(storeDir, updated)
+                lastSeenPersistedAt[endpoint.id] = now
             }
             if (!wasOnline || cached.relay != (endpoint.source == "relay")) rebuildLibraries()
             // 端点变了 = 封面 URL 变了；本进程还没补过封面也补一次。
@@ -480,8 +489,12 @@ class RemoteLibraryManager(
 
     @Volatile var libraryCacheMaxAgeMs: Long = CACHE_TTL_MS
 
-    /** 按配置的过期周期删掉该设备的 meta 与封面缓存。 */
+    /** 用户策略是否已经从设置里同步过来；同步前不要用内置默认值误删缓存。 */
+    @Volatile private var libraryPolicyConfigured = false
+
+    /** 按配置的过期周期删掉该设备的 meta 与封面缓存；计时以最后一次成功连接（lastSeenAt）为准。 */
     private fun pruneExpired() {
+        if (!libraryPolicyConfigured) return
         val ttl = libraryCacheMaxAgeMs
         if (ttl <= 0L) return
         pruneWithPolicy(maxBytes = 0L, maxAgeMs = ttl)
@@ -489,6 +502,7 @@ class RemoteLibraryManager(
 
     fun pruneWithPolicy(maxBytes: Long, maxAgeMs: Long, nowMs: Long = System.currentTimeMillis()) {
         libraryCacheMaxAgeMs = maxAgeMs
+        libraryPolicyConfigured = true
         var changed = false
         if (maxAgeMs > 0L) {
             val cutoff = nowMs - maxAgeMs
@@ -546,6 +560,7 @@ class RemoteLibraryManager(
         payloads.remove(deviceId)
         ebookExtras.remove(deviceId)
         offlineStrikes.remove(deviceId)
+        lastSeenPersistedAt.remove(deviceId)
         lanEndpoints.remove(deviceId)
         RemoteLibraryDb.delete(storeDir, deviceId)
         RemoteArtCache.clearDevice(appContext, deviceId)
@@ -1600,7 +1615,9 @@ class RemoteLibraryManager(
     }
 
     private fun persistPayload(c: RemoteLibrarySnapshot) {
-        runCatching { RemoteLibraryDb.write(storeDir, c) }
+        if (runCatching { RemoteLibraryDb.write(storeDir, c) }.isSuccess) {
+            lastSeenPersistedAt[c.deviceId] = c.lastSeenAt
+        }
     }
 
     /** 把磁盘快照转成 UI 可直接用的只读资料库（转换逻辑复用旧 [CachedPayload]）。 */
@@ -1789,8 +1806,8 @@ class RemoteLibraryManager(
         /** 换网后等链路就绪再探测，避免第一次探测必然失败。 */
         const val SETTLE_DELAY_MS = 700L
 
-        /** 30 天没成功连上（版本探测也算）就清掉 meta 与封面缓存。 */
-        const val CACHE_TTL_MS = 30L * 24 * 60 * 60 * 1000
+        /** 7 天没成功连上（版本探测也算）就清掉 meta 与封面缓存；每次成功连接都会刷新计时。 */
+        const val CACHE_TTL_MS = 7L * 24 * 60 * 60 * 1000
 
         /** 在线心跳只每小时落一次 meta，避免每 15 秒重写整张曲目表。 */
         const val LAST_SEEN_SAVE_INTERVAL_MS = 60L * 60 * 1000
