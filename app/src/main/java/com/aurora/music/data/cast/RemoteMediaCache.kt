@@ -29,8 +29,8 @@ object RemoteMediaCache {
 
     private val prefetchMutex = Mutex()
     private val prefetching = ConcurrentHashMap<String, Boolean>()
-    private val knownMusic = ConcurrentHashMap.newKeySet<String>()
-    private val knownAudiobooks = ConcurrentHashMap.newKeySet<String>()
+    private val knownMusic = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+    private val knownAudiobooks = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
     /**
      * 每台设备当前端点（"http://host:port"）。

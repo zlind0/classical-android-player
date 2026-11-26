@@ -662,26 +662,37 @@ class AppContainer(context: Context) {
             networkUp = hasInternet(caps)
         }
         recomputeOffline()
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                bumpNetworkGeneration()
+            }
+
+            override fun onLost(network: Network) {
+                networkUp = false
+                recomputeOffline()
+                bumpNetworkGeneration()
+            }
+
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                val wasUp = networkUp
+                networkUp = hasInternet(caps)
+                recomputeOffline()
+                // 只有「可用/不可用」翻转才值得打断同步；能力细节每几秒变一次。
+                if (wasUp != networkUp) bumpNetworkGeneration()
+            }
+        }
         runCatching {
-            cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) {
-                    bumpNetworkGeneration()
-                }
-
-                override fun onLost(network: Network) {
-                    networkUp = false
-                    recomputeOffline()
-                    bumpNetworkGeneration()
-                }
-
-                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                    val wasUp = networkUp
-                    networkUp = hasInternet(caps)
-                    recomputeOffline()
-                    // 只有「可用/不可用」翻转才值得打断同步；能力细节每几秒变一次。
-                    if (wasUp != networkUp) bumpNetworkGeneration()
-                }
-            })
+            if (Build.VERSION.SDK_INT >= 24) {
+                cm.registerDefaultNetworkCallback(callback)
+            } else {
+                // API 23 没有「默认网络」回调，用 INTERNET 能力请求等价替代。
+                cm.registerNetworkCallback(
+                    android.net.NetworkRequest.Builder()
+                        .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                        .build(),
+                    callback,
+                )
+            }
         }
     }
 

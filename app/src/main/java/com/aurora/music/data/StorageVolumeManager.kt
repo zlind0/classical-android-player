@@ -9,10 +9,11 @@ import java.io.File
 // Classical fork v0.3 (plan §5): discovers the storage volumes the folder picker
 // and scanner may use. Business layers never touch raw vendor paths directly.
 //
-// Primary discovery is StorageManager.getStorageVolumes() (API 24+ = minSdk):
+// Primary discovery is StorageManager.getStorageVolumes() (API 24+):
 // it lists every mounted volume the system knows, including USB-OTG on pads
-// that never shows up in Context.getExternalFilesDirs(). The getExternalFilesDirs
-// mapping is kept as a fallback for odd vendor ROMs.
+// that never shows up in Context.getExternalFilesDirs(). That call is skipped
+// on API 23, where the getExternalFilesDirs mapping below (also kept as a
+// fallback for odd vendor ROMs) is the only discovery path.
 data class StorageVolume(
     val id: String,          // stable key: "internal" or the volume root path
     val label: String,       // display label
@@ -31,7 +32,7 @@ class StorageVolumeManager(private val context: Context) {
             out[v.id] = v
         }
         // Primary shared storage. Deprecated upstream but still
-        // functional on the API 24+ range this fork targets.
+        // functional on the API 23+ range this fork targets.
         @Suppress("DEPRECATION")
         val primary = Environment.getExternalStorageDirectory()?.absolutePath
         if (!primary.isNullOrBlank()) {
@@ -47,7 +48,9 @@ class StorageVolumeManager(private val context: Context) {
         }
         // All system-known volumes, including USB-OTG. Unmounted volumes are
         // useless for scanning and only add clutter, so they are skipped.
-        runCatching {
+        // getStorageVolumes() / StorageVolume accessors are API 24+; on Android 6.x this
+        // whole block is skipped and the getExternalFilesDirs() fallback below takes over.
+        if (Build.VERSION.SDK_INT >= 24) runCatching {
             val sm = context.getSystemService(StorageManager::class.java) ?: return@runCatching
             for (vol in sm.storageVolumes) {
                 val state = runCatching { vol.state }.getOrNull() ?: continue
@@ -108,6 +111,9 @@ class StorageVolumeManager(private val context: Context) {
 
     /** Public root of a StorageManager volume across API levels. */
     private fun volumeRoot(vol: android.os.storage.StorageVolume): String? = runCatching {
+        // StorageVolume 的 uuid/directory 都是 API 24+；调用方已按版本分流，
+        // 这里再兜一层，避免 lint/低版本运行时漏网。
+        if (Build.VERSION.SDK_INT < 24) return@runCatching null
         if (Build.VERSION.SDK_INT >= 30) {
             vol.directory?.absolutePath?.takeIf { it.isNotBlank() }
         } else {

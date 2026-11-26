@@ -163,7 +163,7 @@ class RemoteLibraryManager(
     private val artPrefetchJobs = ConcurrentHashMap<String, Job>()
 
     /** 本进程内是否已经为某台设备预取过封面（避免每 15 秒重扫一遍）。 */
-    private val artPrefetched = ConcurrentHashMap.newKeySet<String>()
+    private val artPrefetched = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
     /**
      * 走公网中继的设备 id 集合（可观察）。
@@ -180,13 +180,13 @@ class RemoteLibraryManager(
     private val mergeRowsCache = ConcurrentHashMap<String, List<MergedRow>>()
 
     /** 快速扫描书库已经按需解析过的书；避免同一次运行反复请求。 */
-    private val ebookDetailRequested = ConcurrentHashMap.newKeySet<String>()
+    private val ebookDetailRequested = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
     /** 每台设备当前正在运行的批量解析任务；重新随机时取消上一批。 */
     private val ebookDetailJobs = ConcurrentHashMap<String, Job>()
 
     /** 老服务端没有找书接口，整台设备只探测一次。 */
-    private val ebookDetailUnsupported = ConcurrentHashMap.newKeySet<String>()
+    private val ebookDetailUnsupported = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
     /**
      * 快速扫描书库不再随 /library/all 下发；随机/搜索/按需解析拿到的小批书

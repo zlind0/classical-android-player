@@ -51,6 +51,9 @@ data class LlmClientState(
  */
 class LlmClient(private val context: Context) {
 
+    /** 低版本 / 32 位设备没有 LiteRT-LM 运行时，:llm 进程一律不拉起。 */
+    val supported: Boolean = com.aurora.music.data.llm.LlmCapability.isSupported
+
     private data class Request(
         val deferred: CompletableDeferred<String>,
         val onReady: () -> Unit,
@@ -238,6 +241,11 @@ class LlmClient(private val context: Context) {
         onReady: () -> Unit,
         onToken: (String) -> Unit,
     ): String {
+        if (!supported) {
+            throw UnsupportedOperationException(
+                com.aurora.music.data.llm.LlmCapability.unsupportedReason ?: "本机不支持本地大模型",
+            )
+        }
         lastSpec = spec
         lastPrefs = prefs
         // 翻译请求本身就是服务端的活跃信号，这里不需要额外的计时处理。
@@ -347,6 +355,16 @@ class LlmClient(private val context: Context) {
     }
 
     private fun ensureBoundLocked() {
+        if (!supported) {
+            binding = false
+            _state.value = LlmClientState(
+                connected = false,
+                load = LlmLoadStatus.ERROR,
+                message = com.aurora.music.data.llm.LlmCapability.unsupportedReason ?: "本机不支持本地大模型",
+            )
+            failAll("本机不支持本地大模型")
+            return
+        }
         if (binding) return
         binding = true
         val intent = Intent(context, LlmService::class.java)

@@ -73,7 +73,7 @@ private fun walk(file: File, rel: String): StorageNode {
     }
     val kids = runCatching { file.listFiles()?.toList().orEmpty() }.getOrDefault(emptyList())
         // 跳过符号链接，防循环
-        .filter { kid -> runCatching { !java.nio.file.Files.isSymbolicLink(kid.toPath()) }.getOrDefault(true) }
+        .filter { kid -> !isSymlink(kid) }
     if (kids.isEmpty()) return StorageNode(file.name, rel, true, 0L)
     val sub = kids.map { walk(it, "$rel/${it.name}") }.sortedByDescending { it.bytes }
     val shown = sub.take(STORAGE_MAX_CHILDREN)
@@ -89,6 +89,18 @@ private fun walk(file: File, rel: String): StorageNode {
         labelArg = dirLabelArg(rel),
     )
 }
+
+/**
+ * 符号链接判断（防目录循环）。java.nio.file 是 API 26+，Android 6.x 用 Os.lstat 兜底。
+ */
+private fun isSymlink(file: File): Boolean = runCatching {
+    if (android.os.Build.VERSION.SDK_INT >= 26) {
+        java.nio.file.Files.isSymbolicLink(file.toPath())
+    } else {
+        android.system.Os.lstat(file.absolutePath).st_mode and android.system.OsConstants.S_IFMT ==
+            android.system.OsConstants.S_IFLNK
+    }
+}.getOrDefault(false)
 
 /** 已知目录的中文化（纯展示，扫出来的字节数不受影响）。 */
 private fun dirLabel(rel: String): Int? {

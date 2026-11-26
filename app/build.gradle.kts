@@ -38,9 +38,12 @@ android {
 
     defaultConfig {
         applicationId = "com.zlind0.ipodmusic"
-        // Classical fork: floor is API 24 (Android 7.0) per plan §2.1. API 26+ calls must be
-        // guarded with SDK_INT checks (plan §63); lint NewApi findings are tracked as follow-ups.
-        minSdk = 24
+        // Classical fork: floor is API 23 (Android 6.0.1). It used to be 24 because the
+        // LiteRT-LM AAR declares minSdk 24 and only ships 64-bit JNI libs; the local LLM is
+        // now gated by LlmCapability (needs API 24 + arm64/x86_64), so the rest of the app can
+        // run on Android 6.x. API 26+ calls must stay behind SDK_INT checks (plan §63).
+        // The litertlm AAR is force-allowed below 24 via tools:overrideLibrary in the manifest.
+        minSdk = 23
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
@@ -115,7 +118,9 @@ android {
         ?.split(",")
         ?.map { it.trim() }
         ?.filter { it.isNotEmpty() }
-        ?: listOf("arm64-v8a", "x86_64")
+        // armeabi-v7a 是给 Android 6.x 老机型（32 位）留的；LiteRT-LM 没有 32 位
+        // JNI，所以该 ABI 下本地大模型不可用（LlmCapability 会隐藏入口）。
+        ?: listOf("arm64-v8a", "armeabi-v7a", "x86_64")
     splits {
         abi {
             isEnable = true

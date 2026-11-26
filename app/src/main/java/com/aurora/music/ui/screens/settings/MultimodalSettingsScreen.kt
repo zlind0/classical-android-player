@@ -65,6 +65,19 @@ fun MultimodalSettingsScreen(
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val context = LocalContext.current
+    // 老设备 / 32 位设备没有 LiteRT-LM 运行时：正常入口已经隐藏，这里兜底
+    // （例如从历史路由恢复），避免误下载几个 GB 的模型权重。
+    if (!com.aurora.music.data.llm.LlmCapability.isSupported) {
+        Ios5SettingsPage(title = "多模态大模型", onBack = onBack) {
+            ios5Section("本地大模型") {
+                Ios5StaticText(
+                    com.aurora.music.data.llm.LlmCapability.unsupportedReason
+                        ?: "本机不支持本地大模型。",
+                )
+            }
+        }
+        return
+    }
     val prefs by container.settingsStore.multimodalPrefs.collectAsStateWithLifecycle(
         initialValue = SettingsStore.MultimodalPrefs(),
     )

@@ -119,9 +119,9 @@ class RandomFeedManager(
     private val chapters = ConcurrentHashMap<String, MutableMap<Int, EbookChapter>>()
     private val parsedBooks = ConcurrentHashMap<String, ParsedEbook>()
     private val localFiles = ConcurrentHashMap<String, File>()
-    private val wholeBookJobs = ConcurrentHashMap.newKeySet<String>()
+    private val wholeBookJobs = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
     /** 本地解析与服务端章节数对不上的书：记住后不再反复解析，继续走逐章接口。 */
-    private val localMismatch = ConcurrentHashMap.newKeySet<String>()
+    private val localMismatch = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
     /** 服务端口径的章节数：整本静默解析后据此校验，解析口径不一致就不启用本地副本。 */
     private val expectedChapters = ConcurrentHashMap<String, Int>()
 

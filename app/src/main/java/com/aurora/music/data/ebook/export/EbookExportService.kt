@@ -129,10 +129,12 @@ class EbookExportService : Service() {
 
     private fun startFg() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        runCatching {
-            nm.createNotificationChannel(
-                NotificationChannel(CHANNEL, "电子书转有声书", NotificationManager.IMPORTANCE_LOW),
-            )
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            runCatching {
+                nm.createNotificationChannel(
+                    NotificationChannel(CHANNEL, "电子书转有声书", NotificationManager.IMPORTANCE_LOW),
+                )
+            }
         }
         val notif: Notification = NotificationCompat.Builder(this, CHANNEL)
             .setContentTitle("正在转换有声读物")

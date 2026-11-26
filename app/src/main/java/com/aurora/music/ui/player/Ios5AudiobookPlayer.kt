@@ -131,8 +131,11 @@ fun Ios5AudiobookPlayerPage(
     var showSubs by rememberSaveable {
         mutableStateOf(com.aurora.music.data.subtitle.SubtitleUiMemory.overlayOpen)
     }
+    // 本地大模型（LiteRT-LM）只在 API 24+ 的 64 位设备上可用；低版本 / 32 位机型
+    // 隐藏翻译入口，避免点开后拉起 :llm 进程直接崩掉。
+    val llmSupported = com.aurora.music.data.llm.LlmCapability.isSupported
     var showTranslate by rememberSaveable {
-        mutableStateOf(TranslationUiMemory.open)
+        mutableStateOf(TranslationUiMemory.open && llmSupported)
     }
     // 「暂停直到第一句翻译完毕」：点开翻译后暂停播放，等当前块翻译完再自动继续。
     // 不放进 rememberSaveable：页面重建时不自动恢复播放，避免状态对不上。
@@ -213,7 +216,7 @@ fun Ios5AudiobookPlayerPage(
         llmPrefs.contextTokens, llmPrefs.temperature, llmPrefs.useGpu,
         llmPrefs.preTranslateSec,
     ) {
-        if (!showTranslate || activeLlm == null || activeSubModel == null || chapter == null) null
+        if (!showTranslate || !llmSupported || activeLlm == null || activeSubModel == null || chapter == null) null
         else TranslationSession(
             cuesProvider = { subStateRef.value.cues },
             client = container.llmClient,
@@ -430,38 +433,43 @@ fun Ios5AudiobookPlayerPage(
                     } else {
                         Spacer(Modifier.size(40.dp))
                     }
-                    // 翻译（多模态大模型）：字幕右侧的「文A」，点开在封面区显示译文
-                    Icon(
-                        Icons.Filled.Translate,
-                        "翻译",
-                        tint = if (showTranslate) Color(0xFF0A60D6) else Color(0xFF6B7280),
-                        modifier = Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape)
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() },
-                                onClick = {
-                                    val turningOn = !showTranslate
-                                    showTranslate = turningOn
-                                    TranslationUiMemory.open = showTranslate
-                                    if (!turningOn) {
-                                        // 关掉翻译层：之前若因为它暂停过，恢复播放。
-                                        if (pauseGate) {
-                                            pauseGate = false
-                                            if (!state.isPlaying) onTogglePlay()
+                    // 翻译（多模态大模型）：字幕右侧的「文A」，点开在封面区显示译文。
+                    // 低版本 / 32 位设备没有 LiteRT-LM，占位保证图标排列不变。
+                    if (llmSupported) {
+                        Icon(
+                            Icons.Filled.Translate,
+                            "翻译",
+                            tint = if (showTranslate) Color(0xFF0A60D6) else Color(0xFF6B7280),
+                            modifier = Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape)
+                                .clickable(
+                                    indication = null,
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    onClick = {
+                                        val turningOn = !showTranslate
+                                        showTranslate = turningOn
+                                        TranslationUiMemory.open = showTranslate
+                                        if (!turningOn) {
+                                            // 关掉翻译层：之前若因为它暂停过，恢复播放。
+                                            if (pauseGate) {
+                                                pauseGate = false
+                                                if (!state.isPlaying) onTogglePlay()
+                                            }
+                                        } else if (llmPrefs.pauseUntilFirst &&
+                                            state.isPlaying &&
+                                            activeLlm != null &&
+                                            activeSubModel != null &&
+                                            chapter != null
+                                        ) {
+                                            // 正常播放时点开翻译：先暂停，等当前这一句翻译完再继续。
+                                            pauseGate = true
+                                            onTogglePlay()
                                         }
-                                    } else if (llmPrefs.pauseUntilFirst &&
-                                        state.isPlaying &&
-                                        activeLlm != null &&
-                                        activeSubModel != null &&
-                                        chapter != null
-                                    ) {
-                                        // 正常播放时点开翻译：先暂停，等当前这一句翻译完再继续。
-                                        pauseGate = true
-                                        onTogglePlay()
-                                    }
-                                },
-                            ).padding(9.dp),
-                    )
+                                    },
+                                ).padding(9.dp),
+                        )
+                    } else {
+                        Spacer(Modifier.size(40.dp))
+                    }
                     // 音量（本书增益）
                     Icon(
                         Icons.Filled.VolumeUp, "音量",

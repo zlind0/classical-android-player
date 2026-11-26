@@ -1705,8 +1705,10 @@ class PlaybackService : MediaLibraryService() {
         noisyReceiver = null
         runCatching { container.ebookTtsPlayer.onAudioFocusChange = null }
         runCatching {
-            abookPlaybackCb?.let {
-                (getSystemService(AUDIO_SERVICE) as AudioManager).unregisterAudioPlaybackCallback(it)
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                abookPlaybackCb?.let {
+                    (getSystemService(AUDIO_SERVICE) as AudioManager).unregisterAudioPlaybackCallback(it)
+                }
             }
         }
         abookPlaybackCb = null

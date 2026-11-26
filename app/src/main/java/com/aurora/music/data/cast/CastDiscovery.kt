@@ -3,6 +3,7 @@ package com.aurora.music.data.cast
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
@@ -102,7 +103,7 @@ class CastDiscovery(
         }
         runCatching {
             val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            cm?.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+            val callback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
                     if (advertisedPort > 0) {
                         registered = false
@@ -113,7 +114,18 @@ class CastDiscovery(
                 override fun onLost(network: Network) {
                     registered = false
                 }
-            })
+            }
+            if (Build.VERSION.SDK_INT >= 24) {
+                cm?.registerDefaultNetworkCallback(callback)
+            } else {
+                // API 23 没有「默认网络」回调，用 INTERNET 能力请求等价替代。
+                cm?.registerNetworkCallback(
+                    android.net.NetworkRequest.Builder()
+                        .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                        .build(),
+                    callback,
+                )
+            }
         }
     }
 

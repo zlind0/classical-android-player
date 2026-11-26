@@ -6,11 +6,14 @@ import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import androidx.core.content.ContextCompat
+import androidx.annotation.RequiresApi
 import com.aurora.music.R
 import com.aurora.music.playback.NowPlaying
 import com.aurora.music.playback.NowPlayingStore
 import com.aurora.music.playback.PlaybackService
 
+/** Quick Settings 快捷开关：TileService 是 API 24 才有的，6.x 上系统不会实例化它。 */
+@RequiresApi(Build.VERSION_CODES.N)
 class AuroraTileService : TileService() {
 
     override fun onStartListening() = render()

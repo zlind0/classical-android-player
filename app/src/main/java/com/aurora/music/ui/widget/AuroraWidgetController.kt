@@ -16,8 +16,11 @@ object AuroraWidgetController {
     fun refresh(context: Context) {
         val app = context.applicationContext
         scope.launch { runCatching { AuroraWidget().updateAll(app) } }
-        runCatching {
-            TileService.requestListeningState(app, ComponentName(app, AuroraTileService::class.java))
+        // AuroraTileService 继承的 TileService 是 API 24+；低版本连类都不能加载。
+        if (android.os.Build.VERSION.SDK_INT >= 24) {
+            runCatching {
+                TileService.requestListeningState(app, ComponentName(app, AuroraTileService::class.java))
+            }
         }
     }
 }

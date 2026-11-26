@@ -308,7 +308,7 @@ The toolchain is slightly non-standard, so a few specifics matter.
 
 **Requirements**
 - **JDK 21** (the default `java` on PATH may be older; point Gradle at 21 explicitly).
-- **Android SDK** with `compileSdk`/`targetSdk` 35, `minSdk` 26.
+- **Android SDK** with `compileSdk` 36 / `targetSdk` 35, `minSdk` 23 (Android 6.0.1+).
 - **NDK 27** and **CMake 3.22+** for the native code (AcoustID/Chromaprint fingerprinting and the bit-perfect FLAC/USB driver):
   ```bash
   sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"

@@ -88,6 +88,8 @@ class CastReceiveService : Service() {
     }
 
     private fun createChannel() {
+        // NotificationChannel 是 API 26+；26 以下用 NotificationCompat 的兼容路径。
+        if (android.os.Build.VERSION.SDK_INT < 26) return
         val nm = getSystemService(NotificationManager::class.java)
         if (nm.getNotificationChannel(CHANNEL_ID) == null) {
             nm.createNotificationChannel(

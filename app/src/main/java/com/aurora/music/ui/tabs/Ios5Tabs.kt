@@ -527,8 +527,11 @@ fun SettingsTab(
                     Ios5Cell(title = "有声书来源", subtitle = "目录 / 扫描", onClick = { onOpen(Ios5Routes.SETTINGS_AUDIOBOOK_SOURCES) })
                     Ios5CellDivider()
                     Ios5Cell(title = "有声书设置", subtitle = "共存 / 步长 / 跳过", onClick = { onOpen(Ios5Routes.SETTINGS_AUDIOBOOK) })
-                    Ios5CellDivider()
-                    Ios5Cell(title = "多模态大模型", subtitle = llmSubtitle, onClick = { onOpen(Ios5Routes.SETTINGS_MULTIMODAL) })
+                    // 本地大模型需要 API 24+ 且 64 位设备，老机型直接不显示入口。
+                    if (com.aurora.music.data.llm.LlmCapability.isSupported) {
+                        Ios5CellDivider()
+                        Ios5Cell(title = "多模态大模型", subtitle = llmSubtitle, onClick = { onOpen(Ios5Routes.SETTINGS_MULTIMODAL) })
+                    }
                 }
             }
             item {
