@@ -478,24 +478,78 @@ class RemoteLibraryManager(
         rebuildLibraries()
     }
 
-    /** 30 天没连上过：删掉该设备的 meta 与封面缓存。 */
+    @Volatile var libraryCacheMaxAgeMs: Long = CACHE_TTL_MS
+
+    /** 按配置的过期周期删掉该设备的 meta 与封面缓存。 */
     private fun pruneExpired() {
-        val cutoff = System.currentTimeMillis() - CACHE_TTL_MS
-        val expired = payloads.values.filter {
-            (it.lastSeenAt == 0L || it.lastSeenAt < cutoff) && !downloads.hasDownloads(it.deviceId)
+        val ttl = libraryCacheMaxAgeMs
+        if (ttl <= 0L) return
+        pruneWithPolicy(maxBytes = 0L, maxAgeMs = ttl)
+    }
+
+    fun pruneWithPolicy(maxBytes: Long, maxAgeMs: Long, nowMs: Long = System.currentTimeMillis()) {
+        libraryCacheMaxAgeMs = maxAgeMs
+        var changed = false
+        if (maxAgeMs > 0L) {
+            val cutoff = nowMs - maxAgeMs
+            val expired = payloads.values.filter {
+                (it.lastSeenAt == 0L || it.lastSeenAt < cutoff) && !downloads.hasDownloads(it.deviceId)
+            }
+            if (expired.isNotEmpty()) {
+                expired.forEach { evictDeviceCache(it.deviceId) }
+                changed = true
+            }
         }
-        if (expired.isEmpty()) return
-        expired.forEach {
-            payloads.remove(it.deviceId)
-            ebookExtras.remove(it.deviceId)
-            offlineStrikes.remove(it.deviceId)
-            lanEndpoints.remove(it.deviceId)
-            RemoteLibraryDb.delete(storeDir, it.deviceId)
-            RemoteArtCache.clearDevice(appContext, it.deviceId)
-            RemoteMediaCache.removeEndpoint(it.deviceId)
+        if (maxBytes > 0L) {
+            val deviceSizes = payloads.values.map { snap ->
+                val dbBytes = RemoteLibraryDb.file(storeDir, snap.deviceId).let { if (it.isFile) it.length() else 0L }
+                val artBytes = RemoteArtCache.deviceBytes(appContext, snap.deviceId)
+                Triple(snap, dbBytes + artBytes, snap.lastSeenAt)
+            }
+            var total = deviceSizes.sumOf { it.second }
+            if (total > maxBytes) {
+                for ((snap, size, _) in deviceSizes.sortedBy { it.third }) {
+                    if (total <= maxBytes) break
+                    if (downloads.hasDownloads(snap.deviceId)) continue
+                    evictDeviceCache(snap.deviceId)
+                    total -= size
+                    changed = true
+                }
+            }
         }
+        if (changed) {
+            persistLanEndpoints()
+            rebuildLibraries()
+        }
+    }
+
+    fun clearLibraryCache() {
+        val allIds = payloads.keys.toList()
+        allIds.forEach { id ->
+            if (!downloads.hasDownloads(id)) {
+                evictDeviceCache(id)
+            }
+        }
+        // 清理未关联到当前 payloads 的残留 .db / art / relay_cache
+        runCatching {
+            storeDir.listFiles()?.forEach { f ->
+                if (f.isFile && f.name.endsWith(".db")) f.delete()
+            }
+        }
+        RemoteArtCache.clearAll(appContext)
+        runCatching { File(appContext.filesDir, "relay_cache").deleteRecursively() }
         persistLanEndpoints()
         rebuildLibraries()
+    }
+
+    private fun evictDeviceCache(deviceId: String) {
+        payloads.remove(deviceId)
+        ebookExtras.remove(deviceId)
+        offlineStrikes.remove(deviceId)
+        lanEndpoints.remove(deviceId)
+        RemoteLibraryDb.delete(storeDir, deviceId)
+        RemoteArtCache.clearDevice(appContext, deviceId)
+        RemoteMediaCache.removeEndpoint(deviceId)
     }
 
     private fun rebuildLibraries() {
@@ -1250,6 +1304,26 @@ class RemoteLibraryManager(
     /** 用户调整“最近阅读数量”后立刻按新上限清缓存。 */
     fun trimEbookCache() {
         if (_ebookRecents.value.isNotEmpty()) setEbookRecents(_ebookRecents.value)
+    }
+
+    /** 按 TTL 和容量上限（LRU）清理远程临时打开的电子书文件。 */
+    fun pruneRemoteEbooks(maxBytes: Long, maxAgeMs: Long, nowMs: Long = System.currentTimeMillis()) {
+        if (maxBytes <= 0L && maxAgeMs <= 0L) return
+        val files = ebookDir.walkTopDown().filter { it.isFile }.toList()
+        val entries = files.map { com.aurora.music.data.CachePruner.Entry(it, it.length(), it.lastModified()) }
+        com.aurora.music.data.CachePruner.pruneEntries(entries, maxBytes, maxAgeMs, nowMs)
+        val remaining = _ebookRecents.value.filter { it.localPath.isBlank() || File(it.localPath).isFile }
+        if (remaining.size != _ebookRecents.value.size) {
+            _ebookRecents.value = remaining
+            persistRecents()
+        }
+    }
+
+    fun clearRemoteEbooks() {
+        runCatching { ebookDir.deleteRecursively() }
+        runCatching { randomStoreFile.delete() }
+        _ebookRecents.value = emptyList()
+        persistRecents()
     }
 
     /** 阅读页打开远程书后把进度时间往前推（最近阅读排序）。 */

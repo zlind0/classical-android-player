@@ -1,6 +1,7 @@
 package com.aurora.music.data.llm
 
 import android.content.Context
+import com.aurora.music.data.ModelStorage
 import java.io.File
 
 /**
@@ -61,9 +62,9 @@ object LlmModelCatalog {
     fun byId(id: String): LlmModelSpec? = all.firstOrNull { it.id == id }
 }
 
-/** 权重落盘位置：filesDir/llm-models/<id>/。 */
+/** 权重落盘位置：<大模型目录>/llm-models/<id>/（默认 filesDir，可在存储设置里换到安卓目录）。 */
 fun llmModelDir(context: Context, id: String): File =
-    File(File(context.filesDir, "llm-models"), id)
+    File(ModelStorage.llmModelsDir(context), id)
 
 /**
  * GPU 上一次把 :llm 进程带崩时留下的标记。

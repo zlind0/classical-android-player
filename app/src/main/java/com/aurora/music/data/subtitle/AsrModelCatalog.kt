@@ -1,6 +1,7 @@
 package com.aurora.music.data.subtitle
 
 import android.content.Context
+import com.aurora.music.data.ModelStorage
 import java.io.File
 
 /**
@@ -147,12 +148,12 @@ object AsrModelCatalog {
     fun byId(id: String): AsrModelSpec? = all.firstOrNull { it.id == id }
 }
 
-/** 模型落盘位置：filesDir/asr-models/<id>/；VAD 也放在同一棵树下。 */
+/** 模型落盘位置：<大模型目录>/asr-models/<id>/；VAD 也放在同一棵树下。 */
 fun asrModelDir(context: Context, id: String): File =
-    File(File(context.filesDir, "asr-models"), id)
+    File(ModelStorage.asrModelsDir(context), id)
 
 fun asrVadModelFile(context: Context): File =
-    File(File(context.filesDir, "asr-models"), "vad/silero_vad.onnx")
+    File(File(ModelStorage.asrModelsDir(context), "vad"), "silero_vad.onnx")
 
 fun asrModelDir(context: Context, spec: AsrModelSpec): File = asrModelDir(context, spec.id)
 

@@ -13,6 +13,7 @@
 | [dsp.md](dsp.md) | 音乐效果器链：处理顺序、EQ/动态/卷积、系数计算、设备绑定、USB 直通 |
 | [casting.md](casting.md) | 两种投屏：接收端（AirPlay / Pod）与远程库播放，UI 接口与网络优化 |
 | [layout.md](layout.md) | 横屏与竖屏：布局分支、播放器侧栏、电子书、旋转后的状态恢复 |
+| [model-storage.md](model-storage.md) | 大模型目录规范：LLM / ASR 权重与编译缓存的路径、命名、完整性判定、跨应用共用 |
 
 ## 三个贯穿全局的设计基调
 
@@ -30,3 +31,4 @@
 - 只关心播放体验：先看 `cooperative-playback.md`，再看 `dsp.md`。
 - 只关心网络/投屏：先看 `sharing-and-relay.md` 的拓扑图，再看 `casting.md`。
 - 改 UI：先看 `layout.md`，它解释了为什么整个 app 只有一个方向判断。
+- 要做别的应用共用模型权重：直接看 `model-storage.md`，它是跨应用的落盘契约。

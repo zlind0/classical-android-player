@@ -225,8 +225,11 @@ class EbookStore(context: Context, private val dao: EbookDao) {
     private fun readParsedCache(md5: String): ParsedEbook? = runCatching {
         // v3 起 linear=no 的 spine 页也参与目录/超链接定位（套装书总目录指向子书封面页）；
         // v2 及更早的缓存缺这些条目，直接废弃重解析（分页断点按块字符区间，与此无关不受影响）
-        val f = File(cacheDirFor(md5), "parsed_v3.json")
+        val dir = cacheDirFor(md5)
+        val f = File(dir, "parsed_v3.json")
         if (!f.exists()) return null
+        val now = System.currentTimeMillis()
+        runCatching { f.setLastModified(now); dir.setLastModified(now) }
         gson.fromJson<ParsedEbook>(f.readText(), parsedType)
     }.getOrNull()
 
@@ -267,8 +270,11 @@ class EbookStore(context: Context, private val dao: EbookDao) {
     fun loadPageBreaks(md5: String, key: String): List<List<List<Int>>>? {
         if (md5.isBlank()) return null
         return runCatching {
-            val f = File(cacheDirFor(md5), "pages_${key.replace('/', '_')}.json")
+            val dir = cacheDirFor(md5)
+            val f = File(dir, "pages_${key.replace('/', '_')}.json")
             if (!f.exists()) return null
+            val now = System.currentTimeMillis()
+            runCatching { f.setLastModified(now); dir.setLastModified(now) }
             val t = object : TypeToken<List<List<List<Int>>>>() {}.type
             gson.fromJson<List<List<List<Int>>>>(f.readText(), t)
         }.getOrNull()

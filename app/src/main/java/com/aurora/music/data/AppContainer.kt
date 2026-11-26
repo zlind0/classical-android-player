@@ -149,6 +149,9 @@ class AppContainer(context: Context) {
     /** 随机阅读：服务端保持 3 本随机书，客户端按章取正文（只读，不入本地书库）。 */
     val randomFeed = com.aurora.music.data.cast.RandomFeedManager(appContext, remoteLibrary, ebookStore)
 
+    /** 全应用缓存管理（LRU + TTL + 手动清理）。 */
+    val cacheManager = CacheManager(appContext, remoteLibrary, randomFeed)
+
     /** 短视频：libVLC 内核 + 播放现场（旋转/切页都不丢状态）。 */
     val videoEngine = com.aurora.music.data.video.VideoEngine(appContext)
     val videoFeed = com.aurora.music.data.video.VideoFeedController(appContext, remoteLibrary)
@@ -219,6 +222,9 @@ class AppContainer(context: Context) {
     // 有声书离线字幕：ASR 权重下载器 + 字幕缓存（运行时随包，权重按需下）
     val asrModels = com.aurora.music.data.subtitle.AsrModelStore(appContext)
     val subtitleStore = com.aurora.music.data.subtitle.SubtitleStore(appContext)
+
+    // 大模型目录（应用存储 / 安卓目录）与迁移。ASR、LLM 权重共用同一棵树。
+    val modelStorage = com.aurora.music.data.ModelStorageManager(appContext)
 
     // 有声书多模态翻译：权重下载器留在主进程；LiteRT-LM 引擎在 :llm 服务进程里。
     val llmModels = com.aurora.music.data.llm.LlmModelStore(appContext)
@@ -635,6 +641,12 @@ class AppContainer(context: Context) {
         }
         scope.launch {
             ebookPrefs.recentLimit.collect { remoteLibrary.trimEbookCache() }
+        }
+        scope.launch(Dispatchers.IO) {
+            kotlinx.coroutines.delay(3_000)
+            settingsStore.cachePolicies.collect { policies ->
+                runCatching { cacheManager.enforceAll(policies) }
+            }
         }
         registerConnectivity()
     }

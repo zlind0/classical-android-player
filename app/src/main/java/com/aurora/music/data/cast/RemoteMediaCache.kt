@@ -178,6 +178,53 @@ object RemoteMediaCache {
         knownAudiobooks += keep
     }
 
+    /** 按 TTL 和容量上限（LRU）清理 SimpleCache。 */
+    fun trim(maxBytes: Long, maxAgeMs: Long, nowMs: Long = System.currentTimeMillis()) {
+        val c = cache ?: return
+        if (maxBytes <= 0L && maxAgeMs <= 0L) return
+        data class Entry(val key: String, val bytes: Long, val lastTouch: Long)
+        val entries = runCatching {
+            c.keys.map { k ->
+                val spans = c.getCachedSpans(k)
+                val size = spans.sumOf { it.length.coerceAtLeast(0L) }
+                val touch = spans.maxOfOrNull { it.lastTouchTimestamp } ?: 0L
+                Entry(k, size, touch)
+            }
+        }.getOrDefault(emptyList())
+        if (entries.isEmpty()) return
+
+        val cutoff = if (maxAgeMs > 0L) nowMs - maxAgeMs else Long.MIN_VALUE
+        val remaining = mutableListOf<Entry>()
+        for (e in entries) {
+            if (maxAgeMs > 0L && e.lastTouch in 1 until cutoff) {
+                runCatching { c.removeResource(e.key) }
+                knownMusic.remove(e.key)
+                knownAudiobooks.remove(e.key)
+            } else {
+                remaining += e
+            }
+        }
+        var total = remaining.sumOf { it.bytes }
+        if (maxBytes > 0L && total > maxBytes) {
+            for (e in remaining.sortedBy { it.lastTouch }) {
+                if (total <= maxBytes) break
+                runCatching { c.removeResource(e.key) }
+                knownMusic.remove(e.key)
+                knownAudiobooks.remove(e.key)
+                total -= e.bytes
+            }
+        }
+    }
+
+    fun clearAll() {
+        val c = cache ?: return
+        runCatching {
+            c.keys.toList().forEach { key -> runCatching { c.removeResource(key) } }
+        }
+        knownMusic.clear()
+        knownAudiobooks.clear()
+    }
+
     private object UriCompat {
         fun of(url: String): android.net.Uri = android.net.Uri.parse(url)
     }

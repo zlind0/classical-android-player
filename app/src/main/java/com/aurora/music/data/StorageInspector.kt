@@ -112,11 +112,24 @@ private fun dirLabel(rel: String): Int? {
         seg[0] == "files" && sub == listOf("ebook_covers") -> R.string.storage_dir_covers
         seg[0] == "files" && sub.size >= 1 && sub[0] == "ebooks" -> R.string.storage_dir_shelf
         seg[0] == "files" && sub == listOf("downloads") -> R.string.storage_dir_downloads
+        seg[0] == "files" && sub == listOf("remote_downloads") -> R.string.storage_dir_remote_downloads
+        seg[0] == "files" && sub == listOf("remote_library") -> R.string.storage_dir_remote_library
+        seg[0] == "files" && sub == listOf("remote_library", "art") -> R.string.storage_dir_remote_art
+        seg[0] == "files" && sub == listOf("remote_ebooks") -> R.string.storage_dir_remote_ebooks
+        seg[0] == "files" && sub == listOf("relay_cache") -> R.string.storage_dir_relay_cache
+        seg[0] == "files" && sub == listOf("cast_art") -> R.string.storage_dir_cast_art
+        seg[0] == "files" && sub == listOf("subtitles") -> R.string.storage_dir_subtitles
+        seg[0] == "files" && sub == listOf("llm-models") -> R.string.storage_dir_llm_models
+        seg[0] == "files" && sub == listOf("asr-models") -> R.string.storage_dir_asr_models
         seg[0] == "files" && sub == listOf("fonts") -> R.string.storage_dir_fonts
         seg[0] == "cache" && sub == listOf("track_art") -> R.string.storage_dir_track_art
         seg[0] == "cache" && sub == listOf("track_art", "c") -> R.string.storage_dir_track_art_images
         seg[0] == "cache" && sub == listOf("track_art", "s") -> R.string.storage_dir_track_art_index
         seg[0] == "cache" && sub == listOf("image_cache") -> R.string.storage_dir_image_cache
+        seg[0] == "cache" && sub == listOf("remote_media") -> R.string.storage_dir_remote_media
+        seg[0] == "cache" && sub == listOf("feed_books") -> R.string.storage_dir_feed_books
+        seg[0] == "cache" && sub == listOf("llm-slices") -> R.string.storage_dir_llm_slices
+        seg[0] == "cache" && sub == listOf("litert-lm") -> R.string.storage_dir_litert_lm
         else -> fileLabel(sub.lastOrNull().orEmpty())
     }
 }

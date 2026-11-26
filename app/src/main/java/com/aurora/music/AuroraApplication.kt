@@ -6,14 +6,36 @@ import android.os.Build
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.disk.DiskCache
 import com.aurora.music.data.AppContainer
+import com.aurora.music.data.CacheCategory
 import com.aurora.music.data.ebook.EbookDebugLog
 import com.aurora.music.util.AppLocale
 import java.io.File
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 
-class AuroraApplication : Application() {
+class AuroraApplication : Application(), ImageLoaderFactory {
     lateinit var container: AppContainer
         private set
+
+    override fun newImageLoader(): ImageLoader {
+        val maxBytes = runCatching {
+            val policies = runBlocking { container.settingsStore.cachePolicies.first() }
+            val mb = (policies[CacheCategory.IMAGE_AND_ART] ?: CacheCategory.IMAGE_AND_ART.defaultPolicy()).maxMb
+            if (mb <= 0) 512L * 1024L * 1024L else (mb.toLong() * 1024L * 1024L / 2L).coerceAtLeast(32L * 1024L * 1024L)
+        }.getOrDefault(256L * 1024L * 1024L)
+        return ImageLoader.Builder(this)
+            .diskCache {
+                DiskCache.Builder()
+                    .directory(File(cacheDir, "image_cache"))
+                    .maxSizeBytes(maxBytes)
+                    .build()
+            }
+            .build()
+    }
 
     override fun attachBaseContext(base: Context) {
         super.attachBaseContext(AppLocale.wrap(base))

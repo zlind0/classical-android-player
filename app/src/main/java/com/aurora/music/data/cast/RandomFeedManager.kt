@@ -906,6 +906,7 @@ class RandomFeedManager(
     private suspend fun downloadToCache(deviceId: String, path: String): File? {
         val dest = feedFile(path)
         if (dest.isFile && dest.length() > 0) {
+            runCatching { dest.setLastModified(System.currentTimeMillis()) }
             localFiles[path] = dest
             return dest
         }
@@ -935,6 +936,17 @@ class RandomFeedManager(
         val dir = File(appContext.cacheDir, "feed_books")
         val name = sha1(path) + "." + path.substringAfterLast('.', "epub").lowercase()
         return File(dir, name)
+    }
+
+    /** 清理随机阅读本地缓存（磁盘文件 + 内存解析/章节缓存）。 */
+    fun clearCache() {
+        localFiles.clear()
+        parsedBooks.clear()
+        chapters.clear()
+        localMismatch.clear()
+        expectedChapters.clear()
+        runCatching { File(appContext.cacheDir, "feed_books").deleteRecursively() }
+        _chapterVersion.value = _chapterVersion.value + 1
     }
 
     private fun sha1(value: String): String = runCatching {

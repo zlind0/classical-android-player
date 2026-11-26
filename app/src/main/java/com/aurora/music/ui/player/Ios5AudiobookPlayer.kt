@@ -160,7 +160,7 @@ fun Ios5AudiobookPlayerPage(
         com.aurora.music.data.subtitle.DecodedPcmWindow()
     }
     val sliceStore = remember(book.id, chapter?.key) {
-        chapter?.let { com.aurora.music.data.llm.AudioSliceStore(appCtx, it) }
+        chapter?.let { com.aurora.music.data.llm.AudioSliceStore(it) }
     }
     // 已完成的切块 + 译文，独立 SQLite 文件；清缓存 = 删这个文件。
     val translationStore = remember(book.id, chapter?.key) {

@@ -92,6 +92,15 @@ object RemoteArtCache {
         runCatching { deviceDir(context, deviceId).deleteRecursively() }
     }
 
+    fun deviceBytes(context: Context, deviceId: String): Long = runCatching {
+        val dir = File(root(context), sha1(deviceId))
+        if (!dir.isDirectory) 0L else dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    }.getOrDefault(0L)
+
+    fun clearAll(context: Context) {
+        runCatching { root(context).deleteRecursively() }
+    }
+
     private fun sha1(s: String): String = runCatching {
         MessageDigest.getInstance("SHA-1").digest(s.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }

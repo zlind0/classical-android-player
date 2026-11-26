@@ -3,6 +3,7 @@ package com.aurora.music.data.llm
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import com.aurora.music.data.ModelStorage
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
@@ -160,7 +161,7 @@ class LlmRuntime(private val context: Context) {
         }
         val file = File(llmModelDir(context, spec), spec.fileName)
         check(file.isFile && file.length() > 0) { "模型文件不存在，请重新下载" }
-        val cacheDir = File(context.cacheDir, "litert-lm").apply { mkdirs() }
+        val cacheDir = ModelStorage.litertCacheDir(context).apply { mkdirs() }
         // 上一次 GPU 尝试把整个进程带崩了（native SIGSEGV 无法 catch）：
         // 这次直接走 CPU，至少让翻译能用。
         val useGpu = prefs.useGpu && !llmGpuCrashMarker(context).exists()

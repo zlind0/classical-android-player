@@ -149,6 +149,27 @@ class RemoteDownloadManager(context: Context) {
     fun deviceNameOf(deviceId: String): String? =
         _records.value.firstOrNull { it.deviceId == deviceId }?.deviceName?.takeIf { it.isNotBlank() }
 
+    fun totalBytes(): Long = runCatching {
+        rootDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    }.getOrDefault(0L)
+
+    fun clearAll() {
+        activeJobs.values.forEach { it.cancel() }
+        activeJobs.clear()
+        activeProgress.clear()
+        activeChildren.clear()
+        _records.value = emptyList()
+        persist()
+        rebuildUi()
+        runCatching {
+            rootDir.listFiles()?.forEach { f ->
+                if (f.name != "index.json") {
+                    if (f.isDirectory) f.deleteRecursively() else f.delete()
+                }
+            }
+        }
+    }
+
     fun localSongPath(deviceId: String, songId: String): String? {
         _records.value.asSequence()
             .filter { it.deviceId == deviceId }

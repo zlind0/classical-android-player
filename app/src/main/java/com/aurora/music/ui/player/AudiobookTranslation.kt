@@ -152,8 +152,7 @@ private fun clock(sec: Double): String {
 }
 
 private fun sliceStateLabel(state: TranslationSession.SliceState): String = when (state) {
-    TranslationSession.SliceState.PENDING -> "未切"
-    TranslationSession.SliceState.SLICED -> "已切好"
+    TranslationSession.SliceState.PENDING -> "待翻译"
     TranslationSession.SliceState.PREPARING -> "准备中"
     TranslationSession.SliceState.GENERATING -> "翻译中"
     TranslationSession.SliceState.DONE -> "完成"

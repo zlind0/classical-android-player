@@ -434,7 +434,11 @@ class AirPlayReceiver(
             val dir = File(appContext.filesDir, "cast_art")
             if (!dir.exists()) dir.mkdirs()
             val file = File(dir, "airplay_${Integer.toHexString(bytes.contentHashCode())}.img")
-            if (!file.exists() || file.length() != bytes.size.toLong()) file.writeBytes(bytes)
+            if (!file.exists() || file.length() != bytes.size.toLong()) {
+                file.writeBytes(bytes)
+            } else {
+                runCatching { file.setLastModified(System.currentTimeMillis()) }
+            }
             artworkPath = "file://${file.absolutePath}"
         }.onFailure { Log.w(TAG, "artwork save failed: ${it.message}") }
     }

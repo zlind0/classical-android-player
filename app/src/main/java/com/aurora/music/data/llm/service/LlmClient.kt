@@ -4,17 +4,20 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.Message
 import android.os.Messenger
+import android.os.ParcelFileDescriptor
 import android.os.RemoteException
+import android.os.SharedMemory
+import android.system.OsConstants
 import com.aurora.music.data.llm.LlmDebug
 import com.aurora.music.data.llm.LlmGenerationPrefs
 import com.aurora.music.data.llm.LlmModelSpec
-import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CompletableDeferred
@@ -219,21 +222,19 @@ class LlmClient(private val context: Context) {
     }
 
     /**
-     * 请求翻译一段已经切好的 WAV 文件。模型没加载时服务会先加载再推理。
+     * 请求翻译一段内存中的 WAV 音频字节。模型没加载时服务会先加载再推理。
      *
-     * 音频文件由调用方准备好（通常是 [com.aurora.music.data.llm.AudioSliceStore]），
-     * 不再经过 `ByteArray` 中转，省掉一次整段音频的拷贝。
+     * 音频数据通过共享内存（API 27+ `SharedMemory`）或匿名管道（API 24–26）直接跨进程传递，
+     * 不落盘、也不受 Binder 1 MB 事务缓冲区限制。
      *
-     * @param deleteAfter 服务读完就删（临时文件）；切片缓存传 false，由缓存自己淘汰。
      * @param onReady 模型/会话就绪、开始接收音频时回调。
      * @param onToken 流式增量。
      */
     suspend fun translate(
         spec: LlmModelSpec,
         prefs: LlmGenerationPrefs,
-        audioFile: File,
+        wavBytes: ByteArray,
         prompt: String,
-        deleteAfter: Boolean = false,
         onReady: () -> Unit,
         onToken: (String) -> Unit,
     ): String {
@@ -245,14 +246,39 @@ class LlmClient(private val context: Context) {
         val request = Request(deferred, onReady, onToken)
         requests[requestId] = request
 
+        var shm: SharedMemory? = null
+        var pipeRead: ParcelFileDescriptor? = null
+        var pipeWrite: ParcelFileDescriptor? = null
+        var pipeWriterJob: Job? = null
+
+        val bundle = prefsBundle(spec, prefs).apply {
+            putLong(LlmProtocol.KEY_REQUEST_ID, requestId)
+            putString(LlmProtocol.KEY_PROMPT, prompt)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                val created = withContext(Dispatchers.IO) {
+                    SharedMemory.create("llm-audio-$requestId", wavBytes.size.coerceAtLeast(1)).apply {
+                        val buf = mapReadWrite()
+                        try {
+                            buf.put(wavBytes)
+                        } finally {
+                            SharedMemory.unmap(buf)
+                        }
+                        setProtect(OsConstants.PROT_READ)
+                    }
+                }
+                shm = created
+                putParcelable(LlmProtocol.KEY_AUDIO_SHM, created)
+            } else {
+                val pipe = ParcelFileDescriptor.createPipe()
+                pipeRead = pipe[0]
+                pipeWrite = pipe[1]
+                putParcelable(LlmProtocol.KEY_AUDIO_PIPE, pipeRead)
+            }
+        }
+
         val msg = Message.obtain(null, LlmProtocol.MSG_TRANSLATE).apply {
             replyTo = replyMessenger
-            data = prefsBundle(spec, prefs).apply {
-                putLong(LlmProtocol.KEY_REQUEST_ID, requestId)
-                putString(LlmProtocol.KEY_AUDIO_PATH, audioFile.absolutePath)
-                putBoolean(LlmProtocol.KEY_AUDIO_DELETE, deleteAfter)
-                putString(LlmProtocol.KEY_PROMPT, prompt)
-            }
+            data = bundle
         }
 
         val job = kotlinx.coroutines.currentCoroutineContext()[Job]
@@ -269,14 +295,24 @@ class LlmClient(private val context: Context) {
 
         try {
             send(msg)
+            val writeFd = pipeWrite
+            if (writeFd != null) {
+                pipeWriterJob = scope.launch(Dispatchers.IO) {
+                    runCatching {
+                        ParcelFileDescriptor.AutoCloseOutputStream(writeFd).use { it.write(wavBytes) }
+                    }
+                }
+            }
             return deferred.await()
         } finally {
             cancelHandle?.dispose()
             requests.remove(requestId)
-            // 切片缓存的文件归 AudioSliceStore 管，不能在这里删，否则下一段可能还要复用。
-            if (deleteAfter) {
-                withContext(Dispatchers.IO) { runCatching { audioFile.delete() } }
+            pipeWriterJob?.cancel()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                runCatching { shm?.close() }
             }
+            runCatching { pipeRead?.close() }
+            runCatching { pipeWrite?.close() }
         }
     }
 

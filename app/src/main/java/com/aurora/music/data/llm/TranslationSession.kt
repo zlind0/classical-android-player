@@ -75,7 +75,7 @@ class TranslationSession(
     enum class Status { WAITING, LOADING, GENERATING, READY, ERROR }
 
     /** 调试信息里显示的一段音频的状态。 */
-    enum class SliceState { PENDING, SLICED, PREPARING, GENERATING, DONE, FAILED, SKIPPED }
+    enum class SliceState { PENDING, PREPARING, GENERATING, DONE, FAILED, SKIPPED }
 
     data class SliceInfo(
         val start: Double,
@@ -163,10 +163,6 @@ class TranslationSession(
     /** 位置一次跳了太多（拖进度条 / 跳转按钮），下一轮按「落地」处理。 */
     @Volatile private var seeked = false
 
-    /** 根据 cue 提前算好的切片计划（签名用来避免每 250ms 重复提交）。 */
-    private var sliceJob: Job? = null
-    private var planSignature = ""
-
     fun start() {
         if (loopJob != null) return
         // 点开翻译就开始在 :llm 进程里加载模型，不用等第一句字幕出来。
@@ -222,10 +218,8 @@ class TranslationSession(
     fun close() {
         loopJob?.cancel()
         workerJob?.cancel()
-        sliceJob?.cancel()
         loopJob = null
         workerJob = null
-        sliceJob = null
         scope.cancel()
         // 会话结束不等于要卸载模型：模型去留由页面心跳决定（界面开着就继续 Ping），
         // 切章 / 改设置只是重建会话，引擎保持常驻。
@@ -306,9 +300,6 @@ class TranslationSession(
                 allowProvisionalFirst = jumped || skipKey == key,
             )
             val next = ahead.firstOrNull()
-            // 先把当前块、再把后面一段时间的端点定下来并提前切好音频。放在启动可见
-            // worker 之前：跳转后旧位置的切片任务会立刻被取消，当前块优先占住解码锁。
-            planAhead(chunk, ahead)
             if (jumped) {
                 // 旧位置的可见任务已经没有意义；正在为「本块 / 后面任意预翻块」跑的任务保留。
                 val useful = workerJob?.isActive == true &&
@@ -403,15 +394,15 @@ class TranslationSession(
         val tFirst = AtomicLong(0)
         val job = scope.launch {
             try {
-                // 大概率已经由 planAhead 提前切好；没有才现切（并且优先用已解码 PCM）。
-                val audio = slices.ensure(key, chunk.start, chunk.end, pcmWindow)
+                // 优先从字幕管线已解码的 PCM 窗口里切出内存 WAV，不落盘；窗口未覆盖时再局部解码这一段。
+                val wavBytes = slices.sliceWav(key, chunk.start, chunk.end, pcmWindow)
                     ?: throw IllegalStateException("这一段没有可读取的音频")
                 tSlice.set(SystemClock.elapsedRealtime())
                 val prompt = buildPrompt()
                 val result = client.translate(
                     spec = spec,
                     prefs = prefs,
-                    audioFile = audio,
+                    wavBytes = wavBytes,
                     prompt = prompt,
                     onReady = {
                         tReady.compareAndSet(0, SystemClock.elapsedRealtime())
@@ -521,13 +512,12 @@ class TranslationSession(
         )
     }
 
-    /** 这一段在调度上的位置：没切 / 已切 / 准备中 / 翻译中 / 完成 / 失败 / 已跳过。 */
+    /** 这一段在调度上的位置：待翻译 / 准备中 / 翻译中 / 完成 / 失败 / 已跳过。 */
     private fun sliceState(chunk: Chunk): SliceState = when {
         chunk.key == skipKey -> SliceState.SKIPPED
         cache.containsKey(chunk.key) -> SliceState.DONE
         chunk.key in failed -> SliceState.FAILED
         workerKey == chunk.key && workerJob?.isActive == true -> workerStage
-        slices.peek(chunk.key) != null -> SliceState.SLICED
         else -> SliceState.PENDING
     }
 
@@ -761,29 +751,6 @@ class TranslationSession(
             if (next.endMs >= targetEnd) break
         }
         return out
-    }
-
-    /**
-     * 把当前块和提前规划出来的块统一切好音频（端点固定 → 切一次就够，
-     * 播放位置走到时不会重新算），播放走到该块时只剩发翻译请求。
-     *
-     * 当前块排在最前面：跳转 / 刚打开翻译时旧位置的切片任务可能还占着解码锁，
-     * 先取消它，再按「当前 → 最近 → 更远」的顺序切，保证要显示的这一段最先就绪。
-     * 切音频优先用字幕管线已经解过的 PCM（[pcmWindow]），窗口没覆盖才回退解码。
-     */
-    private fun planAhead(current: Chunk, ahead: List<Chunk>) {
-        val signature = (current.key + "|" + ahead.joinToString("|") { it.key })
-        if (signature == planSignature) return
-        planSignature = signature
-        sliceJob?.cancel()
-        val all = ArrayList<Chunk>(ahead.size + 1)
-        all += current
-        all += ahead
-        sliceJob = scope.launch(Dispatchers.IO) {
-            for (chunk in all) {
-                slices.ensure(chunk.key, chunk.start, chunk.end, pcmWindow)
-            }
-        }
     }
 
     private companion object {

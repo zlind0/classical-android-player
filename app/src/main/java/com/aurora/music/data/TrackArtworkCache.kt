@@ -93,6 +93,8 @@ object TrackArtworkCache {
                 // 并发写入时别人可能刚好先落盘，再确认一次，避免误判失败
                 return ""
             }
+        } else {
+            runCatching { content.setLastModified(System.currentTimeMillis()) }
         }
         val uri = Uri.fromFile(content).toString()
         mem[songId] = uri
@@ -207,5 +209,10 @@ object TrackArtworkCache {
 
     fun invalidate(songId: String) {
         mem.remove(songId)
+    }
+
+    fun invalidateAll() {
+        mem.clear()
+        folderRandom.clear()
     }
 }

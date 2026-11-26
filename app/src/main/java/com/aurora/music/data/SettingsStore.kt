@@ -493,6 +493,7 @@ class SettingsStore(private val context: Context) {
         val EEXPORT_THREADS = intPreferencesKey("eexport_threads")
         val EEXPORT_ROOT = longPreferencesKey("eexport_root")
         val EEXPORT_OVERWRITE = booleanPreferencesKey("eexport_overwrite")
+        val CACHE_POLICIES = stringPreferencesKey("cache_policies")
     }
 
     val uiPrefs: Flow<UiPrefs> = context.dataStore.data.map { p ->
@@ -1244,6 +1245,45 @@ class SettingsStore(private val context: Context) {
     suspend fun setEexportThreads(v: Int) = context.dataStore.edit { it[Keys.EEXPORT_THREADS] = v }
     suspend fun setEexportRoot(v: Long) = context.dataStore.edit { it[Keys.EEXPORT_ROOT] = v }
     suspend fun setEexportOverwrite(v: Boolean) = context.dataStore.edit { it[Keys.EEXPORT_OVERWRITE] = v }
+
+    private data class CachePolicyDto(val maxMb: Int = 0, val maxAgeDays: Int = 0)
+
+    val cachePolicies: Flow<Map<CacheCategory, CachePolicy>> = context.dataStore.data.map { p ->
+        val raw = p[Keys.CACHE_POLICIES].orEmpty()
+        val parsed = if (raw.isBlank()) {
+            emptyMap()
+        } else {
+            runCatching {
+                val type = object : TypeToken<Map<String, CachePolicyDto>>() {}.type
+                gson.fromJson<Map<String, CachePolicyDto>>(raw, type) ?: emptyMap()
+            }.getOrDefault(emptyMap())
+        }
+        CacheCategory.entries.associateWith { cat ->
+            val dto = parsed[cat.id]
+            if (dto == null) cat.defaultPolicy()
+            else CachePolicy(dto.maxMb.coerceAtLeast(0), dto.maxAgeDays.coerceAtLeast(0))
+        }
+    }.distinctUntilChanged()
+
+    suspend fun setCachePolicy(category: CacheCategory, policy: CachePolicy) {
+        context.dataStore.edit { p ->
+            val raw = p[Keys.CACHE_POLICIES].orEmpty()
+            val map = if (raw.isBlank()) {
+                mutableMapOf()
+            } else {
+                runCatching {
+                    val type = object : TypeToken<MutableMap<String, CachePolicyDto>>() {}.type
+                    gson.fromJson<MutableMap<String, CachePolicyDto>>(raw, type) ?: mutableMapOf()
+                }.getOrDefault(mutableMapOf())
+            }
+            map[category.id] = CachePolicyDto(policy.maxMb.coerceAtLeast(0), policy.maxAgeDays.coerceAtLeast(0))
+            p[Keys.CACHE_POLICIES] = gson.toJson(map)
+        }
+    }
+
+    suspend fun resetCachePolicies() {
+        context.dataStore.edit { it.remove(Keys.CACHE_POLICIES) }
+    }
 
     // typed so json round-trips losslessly
     suspend fun exportPrefs(): PrefsBackup {

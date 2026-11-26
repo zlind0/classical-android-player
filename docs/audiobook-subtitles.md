@@ -21,6 +21,8 @@
 - 语音切句 Silero VAD（629 KB）→ `asr-models/vad/silero_vad.onnx`，
   下载模型时顺带准备好；这个文件只有 GitHub release 有，固定从那里下。
 
+完整的目录/命名/完整性契约（供其他应用共用同一份权重）见 [model-storage.md](model-storage.md)。
+
 | 模型 | 体积 | 语言 | 特点 |
 |---|---|---|---|
 | SenseVoiceSmall int8 | 239 MB | 中英日韩粤 | 最快（约 40× 实时），英文专名弱 |

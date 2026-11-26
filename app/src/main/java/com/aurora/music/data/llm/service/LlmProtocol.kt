@@ -34,10 +34,10 @@ object LlmProtocol {
     /** 调试信息开关：打开后 :llm 进程才输出诊断日志。 */
     const val KEY_DEBUG = "debug"
     const val KEY_REQUEST_ID = "request_id"
-    const val KEY_AUDIO_PATH = "audio_path"
 
-    /** 翻译完是否删除音频文件（临时请求为 true；切片缓存为 false）。 */
-    const val KEY_AUDIO_DELETE = "audio_delete"
+    /** 共享内存（API 27+）或匿名管道（API 24–26）传递 WAV 音频字节，避免落盘和 Binder 1MB 限制。 */
+    const val KEY_AUDIO_SHM = "audio_shm"
+    const val KEY_AUDIO_PIPE = "audio_pipe"
     const val KEY_PROMPT = "prompt"
     const val KEY_STATE = "state"
     const val KEY_MESSAGE = "message"

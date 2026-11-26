@@ -2,20 +2,23 @@ package com.aurora.music.data.llm.service
 
 import android.app.Service
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Message
 import android.os.Messenger
+import android.os.ParcelFileDescriptor
+import android.os.Parcelable
 import android.os.RemoteException
+import android.os.SharedMemory
 import android.os.SystemClock
 import android.util.Log
 import com.aurora.music.data.llm.LlmDebug
 import com.aurora.music.data.llm.LlmGenerationPrefs
 import com.aurora.music.data.llm.LlmModelCatalog
 import com.aurora.music.data.llm.LlmRuntime
-import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArraySet
 import kotlinx.coroutines.CancellationException
@@ -156,10 +159,16 @@ class LlmService : Service() {
         if (reply == null) return
         val requestId = data.getLong(LlmProtocol.KEY_REQUEST_ID)
         val spec = LlmModelCatalog.byId(data.getString(LlmProtocol.KEY_MODEL_ID).orEmpty())
-        val audioPath = data.getString(LlmProtocol.KEY_AUDIO_PATH).orEmpty()
-        val deleteAudio = data.getBoolean(LlmProtocol.KEY_AUDIO_DELETE, true)
+        val shm: SharedMemory? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            parcelable(data, LlmProtocol.KEY_AUDIO_SHM, SharedMemory::class.java)
+        } else {
+            null
+        }
+        val pipe = parcelable(data, LlmProtocol.KEY_AUDIO_PIPE, ParcelFileDescriptor::class.java)
         val prompt = data.getString(LlmProtocol.KEY_PROMPT).orEmpty()
-        if (spec == null || audioPath.isEmpty()) {
+        if (spec == null || (shm == null && pipe == null)) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) runCatching { shm?.close() }
+            runCatching { pipe?.close() }
             sendError(reply, requestId, "翻译请求参数不完整")
             return
         }
@@ -172,7 +181,7 @@ class LlmService : Service() {
                 if (!runtime.isLoaded(spec, prefs)) {
                     broadcast(LlmProtocol.STATE_LOADING, "正在加载模型…")
                 }
-                val audio = File(audioPath).readBytes()
+                val audio = readAudioBytes(shm, pipe)
                 val readMs = SystemClock.elapsedRealtime() - t0
                 LlmDebug.i(TAG, "request $requestId audio=${audio.size / 1024}KB read=${readMs}ms")
                 val result = runtime.translate(
@@ -208,10 +217,33 @@ class LlmService : Service() {
                 jobs.remove(requestId)
                 // 一次推理也是一次活跃：30 秒空闲从它结束后才开始算。
                 lastActivityMs = SystemClock.elapsedRealtime()
-                if (deleteAudio) runCatching { File(audioPath).delete() }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) runCatching { shm?.close() }
+                runCatching { pipe?.close() }
             }
         }
     }
+
+    private fun readAudioBytes(shm: SharedMemory?, pipe: ParcelFileDescriptor?): ByteArray {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1 && shm != null) {
+            return shm.use {
+                val buf = it.mapReadOnly()
+                try {
+                    ByteArray(buf.remaining()).also { arr -> buf.get(arr) }
+                } finally {
+                    SharedMemory.unmap(buf)
+                }
+            }
+        }
+        return ParcelFileDescriptor.AutoCloseInputStream(requireNotNull(pipe)).use { it.readBytes() }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun <T : Parcelable> parcelable(data: Bundle, key: String, clazz: Class<T>): T? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            data.getParcelable(key, clazz)
+        } else {
+            data.getParcelable(key)
+        }
 
     private fun handleUnload() {
         loadJob?.cancel()
