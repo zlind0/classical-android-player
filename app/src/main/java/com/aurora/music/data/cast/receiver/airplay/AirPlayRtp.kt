@@ -106,6 +106,8 @@ class AirPlayAudioReceiver(
     /** Sender's control endpoint, learned from its first control packet. */
     @Volatile private var controlTarget: InetSocketAddress? = null
     private var controlSeq = 0
+    /** 控制端口收到的被截断的重传包数（仅用于限流日志）。 */
+    private var controlTruncations = 0
 
     // Gap / retransmission state. gapSinceMs marks when the current missing
     // sequence range was first noticed; retries are paced by the settings.
@@ -238,7 +240,12 @@ class AirPlayAudioReceiver(
 
     private fun receiveLoop() {
         val buf = ByteArray(4096)
-        val controlBuf = ByteArray(512)
+        // Retransmitted audio arrives on the control port as "4-byte header +
+        // original RTP packet". A 352-frame ALAC packet is ~700-1000B, so the
+        // old 512B buffer silently truncated most resends; the truncated ALAC
+        // payload then either failed to decode or produced garbage samples,
+        // which is what "偶有解码失败 + 怪声" was.
+        val controlBuf = ByteArray(4096)
         try {
             while (true) {
                 val socket = synchronized(lock) { dataSocket } ?: break
@@ -254,15 +261,23 @@ class AirPlayAudioReceiver(
                 // Drain the control socket: resend responses arrive here (RAOP
                 // sends retransmitted audio to the control port, not the data
                 // port). The sender address is also learned from this socket so
-                // gap recovery requests can be sent back.
+                // gap recovery requests can be sent back. Drain until the 1ms
+                // timeout so a burst of resends is not read one-per-data-packet
+                // (that could take seconds and starve the jitter buffer).
                 val control = synchronized(lock) { controlSocket }
                 if (control != null) {
-                    try {
+                    var drained = 0
+                    while (drained < MAX_CONTROL_DRAIN) {
                         val cp = DatagramPacket(controlBuf, controlBuf.size)
-                        control.receive(cp)
+                        try {
+                            control.receive(cp)
+                        } catch (_: SocketTimeoutException) {
+                            break
+                        } catch (_: Exception) {
+                            break
+                        }
                         handleControlPacket(cp)
-                    } catch (_: SocketTimeoutException) {
-                    } catch (_: Exception) {
+                        drained++
                     }
                 }
             }
@@ -276,6 +291,21 @@ class AirPlayAudioReceiver(
         controlTarget = InetSocketAddress(packet.address, packet.port)
         val type = packet.data[1].toInt() and 0x7F
         if (type != 0x56) return
+        // A datagram that filled the receive buffer was truncated by the
+        // kernel. Feeding a partial RTP packet to ALAC is worse than dropping
+        // it: the decoder reads past the end of the bitstream and can emit
+        // garbage samples. Drop it and let the timeline conceal the gap.
+        if (packet.length >= packet.data.size) {
+            controlTruncations++
+            if (controlTruncations <= 3 || controlTruncations % 100 == 0) {
+                AirPlayDiagnostics.log(
+                    AirPlayDiagnostics.Level.WARN,
+                    TAG,
+                    "control packet truncated at ${packet.length}B (receive buffer full); dropping",
+                )
+            }
+            return
+        }
         // Retransmitted audio: 4-byte control header followed by the original
         // RTP packet (see UxPlay's raop_rtp.c).
         val copied = packet.data.copyOfRange(4, packet.length)
@@ -658,6 +688,12 @@ class AirPlayAudioReceiver(
 
         /** Safety cap only; the real limit is the configured wait time. */
         private const val MAX_PENDING = 128
+
+        /**
+         * 每轮最多从控制端口排空多少个重传包，避免重传突发时饿死数据端口。
+         * 控制 socket 的 soTimeout 是 1ms，排空后下一次 receive 会超时退出。
+         */
+        private const val MAX_CONTROL_DRAIN = 64
 
         /**
          * RAOP 用 4 字节 `00 68 34 00` 表示「这个包没有音频数据」（UxPlay 的
