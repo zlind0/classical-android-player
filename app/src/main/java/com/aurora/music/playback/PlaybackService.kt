@@ -165,6 +165,7 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
+        container.registerMusicDsp(auroraDsp)
 
         // float pipeline bypasses all app processors (sonic mono silence-skip custom dsp) so custom dsp needs 16-bit and keeps float off when active decided once here so engine switch takes effect next playback start
         val highRes = runBlocking { container.settingsStore.playbackPrefs.first().preferHighRes }
@@ -695,12 +696,7 @@ class PlaybackService : MediaLibraryService() {
             val posMs = currentClipStartMs + player.currentPosition.coerceAtLeast(0L)
             auroraDsp.setDrivingPositionSec(posMs / 1000f)
         }
-        container.dspMeters.value = com.aurora.music.data.DspMeters(
-            auroraDsp.compGrDb,
-            auroraDsp.limGrDb,
-            auroraDsp.driveBoostDb,
-            auroraDsp.driveLookaheadActive,
-        )
+        container.refreshDspMeters()
         abookActive = player.currentMediaItem?.mediaId?.startsWith(
             com.aurora.music.data.audiobook.ABOOK_ID_PREFIX,
         ) == true
@@ -1759,6 +1755,8 @@ class PlaybackService : MediaLibraryService() {
         runCatching { fadePlayer?.release() }
         fadePlayer = null
         runCatching { container.musicState.value = MusicPlaybackState() }
+        container.registerMusicDsp(null)
+        container.refreshDspMeters()
         runCatching { player.release() }
         scope.cancel()
         super.onDestroy()

@@ -73,6 +73,11 @@ class DspAudioChain(
         }
     }
 
+    val lastProcessedMs: Long get() = auroraDsp.lastProcessedMs
+
+    fun readMeters(nowMs: Long = System.currentTimeMillis()): com.aurora.music.data.DspMeters =
+        auroraDsp.readMeters(nowMs)
+
     /** Raw PCM sink used by [PcmStreamPlayer] (AirPlay / RTP protocols). */
     fun createSink(): AudioSink {
         val sink = DefaultAudioSink.Builder(appContext)

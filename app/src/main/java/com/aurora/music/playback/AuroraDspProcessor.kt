@@ -57,6 +57,15 @@ class AuroraDspProcessor : BaseAudioProcessor() {
 
     val driveBoostDb: Float get() = drivingLeveler.currentBoostDb
     val driveLookaheadActive: Boolean get() = drivingLeveler.hasActiveMap
+    @Volatile var lastProcessedMs: Long = 0L
+        private set
+
+    fun readMeters(nowMs: Long = System.currentTimeMillis(), idleTimeoutMs: Long = 600L): com.aurora.music.data.DspMeters =
+        if (lastProcessedMs > 0L && (nowMs - lastProcessedMs) <= idleTimeoutMs) {
+            com.aurora.music.data.DspMeters(compGrDb, limGrDb, driveBoostDb, driveLookaheadActive)
+        } else {
+            com.aurora.music.data.DspMeters(0f, 0f, 0f, driveLookaheadActive)
+        }
 
     fun setDrivingLoudnessMap(map: TrackLoudnessMap?) = drivingLeveler.setLoudnessMap(map)
     fun setDrivingPositionSec(posSec: Float) = drivingLeveler.setPositionSec(posSec)
@@ -222,6 +231,7 @@ class AuroraDspProcessor : BaseAudioProcessor() {
         limGrDb = if (limOn) (20f * Math.log10(minLimGain.toDouble())).toFloat().coerceIn(-30f, 0f) else 0f
         compGrAvgDb += (compGrDb - compGrAvgDb) * 0.05f
         drivingLeveler.publishMeter()
+        lastProcessedMs = System.currentTimeMillis()
         inputBuffer.position(inputBuffer.limit())
         output.flip()
     }
@@ -262,6 +272,7 @@ class AuroraDspProcessor : BaseAudioProcessor() {
         limGain = 1f; compGain = 1f
         compGrDb = 0f; limGrDb = 0f; compGrAvgDb = 0f
         smoothInit = false
+        lastProcessedMs = 0L
         drivingLeveler.reset()
     }
 

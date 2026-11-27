@@ -15,10 +15,15 @@ import com.aurora.music.model.Song
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -492,6 +497,52 @@ class AppContainer(context: Context) {
     val signalPath = MutableStateFlow(SignalPath())
 
     val dspMeters = MutableStateFlow(DspMeters())
+
+    @Volatile
+    private var musicDsp: com.aurora.music.playback.AuroraDspProcessor? = null
+    private var castMetersJob: Job? = null
+
+    fun registerMusicDsp(dsp: com.aurora.music.playback.AuroraDspProcessor?) {
+        musicDsp = dsp
+    }
+
+    fun refreshDspMeters() {
+        val now = System.currentTimeMillis()
+        val castReceiving = receiveNowPlaying.snapshot() != null
+        val castLast = castAudioChain.lastProcessedMs
+        val castActive = castLast > 0L && (now - castLast) <= 600L
+        val local = musicDsp
+        val localLast = local?.lastProcessedMs ?: 0L
+        val localActive = localLast > 0L && (now - localLast) <= 600L
+
+        dspMeters.value = when {
+            castActive && (!localActive || castLast >= localLast) -> castAudioChain.readMeters(now)
+            castReceiving -> DspMeters()
+            local != null -> local.readMeters(now)
+            else -> DspMeters()
+        }
+    }
+
+    init {
+        scope.launch {
+            combine(castReceiver.state, castHub.state) { _, _ ->
+                receiveNowPlaying.snapshot() != null
+            }.distinctUntilChanged().collect { receiving ->
+                castMetersJob?.cancel()
+                castMetersJob = null
+                if (receiving) {
+                    castMetersJob = scope.launch {
+                        while (isActive) {
+                            refreshDspMeters()
+                            delay(100L)
+                        }
+                    }
+                } else {
+                    refreshDspMeters()
+                }
+            }
+        }
+    }
 
     /** 站内音乐 player 的时间线位置/播放态（见 [MusicPlaybackState]）。 */
     val musicState = MutableStateFlow(MusicPlaybackState())
