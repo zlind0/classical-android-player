@@ -56,7 +56,7 @@ Media3 在 float 管线里只挂内置的格式转换处理器，不加载 `audi
 
 1. 43 段双二阶级联（L/R 独立）
 2. 前级 × 平衡 × 每声道 trim（前级/平衡平滑，trim 不平滑）
-3. 驱动响度补偿增益
+3. 驾驶模式弱音上拉器（`DrivingLeveler`，0..+maxBoost dB，含微前瞻环与本地响度地图前瞻）
 4. 谐波饱和（可选，tanh + 二次项）
 5. 立体声宽度（M/S，0 = 单声道，2 = 加倍侧信号）
 6. 交叉馈送（可选，延迟 + 700 Hz 一阶低通，混合对侧）
@@ -78,16 +78,15 @@ Media3 在 float 管线里只挂内置的格式转换处理器，不加载 `audi
 | 声场 | 宽度 0–2、交叉馈送 0–100% |
 | 谐波 | 饱和度 0–100% |
 | 动态 | 压缩器（阈值/比率/attack/release/拐点/补偿）、限幅器（-6–0 dBTP） |
-| 驱动模式 | Natural / Balanced / Strong / Custom，前三者覆盖静态压缩参数 |
-| 响度 | 驱动响度（按曲目 LUFS 补到目标 -24…-8 LUFS）、ReplayGain（track/album） |
+| 驱动模式 | Natural / Balanced / Strong / Custom，独立弱音上拉（0..+24 dB），与压缩器解耦 |
+| 响度 | ReplayGain（track/album），与驾驶模式正交共存 |
 | 卷积 | 用户 IR（WAV：16/24/32-bit int、float、8-bit，单声道复制到双声道） |
 | 校正 | 128 点对数频率响应 → 4095-tap 线性相位 FIR；强度 0–120%、trim、低切/高切 |
 
-### ReplayGain 和驱动响度不同时生效
+### ReplayGain 与驾驶模式正交共存
 
-- ReplayGain 是 `player.volume` 乘数，只衰减不放大（0.1–1.0）。
-- 驱动响度是 DSP 链内的增益（±12 dB）。
-- 两者同时开会叠加，所以代码里"驱动开启时 ReplayGain 直接返回 1"。
+- ReplayGain 是 `player.volume` 乘数，只衰减不放大（0.1–1.0），用于对齐不同专辑/曲目的基准响度。
+- 驾驶模式是 DSP 链内的慢速弱音上拉器（`0 .. +maxBoost dB`，1 s 滑窗 + 滞回死区 + 100 ms 微前瞻 + 本地曲目后台 1 s 响度地图 2–3 s 前瞻预退），只抬极弱段落，不压低强音，因此与 ReplayGain 及手动压缩器完全独立、可正交叠加。
 
 ## 5. 系数计算
 

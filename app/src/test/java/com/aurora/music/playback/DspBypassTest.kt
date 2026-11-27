@@ -16,14 +16,14 @@ class DspBypassTest {
 
     @Test
     fun allOff_isNeutral() {
-        val p = buildDspParams(AudioPrefs(), 0f, 0f, 0f)
+        val p = buildDspParams(AudioPrefs(), 0f, 0f)
         assertTrue(p.isNeutral())
     }
 
     @Test
     fun graphicOff_ignoresBands() {
         val ap = AudioPrefs(dspGraphicBands = List(16) { 3f }, dspGraphicEnabled = false)
-        val p = buildDspParams(ap, 0f, 0f, 0f)
+        val p = buildDspParams(ap, 0f, 0f)
         assertTrue(p.graphic.all { it == 0f })
         assertTrue(p.isNeutral())
     }
@@ -36,7 +36,7 @@ class DspBypassTest {
             dspGainEnabled = true,
             dspAutoHeadroom = false,
         )
-        val p = buildDspParams(ap, 0f, 0f, 0f)
+        val p = buildDspParams(ap, 0f, 0f)
         assertTrue(p.graphic.any { it != 0f })
         assertFalse(p.isNeutral())
     }
@@ -47,7 +47,7 @@ class DspBypassTest {
             dspParametric = listOf(ParamBand(1000f, 3f, 1f)),
             dspParametricEnabled = false,
         )
-        val p = buildDspParams(ap, 0f, 0f, 0f)
+        val p = buildDspParams(ap, 0f, 0f)
         assertTrue(p.parametric.isEmpty())
         assertTrue(p.isNeutral())
     }
@@ -55,7 +55,7 @@ class DspBypassTest {
     @Test
     fun gainOff_forcesNeutralPreampAndBalance() {
         val ap = AudioPrefs(dspPreampDb = 6f, dspBalance = 0.5f, dspGainEnabled = false)
-        val p = buildDspParams(ap, 0f, 0f, 0f)
+        val p = buildDspParams(ap, 0f, 0f)
         assertEquals(0f, p.preampDb)
         assertEquals(0f, p.balance)
         assertTrue(p.isNeutral())
@@ -64,7 +64,7 @@ class DspBypassTest {
     @Test
     fun spatialOff_forcesNeutralWidthAndCrossfeed() {
         val ap = AudioPrefs(dspWidth = 1.5f, dspCrossfeed = 0.5f, dspSpatialEnabled = false)
-        val p = buildDspParams(ap, 0f, 0f, 0f)
+        val p = buildDspParams(ap, 0f, 0f)
         assertEquals(1f, p.width)
         assertEquals(0f, p.crossfeed, 0f)
         assertTrue(p.isNeutral())
@@ -73,23 +73,51 @@ class DspBypassTest {
     @Test
     fun limiterOn_breaksNeutral() {
         val ap = AudioPrefs(dspLimiterEnabled = true)
-        assertFalse(buildDspParams(ap, 0f, 0f, 0f).isNeutral())
+        assertFalse(buildDspParams(ap, 0f, 0f).isNeutral())
     }
 
     @Test
     fun compOff_forcesNeutralMakeup() {
         val ap = AudioPrefs(dspCompEnabled = false, dspCompMakeupDb = 6f, dspMakeupAuto = true)
-        val p = buildDspParams(ap, 0f, 0f, 0f)
+        val p = buildDspParams(ap, 0f, 0f)
         assertEquals(0f, p.compMakeupDb)
         assertFalse(p.makeupAuto)
         assertTrue(p.isNeutral())
     }
 
     @Test
-    fun driveOn_enablesComp() {
-        val ap = AudioPrefs(dspDriveMode = DrivingMode.BALANCED)
-        val p = buildDspParams(ap, 0f, 0f, 0f)
-        assertTrue(p.compEnabled)
+    fun driveOn_doesNotEnableComp_andBreaksNeutral() {
+        val ap = AudioPrefs(dspDriveMode = DrivingMode.BALANCED, dspCompEnabled = false)
+        val p = buildDspParams(ap, 0f, 0f)
+        assertFalse(p.compEnabled)
+        assertTrue(p.driving.enabled)
         assertFalse(p.isNeutral())
+    }
+
+    @Test
+    fun driveAndComp_coexistIndependently() {
+        val ap = AudioPrefs(
+            dspDriveMode = DrivingMode.STRONG,
+            dspCompEnabled = true,
+            dspCompThreshDb = -22f,
+            dspCompRatio = 4.5f,
+            dspCompAttackMs = 15f,
+            dspCompReleaseMs = 250f,
+            dspCompKneeDb = 3f,
+            dspCompMakeupDb = 2f,
+            dspMakeupAuto = false,
+        )
+        val p = buildDspParams(ap, 0f, 0f)
+        assertTrue(p.driving.enabled)
+        assertEquals(-14f, p.driving.targetLoudnessDb)
+        assertEquals(-10f, p.driving.floorOffsetDb)
+        assertTrue(p.compEnabled)
+        assertEquals(-22f, p.compThreshDb)
+        assertEquals(4.5f, p.compRatio)
+        assertEquals(15f, p.compAttackMs)
+        assertEquals(250f, p.compReleaseMs)
+        assertEquals(3f, p.compKneeDb)
+        assertEquals(2f, p.compMakeupDb)
+        assertFalse(p.makeupAuto)
     }
 }

@@ -181,9 +181,19 @@ data class AudioPrefs(
     val dspCompEnabled: Boolean = false,
     val dspCompThreshDb: Float = -18f,
     val dspCompRatio: Float = 2f,
-    // v0.6 driving loudness (plan §35-38)
+    // Driving mode upward leveler (v0.8, decoupled from compressor)
     val dspDriveMode: Int = DrivingMode.OFF,   // 0 off 1 natural 2 balanced 3 strong 4 custom
-    val dspDriveTargetDb: Float = -16f,        // target integrated LUFS
+    val dspDriveTargetDb: Float = -16f,        // target loudness / pull-back ceiling (LUFS)
+    val dspDriveFloorOffsetDb: Float = -12f,   // floor = target + offset (LUFS)
+    val dspDriveHoldSec: Float = 5f,           // continuous seconds below floor before boost
+    val dspDriveBoostRateDb: Float = 2f,       // upward ramp rate (dB/s)
+    val dspDriveMaxBoostDb: Float = 20f,       // maximum upward boost (dB)
+    val dspDriveDownRateDb: Float = 6f,        // real-time pull-back rate (dB/s)
+    val dspDriveLookaheadSec: Float = 3f,      // track loudness map lookahead window (s)
+    val dspDriveLookaheadDownRateDb: Float = 4f, // pre-emptive lookahead ramp-down rate (dB/s)
+    val dspDriveMicroLookaheadMs: Float = 100f,  // real-time transient delay lookahead (ms)
+    val dspDrivePeakCeilingDb: Float = -1f,    // peak safety ceiling (dBFS)
+    val dspDriveSilenceGateDb: Float = -55f,   // silence gate (LUFS)
     val dspCompAttackMs: Float = 80f,
     val dspCompReleaseMs: Float = 400f,
     val dspCompKneeDb: Float = 6f,
@@ -401,6 +411,16 @@ class SettingsStore(private val context: Context) {
         val DSP_COMP_RATIO = floatPreferencesKey("dsp_comp_ratio")
         val DSP_DRIVE_MODE = intPreferencesKey("dsp_drive_mode")
         val DSP_DRIVE_TARGET = floatPreferencesKey("dsp_drive_target")
+        val DSP_DRIVE_FLOOR_OFFSET = floatPreferencesKey("dsp_drive_floor_offset")
+        val DSP_DRIVE_HOLD_SEC = floatPreferencesKey("dsp_drive_hold_sec")
+        val DSP_DRIVE_BOOST_RATE = floatPreferencesKey("dsp_drive_boost_rate")
+        val DSP_DRIVE_MAX_BOOST = floatPreferencesKey("dsp_drive_max_boost")
+        val DSP_DRIVE_DOWN_RATE = floatPreferencesKey("dsp_drive_down_rate")
+        val DSP_DRIVE_LOOKAHEAD_SEC = floatPreferencesKey("dsp_drive_lookahead_sec")
+        val DSP_DRIVE_LOOKAHEAD_RATE = floatPreferencesKey("dsp_drive_lookahead_rate")
+        val DSP_DRIVE_MICRO_LOOKAHEAD = floatPreferencesKey("dsp_drive_micro_lookahead")
+        val DSP_DRIVE_PEAK_CEILING = floatPreferencesKey("dsp_drive_peak_ceiling")
+        val DSP_DRIVE_SILENCE_GATE = floatPreferencesKey("dsp_drive_silence_gate")
         val DSP_COMP_ATTACK = floatPreferencesKey("dsp_comp_attack")
         val DSP_COMP_RELEASE = floatPreferencesKey("dsp_comp_release")
         val DSP_COMP_KNEE = floatPreferencesKey("dsp_comp_knee")
@@ -541,6 +561,16 @@ class SettingsStore(private val context: Context) {
             dspCompRatio = p[Keys.DSP_COMP_RATIO] ?: 2f,
             dspDriveMode = p[Keys.DSP_DRIVE_MODE] ?: DrivingMode.OFF,
             dspDriveTargetDb = p[Keys.DSP_DRIVE_TARGET] ?: -16f,
+            dspDriveFloorOffsetDb = p[Keys.DSP_DRIVE_FLOOR_OFFSET] ?: -12f,
+            dspDriveHoldSec = p[Keys.DSP_DRIVE_HOLD_SEC] ?: 5f,
+            dspDriveBoostRateDb = p[Keys.DSP_DRIVE_BOOST_RATE] ?: 2f,
+            dspDriveMaxBoostDb = p[Keys.DSP_DRIVE_MAX_BOOST] ?: 20f,
+            dspDriveDownRateDb = p[Keys.DSP_DRIVE_DOWN_RATE] ?: 6f,
+            dspDriveLookaheadSec = p[Keys.DSP_DRIVE_LOOKAHEAD_SEC] ?: 3f,
+            dspDriveLookaheadDownRateDb = p[Keys.DSP_DRIVE_LOOKAHEAD_RATE] ?: 4f,
+            dspDriveMicroLookaheadMs = p[Keys.DSP_DRIVE_MICRO_LOOKAHEAD] ?: 100f,
+            dspDrivePeakCeilingDb = p[Keys.DSP_DRIVE_PEAK_CEILING] ?: -1f,
+            dspDriveSilenceGateDb = p[Keys.DSP_DRIVE_SILENCE_GATE] ?: -55f,
             dspCompAttackMs = p[Keys.DSP_COMP_ATTACK] ?: 80f,
             dspCompReleaseMs = p[Keys.DSP_COMP_RELEASE] ?: 400f,
             dspCompKneeDb = p[Keys.DSP_COMP_KNEE] ?: 6f,
@@ -944,6 +974,16 @@ class SettingsStore(private val context: Context) {
     suspend fun setDspCompRatio(v: Float) = context.dataStore.edit { it[Keys.DSP_COMP_RATIO] = v }
     suspend fun setDspDriveMode(v: Int) = context.dataStore.edit { it[Keys.DSP_DRIVE_MODE] = v }
     suspend fun setDspDriveTarget(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_TARGET] = v }
+    suspend fun setDspDriveFloorOffset(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_FLOOR_OFFSET] = v }
+    suspend fun setDspDriveHoldSec(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_HOLD_SEC] = v }
+    suspend fun setDspDriveBoostRate(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_BOOST_RATE] = v }
+    suspend fun setDspDriveMaxBoost(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_MAX_BOOST] = v }
+    suspend fun setDspDriveDownRate(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_DOWN_RATE] = v }
+    suspend fun setDspDriveLookaheadSec(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_LOOKAHEAD_SEC] = v }
+    suspend fun setDspDriveLookaheadDownRate(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_LOOKAHEAD_RATE] = v }
+    suspend fun setDspDriveMicroLookaheadMs(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_MICRO_LOOKAHEAD] = v }
+    suspend fun setDspDrivePeakCeiling(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_PEAK_CEILING] = v }
+    suspend fun setDspDriveSilenceGate(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_SILENCE_GATE] = v }
     suspend fun setDspCompAttack(v: Float) = context.dataStore.edit { it[Keys.DSP_COMP_ATTACK] = v }
     suspend fun setDspCompRelease(v: Float) = context.dataStore.edit { it[Keys.DSP_COMP_RELEASE] = v }
     suspend fun setDspCompKnee(v: Float) = context.dataStore.edit { it[Keys.DSP_COMP_KNEE] = v }

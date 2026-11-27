@@ -6,18 +6,17 @@ import com.aurora.music.data.DrivingMode
 
 /**
  * 音乐链与听书链共用的 DSP 参数装配：同一份 AudioPrefs 进来，
- * 两条链算出完全一致的 DspParams（auto headroom / driving 预设覆盖逻辑单点维护）。
- * TTS 没有单曲响度数据，driveGainDb 传 0（压缩/限幅等效果本身照常生效）。
+ * 两条链算出完全一致的 DspParams（auto headroom / 驾驶模式逻辑单点维护）。
  *
  * v0.7 模块开关：开关关掉的模块强制中性值参与混音（prefs 里的用户值原样保留，
  * 打开即恢复），不做多余动作。
+ * v0.8 驾驶模式与压缩器完全解耦：驾驶模式只做弱音上拉（0..+maxBoost），不再覆盖压缩器。
  */
 @UnstableApi
 fun buildDspParams(
     ap: AudioPrefs,
     correctionMaxGainDb: Float,
     correctionTrimDb: Float,
-    driveGainDb: Float,
 ): DspParams {
     val layout = DspCoeffBuilder.GRAPHIC_LAYOUTS.getOrElse(ap.dspGraphicLayout) { DspCoeffBuilder.GRAPHIC_LAYOUTS[0] }
     val graphic = FloatArray(layout.freqs.size) { i ->
@@ -36,14 +35,7 @@ fun buildDspParams(
     )
     val combinedPeak = maxOf(userPeak, correctionMaxGainDb)
     val autoPre = if (ap.dspGainEnabled && ap.dspAutoHeadroom) -combinedPeak.coerceAtLeast(0f) else 0f
-    // v0.6 driving presets override the static compressor (plan §35)
-    val compEff = when (ap.dspDriveMode) {
-        DrivingMode.NATURAL -> floatArrayOf(-20f, 1.5f, 80f, 400f, 6f)
-        DrivingMode.BALANCED -> floatArrayOf(-24f, 2f, 60f, 400f, 6f)
-        DrivingMode.STRONG -> floatArrayOf(-28f, 3.5f, 40f, 300f, 3f)
-        else -> null
-    }
-    val compOn = compEff != null || ap.dspCompEnabled
+    val compOn = ap.dspCompEnabled
     val gainOn = ap.dspGainEnabled
     val spatialOn = ap.dspSpatialEnabled
     val harmOn = ap.dspHarmEnabled
@@ -65,15 +57,46 @@ fun buildDspParams(
         limiterEnabled = ap.dspLimiterEnabled,
         limiterCeilingDb = ap.dspLimiterCeilingDb,
         compEnabled = compOn,
-        compThreshDb = compEff?.get(0) ?: ap.dspCompThreshDb,
-        compRatio = compEff?.get(1) ?: ap.dspCompRatio,
-        compAttackMs = compEff?.get(2) ?: ap.dspCompAttackMs,
-        compReleaseMs = compEff?.get(3) ?: ap.dspCompReleaseMs,
-        compKneeDb = compEff?.get(4) ?: ap.dspCompKneeDb,
+        compThreshDb = ap.dspCompThreshDb,
+        compRatio = ap.dspCompRatio,
+        compAttackMs = ap.dspCompAttackMs,
+        compReleaseMs = ap.dspCompReleaseMs,
+        compKneeDb = ap.dspCompKneeDb,
         // 压缩没开时 makeup 强制中性，避免自动补偿的残余增益污染直通
         compMakeupDb = if (compOn) ap.dspCompMakeupDb else 0f,
         makeupAuto = compOn && ap.dspMakeupAuto,
-        driveGainDb = driveGainDb,
+        driving = buildDrivingParams(ap),
+    )
+}
+
+fun buildDrivingParams(ap: AudioPrefs): DrivingParams {
+    val mode = ap.dspDriveMode
+    if (mode == DrivingMode.OFF) return DrivingParams(enabled = false)
+    val (targetDb, floorOffsetDb, holdSec, boostRate, maxBoost) = when (mode) {
+        DrivingMode.NATURAL -> floatArrayOf(-16f, -14f, 6f, 1.5f, 12f)
+        DrivingMode.BALANCED -> floatArrayOf(-16f, -12f, 5f, 2f, 20f)
+        DrivingMode.STRONG -> floatArrayOf(-14f, -10f, 3f, 3f, 24f)
+        else -> floatArrayOf(
+            ap.dspDriveTargetDb,
+            ap.dspDriveFloorOffsetDb,
+            ap.dspDriveHoldSec,
+            ap.dspDriveBoostRateDb,
+            ap.dspDriveMaxBoostDb,
+        )
+    }
+    return DrivingParams(
+        enabled = true,
+        targetLoudnessDb = targetDb,
+        floorOffsetDb = floorOffsetDb,
+        holdSeconds = holdSec,
+        boostRateDbPerSec = boostRate,
+        maxBoostDb = maxBoost,
+        downRateDbPerSec = ap.dspDriveDownRateDb,
+        lookaheadSec = ap.dspDriveLookaheadSec,
+        lookaheadDownRateDbPerSec = ap.dspDriveLookaheadDownRateDb,
+        microLookaheadMs = ap.dspDriveMicroLookaheadMs,
+        peakCeilingDb = ap.dspDrivePeakCeilingDb,
+        silenceGateDb = ap.dspDriveSilenceGateDb,
     )
 }
 
@@ -99,4 +122,4 @@ fun DspParams.isNeutral(): Boolean =
         !compEnabled &&
         compMakeupDb == 0f &&
         !makeupAuto &&
-        driveGainDb == 0f
+        !driving.enabled

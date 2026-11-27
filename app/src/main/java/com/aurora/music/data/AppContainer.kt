@@ -22,8 +22,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
 
-// v0.6 gain-reduction meters (plan §36), polled from the DSP each tick
-data class DspMeters(val compGrDb: Float = 0f, val limGrDb: Float = 0f)
+// v0.6 gain-reduction meters (plan §36) + v0.8 driving boost meter, polled from the DSP each tick
+data class DspMeters(
+    val compGrDb: Float = 0f,
+    val limGrDb: Float = 0f,
+    val driveBoostDb: Float = 0f,
+    val driveLookaheadActive: Boolean = false,
+)
 
 /**
  * 站内音乐 player 的真实播放状态（PlaybackService 推送）。

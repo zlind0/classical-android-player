@@ -67,6 +67,7 @@ import com.aurora.music.data.SettingsStore
 import com.aurora.music.playback.DspBand
 import com.aurora.music.playback.DspCoeffBuilder
 import com.aurora.music.playback.DspParams
+import com.aurora.music.playback.buildDrivingParams
 import com.aurora.music.ui.ios5.Ios5ActionRow
 import com.aurora.music.ui.ios5.Ios5CellDivider
 import com.aurora.music.ui.ios5.Ios5CheckRow
@@ -118,7 +119,7 @@ fun EqualizerScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
         when (tab) {
             0 -> correctionTab(ctx, prefs, activeCorrection, corrections, activeCorrectionId, store, scope, container, expanded)
             1 -> userEqTab(ctx, prefs, activeCorrection, store, scope, container, activeCorrectionId)
-            else -> dynamicsTab(ctx, prefs, store, scope, container)
+            else -> dynamicsTab(ctx, prefs, store, scope, container, expanded)
         }
 
         item { Ios5SectionTitle(stringResource(R.string.playback_section_output)) }
@@ -624,12 +625,18 @@ private fun LazyListScope.dynamicsTab(
     store: SettingsStore,
     scope: CoroutineScope,
     container: AppContainer,
+    expanded: SnapshotStateMap<String, Boolean>,
 ) {
-    // v0.6 driving loudness (plan §35, §38)
+    // v0.8 upward driving leveler (completely decoupled from compressor)
     val driveOn = prefs.dspDriveMode != DrivingMode.OFF
-    switchable("c_drive", ctx.getString(R.string.eq_driving),
-        if (!driveOn) ctx.getString(R.string.eq_mode_off) else DrivingMode.label(prefs.dspDriveMode) + ctx.getString(R.string.eq_drive_target_fmt, prefs.dspDriveTargetDb),
-        driveOn, { v ->
+    val dp = buildDrivingParams(prefs)
+    switchable(
+        "c_drive",
+        ctx.getString(R.string.eq_driving),
+        if (!driveOn) ctx.getString(R.string.eq_mode_off)
+        else ctx.getString(R.string.eq_drive_summary_fmt, DrivingMode.label(prefs.dspDriveMode), dp.targetLoudnessDb, dp.floorDb),
+        driveOn,
+        { v ->
             scope.launch {
                 if (v) {
                     store.setDspDriveMode(prefs.dspDriveLastMode.takeIf { it != DrivingMode.OFF } ?: DrivingMode.NATURAL)
@@ -638,7 +645,8 @@ private fun LazyListScope.dynamicsTab(
                     store.setDspDriveMode(DrivingMode.OFF)
                 }
             }
-        }) {
+        },
+    ) {
         val modes = listOf(DrivingMode.OFF, DrivingMode.NATURAL, DrivingMode.BALANCED, DrivingMode.STRONG, DrivingMode.CUSTOM)
         Ios5SegmentRow("Mode", modes.map { DrivingMode.label(it) }, modes.indexOf(prefs.dspDriveMode).coerceAtLeast(0)) { i ->
             scope.launch {
@@ -658,43 +666,71 @@ private fun LazyListScope.dynamicsTab(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
         )
         if (prefs.dspDriveMode == DrivingMode.CUSTOM) {
+            Ios5CellDivider()
             FloatSliderRow(stringResource(R.string.eq_target_loudness), prefs.dspDriveTargetDb, -24f..-8f, valueText = "%.0f LUFS".format(prefs.dspDriveTargetDb)) { v -> scope.launch { store.setDspDriveTarget(v) } }
+            Ios5CellDivider()
+            FloatSliderRow(stringResource(R.string.eq_drive_floor_offset), prefs.dspDriveFloorOffsetDb, -24f..-4f, valueText = "%+.0f dB".format(prefs.dspDriveFloorOffsetDb)) { v -> scope.launch { store.setDspDriveFloorOffset(v) } }
+            Text(
+                stringResource(R.string.eq_drive_floor_computed_fmt, prefs.dspDriveTargetDb + prefs.dspDriveFloorOffsetDb),
+                color = Ios5Colors.TextSecondary, fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+            Ios5CellDivider()
+            FloatSliderRow(stringResource(R.string.eq_drive_hold_sec), prefs.dspDriveHoldSec, 1f..15f, valueText = "%.0f s".format(prefs.dspDriveHoldSec)) { v -> scope.launch { store.setDspDriveHoldSec(v) } }
+            Ios5CellDivider()
+            FloatSliderRow(stringResource(R.string.eq_drive_boost_rate), prefs.dspDriveBoostRateDb, 0.5f..6f, valueText = "%.1f dB/s".format(prefs.dspDriveBoostRateDb)) { v -> scope.launch { store.setDspDriveBoostRate(v) } }
+            Ios5CellDivider()
+            FloatSliderRow(stringResource(R.string.eq_drive_max_boost), prefs.dspDriveMaxBoostDb, 3f..24f, valueText = "+%.0f dB".format(prefs.dspDriveMaxBoostDb)) { v -> scope.launch { store.setDspDriveMaxBoost(v) } }
+        }
+        if (driveOn) {
+            Ios5CellDivider()
+            DriveBoostMeter(container, dp.maxBoostDb)
+            Ios5CellDivider()
+            val advOpen = expanded["drive_adv"] ?: false
+            Row(
+                Modifier.fillMaxWidth().clickable { expanded["drive_adv"] = !advOpen }.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(stringResource(R.string.eq_drive_advanced), color = Ios5Colors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(if (advOpen) "▾" else "▸", color = Ios5Colors.IosBlue, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
+            AnimatedVisibility(visible = advOpen) {
+                Column(Modifier.fillMaxWidth()) {
+                    Ios5CellDivider()
+                    FloatSliderRow(stringResource(R.string.eq_drive_down_rate), prefs.dspDriveDownRateDb, 1f..20f, valueText = "%.1f dB/s".format(prefs.dspDriveDownRateDb)) { v -> scope.launch { store.setDspDriveDownRate(v) } }
+                    Ios5CellDivider()
+                    FloatSliderRow(stringResource(R.string.eq_drive_lookahead_sec), prefs.dspDriveLookaheadSec, 0f..6f, valueText = "%.1f s".format(prefs.dspDriveLookaheadSec)) { v -> scope.launch { store.setDspDriveLookaheadSec(v) } }
+                    Ios5CellDivider()
+                    FloatSliderRow(stringResource(R.string.eq_drive_lookahead_rate), prefs.dspDriveLookaheadDownRateDb, 1f..15f, valueText = "%.1f dB/s".format(prefs.dspDriveLookaheadDownRateDb)) { v -> scope.launch { store.setDspDriveLookaheadDownRate(v) } }
+                    Ios5CellDivider()
+                    FloatSliderRow(stringResource(R.string.eq_drive_micro_lookahead), prefs.dspDriveMicroLookaheadMs, 0f..200f, valueText = "%.0f ms".format(prefs.dspDriveMicroLookaheadMs)) { v -> scope.launch { store.setDspDriveMicroLookaheadMs(v) } }
+                    Ios5CellDivider()
+                    FloatSliderRow(stringResource(R.string.eq_drive_peak_ceiling), prefs.dspDrivePeakCeilingDb, -6f..0f, valueText = "%.1f dBFS".format(prefs.dspDrivePeakCeilingDb)) { v -> scope.launch { store.setDspDrivePeakCeiling(v) } }
+                    Ios5CellDivider()
+                    FloatSliderRow(stringResource(R.string.eq_drive_silence_gate), prefs.dspDriveSilenceGateDb, -70f..-35f, valueText = "%.0f LUFS".format(prefs.dspDriveSilenceGateDb)) { v -> scope.launch { store.setDspDriveSilenceGate(v) } }
+                }
+            }
         }
     }
 
-    val dyn = buildList {
-        if (prefs.dspDriveMode != DrivingMode.OFF) add(DrivingMode.label(prefs.dspDriveMode))
-        if (prefs.dspLimiterEnabled) add(ctx.getString(R.string.eq_lim))
-        if (prefs.dspCompEnabled && prefs.dspDriveMode == DrivingMode.OFF) add(ctx.getString(R.string.eq_compressor))
-    }.joinToString(" · ").ifBlank { ctx.getString(R.string.eq_mode_off) }
-    val driving = prefs.dspDriveMode != DrivingMode.OFF
-    switchable("c_dyn", ctx.getString(R.string.eq_compressor),
-        if (!prefs.dspCompEnabled && !driving) ctx.getString(R.string.eq_mode_off) else dyn,
-        prefs.dspCompEnabled, { v -> scope.launch { store.setDspCompEnabled(v) } },
-        switchEnabled = !driving) {
-        if (driving) {
-            Text(stringResource(R.string.eq_driven_note),
-                color = Ios5Colors.TextSecondary, fontSize = 13.sp,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
-        }
-        val showParams = prefs.dspCompEnabled && prefs.dspDriveMode == DrivingMode.OFF || prefs.dspDriveMode == DrivingMode.CUSTOM
-        if (showParams) {
+    val compSummary = if (prefs.dspCompEnabled) "%.0f dB · %.1f:1".format(prefs.dspCompThreshDb, prefs.dspCompRatio)
+        else ctx.getString(R.string.eq_mode_off)
+    switchable("c_dyn", ctx.getString(R.string.eq_compressor), compSummary,
+        prefs.dspCompEnabled, { v -> scope.launch { store.setDspCompEnabled(v) } }) {
+        FloatSliderRow(stringResource(R.string.eq_threshold), prefs.dspCompThreshDb, -40f..0f, valueText = "%.0f dB".format(prefs.dspCompThreshDb)) { v -> scope.launch { store.setDspCompThresh(v) } }
+        Ios5CellDivider()
+        FloatSliderRow(stringResource(R.string.eq_ratio), prefs.dspCompRatio, 1f..10f, valueText = "%.1f:1".format(prefs.dspCompRatio)) { v -> scope.launch { store.setDspCompRatio(v) } }
+        Ios5CellDivider()
+        FloatSliderRow(stringResource(R.string.eq_attack), prefs.dspCompAttackMs, 1f..200f, valueText = "%.0f ms".format(prefs.dspCompAttackMs)) { v -> scope.launch { store.setDspCompAttack(v) } }
+        Ios5CellDivider()
+        FloatSliderRow(stringResource(R.string.eq_release), prefs.dspCompReleaseMs, 50f..1000f, valueText = "%.0f ms".format(prefs.dspCompReleaseMs)) { v -> scope.launch { store.setDspCompRelease(v) } }
+        Ios5CellDivider()
+        FloatSliderRow(stringResource(R.string.eq_knee), prefs.dspCompKneeDb, 0f..12f, valueText = "%.0f dB".format(prefs.dspCompKneeDb)) { v -> scope.launch { store.setDspCompKnee(v) } }
+        Ios5CellDivider()
+        Ios5SwitchRow(stringResource(R.string.eq_makeup_auto), stringResource(R.string.eq_makeup_auto_sub), prefs.dspMakeupAuto) { v -> scope.launch { store.setDspMakeupAuto(v) } }
+        if (!prefs.dspMakeupAuto) {
             Ios5CellDivider()
-            FloatSliderRow(stringResource(R.string.eq_threshold), prefs.dspCompThreshDb, -40f..0f, valueText = "%.0f dB".format(prefs.dspCompThreshDb)) { v -> scope.launch { store.setDspCompThresh(v) } }
-            Ios5CellDivider()
-            FloatSliderRow(stringResource(R.string.eq_ratio), prefs.dspCompRatio, 1f..10f, valueText = "%.1f:1".format(prefs.dspCompRatio)) { v -> scope.launch { store.setDspCompRatio(v) } }
-            Ios5CellDivider()
-            FloatSliderRow(stringResource(R.string.eq_attack), prefs.dspCompAttackMs, 1f..200f, valueText = "%.0f ms".format(prefs.dspCompAttackMs)) { v -> scope.launch { store.setDspCompAttack(v) } }
-            Ios5CellDivider()
-            FloatSliderRow(stringResource(R.string.eq_release), prefs.dspCompReleaseMs, 50f..1000f, valueText = "%.0f ms".format(prefs.dspCompReleaseMs)) { v -> scope.launch { store.setDspCompRelease(v) } }
-            Ios5CellDivider()
-            FloatSliderRow(stringResource(R.string.eq_knee), prefs.dspCompKneeDb, 0f..12f, valueText = "%.0f dB".format(prefs.dspCompKneeDb)) { v -> scope.launch { store.setDspCompKnee(v) } }
-            Ios5CellDivider()
-            Ios5SwitchRow(stringResource(R.string.eq_makeup_auto), stringResource(R.string.eq_makeup_auto_sub), prefs.dspMakeupAuto) { v -> scope.launch { store.setDspMakeupAuto(v) } }
-            if (!prefs.dspMakeupAuto) {
-                Ios5CellDivider()
-                DbSliderRow(stringResource(R.string.eq_makeup), prefs.dspCompMakeupDb, -6f..12f) { v -> scope.launch { store.setDspCompMakeup(v) } }
-            }
+            DbSliderRow(stringResource(R.string.eq_makeup), prefs.dspCompMakeupDb, -6f..12f) { v -> scope.launch { store.setDspCompMakeup(v) } }
         }
         GainReductionMeter(container)
     }
@@ -710,6 +746,37 @@ private fun LazyListScope.dynamicsTab(
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
         }
         GainReductionMeter(container)
+    }
+}
+
+@Composable
+private fun DriveBoostMeter(container: AppContainer, maxBoostDb: Float) {
+    val meters by container.dspMeters.collectAsStateWithLifecycle(initialValue = com.aurora.music.data.DspMeters())
+    val boost = meters.driveBoostDb.coerceAtLeast(0f)
+    val frac = (boost / maxBoostDb.coerceAtLeast(1f)).coerceIn(0f, 1f)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.width(110.dp)) {
+                Text(stringResource(R.string.eq_drive_boost_meter), color = Ios5Colors.TextSecondary, fontSize = 12.sp)
+                if (meters.driveLookaheadActive) {
+                    Text(stringResource(R.string.eq_drive_lookahead_badge), color = Ios5Colors.IosBlue, fontSize = 10.sp)
+                }
+            }
+            Box(
+                Modifier.weight(1f).height(10.dp).clip(RoundedCornerShape(50))
+                    .background(Color(0xFFD6DAE0)),
+            ) {
+                Box(
+                    Modifier.fillMaxWidth(frac).height(10.dp).clip(RoundedCornerShape(50))
+                        .background(if (boost > 0.2f) Ios5Colors.IosBlue else Color(0xFF9AA0AB).copy(alpha = 0.4f)),
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (boost < 0.05f) "+0.0" else "+%.1f".format(boost),
+                color = Ios5Colors.TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(44.dp),
+            )
+        }
     }
 }
 

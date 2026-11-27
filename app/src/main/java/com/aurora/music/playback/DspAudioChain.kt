@@ -107,7 +107,7 @@ class DspAudioChain(
 
     private fun applyEngine() {
         val ap = lastAudioPrefs ?: return
-        val params = buildDspParams(ap, correctionMaxGainDb, correctionTrimDb, 0f)
+        val params = buildDspParams(ap, correctionMaxGainDb, correctionTrimDb)
         auroraDsp.update(params)
         auroraDsp.enabled = !params.isNeutral()
         correctionConv.enabled = correctionActive

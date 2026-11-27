@@ -155,10 +155,11 @@ class PlaybackService : MediaLibraryService() {
     @Volatile private var correctionActive: Boolean = false
     @Volatile private var lastCorrectionId: String = "flat"
 
-    // v0.6 driving loudness state (plan §34): per-track make-up toward target LUFS
+    // v0.8 driving leveler lookahead state: background 1s loudness map for local tracks
     @Volatile private var driveOn: Boolean = false
-    @Volatile private var driveTargetDb: Float = -16f
-    @Volatile private var driveGainDb: Float = 0f
+    @Volatile private var currentClipStartMs: Long = 0L
+    private var driveMapJob: kotlinx.coroutines.Job? = null
+    private var driveMapMediaId: String? = null
     // v0.7: whole-chain bypass flag for the signal-path readout (see applyAudioEngine)
     @Volatile private var dspBypassed: Boolean = true
 
@@ -317,7 +318,7 @@ class PlaybackService : MediaLibraryService() {
                 if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION) ||
                     events.contains(Player.EVENT_TIMELINE_CHANGED)
                 ) xfadeBpPending = false
-                if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) updateDriveGain()
+                if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) syncDrivingLoudnessMap(force = true)
                 if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION) ||
                     events.contains(Player.EVENT_MEDIA_METADATA_CHANGED) ||
                     events.contains(Player.EVENT_IS_PLAYING_CHANGED) ||
@@ -513,8 +514,7 @@ class PlaybackService : MediaLibraryService() {
         // (bit-perfect USB keeps its own bypass chain).
         // 参数装配见 playback/DspChain（听书链共用同一份，保证两边效果一致）
         driveOn = isDrivingOn(ap)
-        driveTargetDb = ap.dspDriveTargetDb
-        val params = buildDspParams(ap, correctionMaxGainDb, correctionTrimDb, driveGainDb)
+        val params = buildDspParams(ap, correctionMaxGainDb, correctionTrimDb)
         auroraDsp.update(params)
         val dspNeutral = params.isNeutral()
         auroraDsp.enabled = !dspNeutral
@@ -536,7 +536,7 @@ class PlaybackService : MediaLibraryService() {
         // mono runs in the dedicated pre-processor now (no engine switch anymore)
         monoProcessor.enabled = monoAudioPref
         updateSignalPath()
-        updateDriveGain()
+        syncDrivingLoudnessMap()
     }
 
     private fun applyPreferredDevice(id: Int) {
@@ -690,8 +690,17 @@ class PlaybackService : MediaLibraryService() {
     private fun tickAudio() {
         // 站内音乐真实状态（音乐选项卡/气泡的序号、进度、播放暂停都用它；双播时会话 player 是书）
         publishMusicState()
-        // v0.6 GR meters for the Dynamics UI (cheap volatile reads)
-        container.dspMeters.value = com.aurora.music.data.DspMeters(auroraDsp.compGrDb, auroraDsp.limGrDb)
+        // v0.6 GR meters + v0.8 driving boost meter for the Dynamics UI (cheap volatile reads)
+        if (driveOn) {
+            val posMs = currentClipStartMs + player.currentPosition.coerceAtLeast(0L)
+            auroraDsp.setDrivingPositionSec(posMs / 1000f)
+        }
+        container.dspMeters.value = com.aurora.music.data.DspMeters(
+            auroraDsp.compGrDb,
+            auroraDsp.limGrDb,
+            auroraDsp.driveBoostDb,
+            auroraDsp.driveLookaheadActive,
+        )
         abookActive = player.currentMediaItem?.mediaId?.startsWith(
             com.aurora.music.data.audiobook.ABOOK_ID_PREFIX,
         ) == true
@@ -1036,8 +1045,9 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private fun replayGainMultiplier(): Float {
-        // v0.6: driving loudness owns gain in DSP (and may boost) — never stack volume RG on top
-        if (driveOn || replayGainMode == 0) return 1f
+        // v0.8: Driving Mode only applies non-negative upward boost to quiet passages,
+        // so ReplayGain and Driving Mode coexist orthogonally.
+        if (replayGainMode == 0) return 1f
         val extras = player.currentMediaItem?.mediaMetadata?.extras ?: return 1f
         val gainDb = if (replayGainMode == 2) extras.getFloat("rgAlbum", Float.NaN) else extras.getFloat("rgTrack", Float.NaN)
         if (gainDb.isNaN() || gainDb == 0f) return 1f
@@ -1045,16 +1055,41 @@ class PlaybackService : MediaLibraryService() {
         return Math.pow(10.0, gainDb / 20.0).toFloat().coerceIn(0.1f, 1f)
     }
 
-    // v0.6: per-track driving make-up = target LUFS − track LUFS (plan §34)
-    private fun updateDriveGain() {
+    // v0.8: background 1 s loudness map pre-scan for local tracks (2-3 s lookahead pull-back)
+    private fun syncDrivingLoudnessMap(force: Boolean = false) {
         if (!driveOn) {
-            if (driveGainDb != 0f) { driveGainDb = 0f; applyAudioEngine() }
+            driveMapJob?.cancel()
+            driveMapJob = null
+            driveMapMediaId = null
+            auroraDsp.setDrivingLoudnessMap(null)
             return
         }
-        val lufs = player.currentMediaItem?.mediaMetadata?.extras?.getFloat("lufs", Float.NaN)
-            ?.takeIf { !it.isNaN() && it < 0f && it > -70f }
-        val want = if (lufs == null) 0f else (driveTargetDb - lufs).coerceIn(-12f, 12f)
-        if (want != driveGainDb) { driveGainDb = want; applyAudioEngine() }
+        val item = player.currentMediaItem ?: return
+        val mediaId = item.mediaId
+        val extras = item.mediaMetadata.extras
+        currentClipStartMs = extras?.getLong("clipStartMs", 0L) ?: 0L
+        if (!force && mediaId == driveMapMediaId) return
+
+        driveMapJob?.cancel()
+        driveMapMediaId = mediaId
+        auroraDsp.setDrivingLoudnessMap(null)
+
+        val localPath = extras?.getString("localPath")?.takeIf { it.isNotBlank() }
+            ?: item.localConfiguration?.uri?.takeIf { it.scheme == "file" }?.path
+        if (localPath.isNullOrBlank() || !java.io.File(localPath).isFile) return
+
+        TrackLoudnessScanner.getCached(localPath)?.let { cached ->
+            auroraDsp.setDrivingLoudnessMap(cached)
+            return
+        }
+        driveMapJob = scope.launch(Dispatchers.Default) {
+            val map = TrackLoudnessScanner.scanOrGet(localPath) { !isActive }
+            withContext(Dispatchers.Main) {
+                if (driveOn && driveMapMediaId == mediaId && player.currentMediaItem?.mediaId == mediaId) {
+                    auroraDsp.setDrivingLoudnessMap(map)
+                }
+            }
+        }
     }
 
     private inner class MediaCallback : MediaLibrarySession.Callback {

@@ -46,12 +46,20 @@ class AuroraDspProcessor : BaseAudioProcessor() {
     private var limGain = 1f
     private var compGain = 1f
 
+    private val drivingLeveler = DrivingLeveler()
+
     // v0.6 gain-reduction meters (plan §36): worst-case dB over the last buffer,
     // polled by the UI. Negative = reduction, 0 = idle.
     @Volatile var compGrDb: Float = 0f
     @Volatile var limGrDb: Float = 0f
     // slow follower of comp GR for auto makeup
     private var compGrAvgDb = 0f
+
+    val driveBoostDb: Float get() = drivingLeveler.currentBoostDb
+    val driveLookaheadActive: Boolean get() = drivingLeveler.hasActiveMap
+
+    fun setDrivingLoudnessMap(map: TrackLoudnessMap?) = drivingLeveler.setLoudnessMap(map)
+    fun setDrivingPositionSec(posSec: Float) = drivingLeveler.setPositionSec(posSec)
 
     private var smoothCoef = 0f
     private var curPreamp = 1f
@@ -63,6 +71,7 @@ class AuroraDspProcessor : BaseAudioProcessor() {
     // coefficients rebuilt off the audio thread
     fun update(p: DspParams) {
         params = p
+        drivingLeveler.update(p.driving)
         if (configuredRate > 0) coeffs = DspCoeffBuilder.build(p, configuredRate)
     }
 
@@ -73,6 +82,7 @@ class AuroraDspProcessor : BaseAudioProcessor() {
         }
         configuredRate = inputAudioFormat.sampleRate
         smoothCoef = exp(-1.0 / (0.005 * configuredRate)).toFloat()
+        drivingLeveler.configure(configuredRate)
         coeffs = DspCoeffBuilder.build(params, configuredRate)
         zeroState()
         return inputAudioFormat
@@ -110,7 +120,7 @@ class AuroraDspProcessor : BaseAudioProcessor() {
         val kneeDb = c.compKneeDb; val kneeLinHalf = Math.pow(10.0, (kneeDb / 2.0 / 20.0)).toFloat()
         val kneeLinInv = if (kneeLinHalf > 1f) 1f / kneeLinHalf else 1f
         val makeupBase = c.compMakeupLin; val makeupAuto = c.makeupAuto
-        val driveLin = c.driveLin
+        val driveOn = drivingLeveler.isEnabled
         // auto makeup follows the slow GR average; computed once per buffer
         val mkAuto = if (makeupAuto) Math.pow(10.0, ((-compGrAvgDb * 0.5f).coerceIn(0f, 6f) / 20.0)).toFloat() else 1f
         val mkStatic = if (makeupAuto) mkAuto else makeupBase
@@ -136,9 +146,12 @@ class AuroraDspProcessor : BaseAudioProcessor() {
             l *= curPreamp * curBalL * trimL
             r *= curPreamp * curBalR * trimR
 
-            // v0.6 driving loudness make-up (post-EQ, pre-dynamics)
-            l *= driveLin
-            r *= driveLin
+            // v0.8 driving upward leveler (post-EQ, pre-dynamics)
+            if (driveOn) {
+                drivingLeveler.processSample(l, r)
+                l = drivingLeveler.outL
+                r = drivingLeveler.outR
+            }
 
             if (satDrive > 0f) {
                 val sl = tanh(satK * l) / satK
@@ -208,6 +221,7 @@ class AuroraDspProcessor : BaseAudioProcessor() {
         compGrDb = if (compOn) (20f * Math.log10(minCompGain.toDouble())).toFloat().coerceIn(-30f, 0f) else 0f
         limGrDb = if (limOn) (20f * Math.log10(minLimGain.toDouble())).toFloat().coerceIn(-30f, 0f) else 0f
         compGrAvgDb += (compGrDb - compGrAvgDb) * 0.05f
+        drivingLeveler.publishMeter()
         inputBuffer.position(inputBuffer.limit())
         output.flip()
     }
@@ -248,6 +262,11 @@ class AuroraDspProcessor : BaseAudioProcessor() {
         limGain = 1f; compGain = 1f
         compGrDb = 0f; limGrDb = 0f; compGrAvgDb = 0f
         smoothInit = false
+        drivingLeveler.reset()
+    }
+
+    override fun onFlush() {
+        zeroState()
     }
 
     override fun onReset() {

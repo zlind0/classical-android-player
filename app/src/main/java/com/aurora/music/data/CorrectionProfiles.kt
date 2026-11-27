@@ -119,6 +119,17 @@ data class AudioProfile(
     // v0.6 driving + compressor detail
     val driveMode: Int = DrivingMode.OFF,
     val driveTargetDb: Float = -16f,
+    // v0.8 upward driving leveler parameters (nullable for backward-compatible Gson deserialization)
+    val driveFloorOffsetDb: Float? = null,
+    val driveHoldSec: Float? = null,
+    val driveBoostRateDb: Float? = null,
+    val driveMaxBoostDb: Float? = null,
+    val driveDownRateDb: Float? = null,
+    val driveLookaheadSec: Float? = null,
+    val driveLookaheadDownRateDb: Float? = null,
+    val driveMicroLookaheadMs: Float? = null,
+    val drivePeakCeilingDb: Float? = null,
+    val driveSilenceGateDb: Float? = null,
     val compAttackMs: Float = 80f,
     val compReleaseMs: Float = 400f,
     val compKneeDb: Float = 6f,
@@ -134,8 +145,8 @@ fun AudioProfile.describe(): String = buildList {
     if (graphic.any { it != 0f }) add("16-band")
     if (parametric.isNotEmpty()) add("${parametric.size} param")
     if (convEnabled) add("IR")
-    if (driveMode != DrivingMode.OFF) add(DrivingMode.label(driveMode))
-    else if (compEnabled) add("comp")
+    if (driveMode != DrivingMode.OFF) add("drive:${DrivingMode.label(driveMode)}")
+    if (compEnabled) add("comp")
     if (limiterEnabled) add("limit")
     if (replayGain > 0) add(if (replayGain == 1) "RG track" else "RG album")
 }.ifEmpty { listOf("flat") }.joinToString(" · ")

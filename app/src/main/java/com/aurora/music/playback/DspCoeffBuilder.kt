@@ -98,7 +98,6 @@ object DspCoeffBuilder {
             compKneeDb = p.compKneeDb.coerceIn(0f, 12f),
             compMakeupLin = dbToLin(p.compMakeupDb),
             makeupAuto = p.makeupAuto,
-            driveLin = dbToLin(p.driveGainDb.coerceIn(-12f, 12f)),
         )
     }
 
@@ -248,8 +247,8 @@ data class DspParams(
     val compKneeDb: Float = 6f,
     val compMakeupDb: Float = 0f,
     val makeupAuto: Boolean = true,
-    // v0.6 driving loudness make-up toward the target LUFS, post-EQ (plan §34)
-    val driveGainDb: Float = 0f,
+    // v0.8 upward driving leveler (decoupled from compressor)
+    val driving: DrivingParams = DrivingParams(),
 ) {
     // identity equality nothing relies on DspParams equality each prefs emission rebuilds
     override fun equals(other: Any?): Boolean = this === other
@@ -276,7 +275,6 @@ class Coeffs(
     val compKneeDb: Float,
     val compMakeupLin: Float,
     val makeupAuto: Boolean,
-    val driveLin: Float,
 ) {
     val nBiquads: Int get() = b0.size
 }

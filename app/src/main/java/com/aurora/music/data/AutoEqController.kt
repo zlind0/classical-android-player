@@ -123,6 +123,16 @@ class AutoEqController(
         settingsStore.setDspCompRatio(profile.compRatio)
         settingsStore.setDspDriveMode(profile.driveMode)
         settingsStore.setDspDriveTarget(profile.driveTargetDb)
+        settingsStore.setDspDriveFloorOffset(profile.driveFloorOffsetDb ?: -12f)
+        settingsStore.setDspDriveHoldSec(profile.driveHoldSec ?: 5f)
+        settingsStore.setDspDriveBoostRate(profile.driveBoostRateDb ?: 2f)
+        settingsStore.setDspDriveMaxBoost(profile.driveMaxBoostDb ?: 20f)
+        settingsStore.setDspDriveDownRate(profile.driveDownRateDb ?: 6f)
+        settingsStore.setDspDriveLookaheadSec(profile.driveLookaheadSec ?: 3f)
+        settingsStore.setDspDriveLookaheadDownRate(profile.driveLookaheadDownRateDb ?: 4f)
+        settingsStore.setDspDriveMicroLookaheadMs(profile.driveMicroLookaheadMs ?: 100f)
+        settingsStore.setDspDrivePeakCeiling(profile.drivePeakCeilingDb ?: -1f)
+        settingsStore.setDspDriveSilenceGate(profile.driveSilenceGateDb ?: -55f)
         settingsStore.setDspCompAttack(profile.compAttackMs)
         settingsStore.setDspCompRelease(profile.compReleaseMs)
         settingsStore.setDspCompKnee(profile.compKneeDb)
@@ -159,6 +169,16 @@ class AutoEqController(
             compRatio = prefs.dspCompRatio,
             driveMode = prefs.dspDriveMode,
             driveTargetDb = prefs.dspDriveTargetDb,
+            driveFloorOffsetDb = prefs.dspDriveFloorOffsetDb,
+            driveHoldSec = prefs.dspDriveHoldSec,
+            driveBoostRateDb = prefs.dspDriveBoostRateDb,
+            driveMaxBoostDb = prefs.dspDriveMaxBoostDb,
+            driveDownRateDb = prefs.dspDriveDownRateDb,
+            driveLookaheadSec = prefs.dspDriveLookaheadSec,
+            driveLookaheadDownRateDb = prefs.dspDriveLookaheadDownRateDb,
+            driveMicroLookaheadMs = prefs.dspDriveMicroLookaheadMs,
+            drivePeakCeilingDb = prefs.dspDrivePeakCeilingDb,
+            driveSilenceGateDb = prefs.dspDriveSilenceGateDb,
             compAttackMs = prefs.dspCompAttackMs,
             compReleaseMs = prefs.dspCompReleaseMs,
             compKneeDb = prefs.dspCompKneeDb,

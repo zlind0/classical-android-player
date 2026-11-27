@@ -728,8 +728,8 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
                 .setExtras(android.os.Bundle().apply {
                     putFloat("rgTrack", song.replayGainTrack)
                     putFloat("rgAlbum", song.replayGainAlbum)
-                    // v0.6 driving loudness needs per-track LUFS on the loader path
-                    container.replayGainStore.lufsFor(song.path)?.let { putFloat("lufs", it) }
+                    if (song.path.isNotBlank()) putString("localPath", song.path)
+                    if (song.clipStartMs > 0L) putLong("clipStartMs", song.clipStartMs)
                 })
                 .build()
         )
