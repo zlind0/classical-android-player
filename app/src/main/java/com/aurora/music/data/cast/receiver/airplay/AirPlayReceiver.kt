@@ -42,6 +42,7 @@ class AirPlayReceiver(
     private val deviceName: String,
     private val deviceId: String,
     private val audioSessionId: Int,
+    private val onLookahead: (com.aurora.music.playback.LiveLookahead?) -> Unit = {},
     private val sinkFactory: () -> AudioSink,
 ) : CastProtocolReceiver {
 
@@ -322,7 +323,7 @@ class AirPlayReceiver(
             encrypted = format.encrypted,
             mirroring = mirroring,
         )
-        val output = AirPlayAudioOutput(appContext, sinkFactory(), audioSessionId) {
+        val output = AirPlayAudioOutput(appContext, sinkFactory(), audioSessionId, onLookahead = onLookahead) {
             // Audio focus lost: keep the session but stop output.
         }
         output.start(format.sampleRate, format.channels)
@@ -357,6 +358,7 @@ class AirPlayReceiver(
     }
 
     private fun endAudio() {
+        onLookahead(null)
         audioReceiver?.stop()
         audioReceiver = null
         audioOutput?.stop()

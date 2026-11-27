@@ -415,6 +415,7 @@ class AppContainer(context: Context) {
         castIdentity.name.ifBlank { "nostalgiaPod" },
         airPlayDeviceId,
         audioSessionId,
+        onLookahead = { castAudioChain.setDrivingLiveLookahead(it) },
     ) { castAudioChain.createSink() }
     // 旧协议投屏也走同一套 DSP 链（原来是无效果的独立 ExoPlayer）。
     init {

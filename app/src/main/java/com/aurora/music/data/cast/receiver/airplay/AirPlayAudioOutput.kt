@@ -18,6 +18,7 @@ class AirPlayAudioOutput(
     context: Context,
     sink: AudioSink,
     sessionId: Int,
+    private val onLookahead: (com.aurora.music.playback.LiveLookahead?) -> Unit = {},
     onFocusLoss: () -> Unit,
 ) {
     private val player = PcmStreamPlayer(context, sink, sessionId, onFocusLoss) { hasFocus ->
@@ -106,6 +107,7 @@ class AirPlayAudioOutput(
     }
 
     fun flush() {
+        onLookahead(null)
         timeline?.flushAndReprime()
         player.resume()
         AirPlayDiagnostics.log(AirPlayDiagnostics.Level.INFO, "Output", "flush")
@@ -113,6 +115,7 @@ class AirPlayAudioOutput(
     }
 
     fun resume() {
+        onLookahead(null)
         timeline?.flushAndReprime()
         player.resume()
         AirPlayDiagnostics.log(AirPlayDiagnostics.Level.INFO, "Output", "resumed")
@@ -142,6 +145,7 @@ class AirPlayAudioOutput(
 
     fun stop() {
         if (!running.compareAndSet(true, false)) return
+        onLookahead(null)
         timeline?.stop()
         timeline = null
         thread?.join(500)
@@ -182,8 +186,14 @@ class AirPlayAudioOutput(
         val out = scratch
         val encoded = bytes
         var publishCounter = 0
+        var lookaheadCounter = 0
+        var wasPaused = false
         while (running.get()) {
             if (player.isPaused) {
+                if (!wasPaused) {
+                    onLookahead(null)
+                    wasPaused = true
+                }
                 Thread.sleep(10)
                 // 暂停时仍刷新一次诊断，方便看到「会话正常但输出被暂停」。
                 if (++publishCounter >= 50) {
@@ -192,7 +202,12 @@ class AirPlayAudioOutput(
                 }
                 continue
             }
+            wasPaused = false
             val full = tl.read(out, frames)
+            if (++lookaheadCounter >= 5) {
+                lookaheadCounter = 0
+                onLookahead(tl.peekLookahead())
+            }
             if (!full && !hasProducerData(tl)) {
                 // Priming/underrun: still submit silence so the sink drains at
                 // real-time pace, then wait a little before trying again.

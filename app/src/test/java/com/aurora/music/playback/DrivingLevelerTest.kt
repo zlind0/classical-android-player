@@ -244,6 +244,74 @@ class DrivingLevelerTest {
     }
 
     @Test
+    fun liveLookahead_rampsDownAcrossFullBuffer() {
+        val unitLufs = refLufsOfUnitSine()
+        val leveler = DrivingLeveler().apply {
+            configure(sr)
+            update(
+                DrivingParams(
+                    enabled = true,
+                    targetLoudnessDb = -16f,
+                    floorOffsetDb = -12f,
+                    holdSeconds = 2f,
+                    boostRateDbPerSec = 4f,
+                    maxBoostDb = 20f,
+                    lookaheadSec = 3f,
+                    lookaheadDownRateDbPerSec = 4f,
+                    peakCeilingDb = -1f,
+                ),
+            )
+        }
+        val quietAmp = ampForLufs(-42f, unitLufs)
+        feedSine(leveler, 7f, quietAmp)
+        assertTrue("Expected significant boost before live lookahead, got ${leveler.currentBoostDb}", leveler.currentBoostDb > 12f)
+
+        // Simulate a 1.5 s AirPlay buffer (15 x 100 ms buckets) where loud audio sits at the tail
+        // and shifts closer every 100 ms as playback advances.
+        for (step in 0 until 14) {
+            val count = 15
+            val lufs = FloatArray(count) { idx -> if (idx >= 14 - step) -12f else -42f }
+            val peaks = FloatArray(count) { idx -> if (idx >= 14 - step) -2f else -30f }
+            leveler.setLiveLookahead(LiveLookahead(lufs, peaks, count, 0.1f, 0f))
+            assertTrue(leveler.hasActiveMap)
+            feedSine(leveler, 0.1f, quietAmp, startSample = (7f * sr).toInt() + step * (sr / 10))
+        }
+        assertTrue(
+            "Expected live lookahead to pre-ramp boost <= 0.5 dB before loud tail arrives, got ${leveler.currentBoostDb}",
+            leveler.currentBoostDb <= 0.5f,
+        )
+    }
+
+    @Test
+    fun liveLookahead_disabledWhenLookaheadSecZero() {
+        val unitLufs = refLufsOfUnitSine()
+        val leveler = DrivingLeveler().apply {
+            configure(sr)
+            update(
+                DrivingParams(
+                    enabled = true,
+                    targetLoudnessDb = -16f,
+                    floorOffsetDb = -12f,
+                    holdSeconds = 2f,
+                    boostRateDbPerSec = 4f,
+                    maxBoostDb = 20f,
+                    lookaheadSec = 0f,
+                ),
+            )
+        }
+        val quietAmp = ampForLufs(-40f, unitLufs)
+        feedSine(leveler, 6f, quietAmp)
+        val before = leveler.currentBoostDb
+        assertTrue(before > 8f)
+
+        val loudLufs = FloatArray(8) { -12f }
+        val loudPeak = FloatArray(8) { -2f }
+        leveler.setLiveLookahead(LiveLookahead(loudLufs, loudPeak, 8, 0.1f, 0f))
+        feedSine(leveler, 0.5f, quietAmp, startSample = 6 * sr)
+        assertEquals(before, leveler.currentBoostDb, 2.5f)
+    }
+
+    @Test
     fun reset_clearsBoostAndDelay() {
         val unitLufs = refLufsOfUnitSine()
         val leveler = DrivingLeveler().apply {

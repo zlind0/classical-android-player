@@ -28,6 +28,18 @@ data class DrivingParams(
 }
 
 /**
+ * Live lookahead snapshot of already-buffered, not-yet-played PCM (e.g. from AirPlay's
+ * timeline jitter buffer), allowing pre-emptive ramp-down across the full buffer horizon.
+ */
+class LiveLookahead(
+    val lufs: FloatArray,
+    val peakDb: FloatArray,
+    val count: Int,
+    val bucketSec: Float,
+    val firstBucketOffsetSec: Float,
+)
+
+/**
  * Real-time upward leveler with hybrid lookahead:
  * - 1 s sliding K-weighted LUFS window (100 ms steps) drives upward boost when below [DrivingParams.floorDb].
  * - Hysteresis deadband [floorDb, targetLoudnessDb] freezes the current boost without breathing.
@@ -44,13 +56,14 @@ class DrivingLeveler {
 
     @Volatile private var params: DrivingParams = DrivingParams()
     @Volatile private var loudnessMap: TrackLoudnessMap? = null
+    @Volatile private var liveLookahead: LiveLookahead? = null
     @Volatile private var positionSec: Float = -1f
     @Volatile private var resetRequested: Boolean = false
 
     @Volatile var currentBoostDb: Float = 0f
         private set
 
-    val hasActiveMap: Boolean get() = loudnessMap != null
+    val hasActiveMap: Boolean get() = loudnessMap != null || (liveLookahead?.let { it.count > 0 } == true)
     val isEnabled: Boolean get() = params.enabled
 
     private var fs: Int = 48000
@@ -83,6 +96,7 @@ class DrivingLeveler {
     private var silenceSec: Float = 0f
     private var boosting: Boolean = false
     private var urgentDownRate: Float = 0f
+    private var liveLookaheadRate: Float = 0f
     private var cachedGainDb: Float = 0f
     private var cachedGainLin: Float = 1f
 
@@ -99,6 +113,10 @@ class DrivingLeveler {
 
     fun setLoudnessMap(map: TrackLoudnessMap?) {
         loudnessMap = map
+    }
+
+    fun setLiveLookahead(snapshot: LiveLookahead?) {
+        liveLookahead = snapshot
     }
 
     fun setPositionSec(posSec: Float) {
@@ -144,6 +162,7 @@ class DrivingLeveler {
         silenceSec = 0f
         boosting = false
         urgentDownRate = 0f
+        liveLookaheadRate = 0f
         cachedGainDb = 0f
         cachedGainLin = 1f
         currentBoostDb = 0f
@@ -209,7 +228,7 @@ class DrivingLeveler {
         if (curGainDb < tgt) {
             curGainDb = minOf(tgt, curGainDb + p.boostRateDbPerSec.coerceAtLeast(0.1f) / fs)
         } else if (curGainDb > tgt) {
-            val downPerSec = maxOf(p.downRateDbPerSec, p.lookaheadDownRateDbPerSec).coerceAtLeast(0.1f)
+            val downPerSec = maxOf(p.downRateDbPerSec, p.lookaheadDownRateDbPerSec, liveLookaheadRate).coerceAtLeast(0.1f)
             curGainDb = maxOf(tgt, curGainDb - downPerSec / fs)
         }
 
@@ -315,6 +334,35 @@ class DrivingLeveler {
                 boosting = false
                 belowFloorSec = 0f
             }
+        }
+
+        val live = liveLookahead
+        if (live != null && live.count > 0 && p.lookaheadSec > 0f) {
+            var minAllowed = maxBoost
+            var neededRate = 0f
+            for (i in 0 until live.count) {
+                val dtAhead = (i * live.bucketSec - live.firstBucketOffsetSec - 0.1f).coerceAtLeast(0f)
+                val safeLufs = (p.targetLoudnessDb - live.lufs[i]).coerceAtLeast(0f)
+                val safePeak = (p.peakCeilingDb - live.peakDb[i]).coerceAtLeast(0f)
+                val safe = minOf(safeLufs, safePeak)
+                val allowed = safe + p.lookaheadDownRateDbPerSec * dtAhead
+                if (allowed < minAllowed) minAllowed = allowed
+                if (allowed < curGainDb && safe < curGainDb) {
+                    val reqRate = (curGainDb - safe) / dtAhead.coerceAtLeast(0.05f)
+                    if (reqRate > neededRate) neededRate = reqRate
+                }
+            }
+            minAllowed = minAllowed.coerceIn(0f, maxBoost)
+            if (targetGainDb > minAllowed) {
+                targetGainDb = minAllowed
+                boosting = false
+                belowFloorSec = 0f
+                liveLookaheadRate = neededRate
+            } else if (curGainDb <= minAllowed + 0.05f) {
+                liveLookaheadRate = 0f
+            }
+        } else {
+            liveLookaheadRate = 0f
         }
     }
 

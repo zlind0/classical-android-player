@@ -68,6 +68,7 @@ class AuroraDspProcessor : BaseAudioProcessor() {
         }
 
     fun setDrivingLoudnessMap(map: TrackLoudnessMap?) = drivingLeveler.setLoudnessMap(map)
+    fun setDrivingLiveLookahead(snapshot: LiveLookahead?) = drivingLeveler.setLiveLookahead(snapshot)
     fun setDrivingPositionSec(posSec: Float) = drivingLeveler.setPositionSec(posSec)
 
     private var smoothCoef = 0f

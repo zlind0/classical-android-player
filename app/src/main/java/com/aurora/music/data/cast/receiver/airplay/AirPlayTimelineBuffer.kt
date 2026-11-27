@@ -1,5 +1,10 @@
 package com.aurora.music.data.cast.receiver.airplay
 
+import com.aurora.music.playback.KWeightingFilter
+import com.aurora.music.playback.LiveLookahead
+import com.aurora.music.playback.energyToLufs
+import kotlin.math.abs
+import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
 
@@ -55,6 +60,19 @@ class AirPlayTimelineBuffer(
     private var plcHistoryCount = 0
     /** 缺口结束后，下一块真实音频的前几毫秒做淡入，避免硬切。 */
     private var fadeInFrames = 0
+
+    // ---- live lookahead bucket ring (100 ms per bucket across the unplayed ring) ----
+    private val chunkFrames = (this.sampleRate / 10).coerceAtLeast(1)
+    private val chunkSamples = chunkFrames * this.channels
+    private val maxBuckets = (ring.size / chunkSamples) + 4
+    private val bucketLufs = FloatArray(maxBuckets) { -100f }
+    private val bucketPeakDb = FloatArray(maxBuckets) { -100f }
+    private val kwFilters = Array(this.channels) { KWeightingFilter(this.sampleRate) }
+    private val kwWeights = DoubleArray(this.channels) { if (it == 3 || it == 4) 1.41 else 1.0 }
+    private val accSumSq = DoubleArray(this.channels)
+    private var accPeak = 0f
+    private var accFrames = 0
+    private var accBucketIdx = 0L
 
     /** Producer: interleaved 16-bit PCM at [ptsNs], `lengthBytes` must be even. */
     fun write(pcm: ByteArray, lengthBytes: Int, ptsNs: Long) {
@@ -189,6 +207,7 @@ class AirPlayTimelineBuffer(
             aboveCapSinceNs = 0
             underran = false
             lastTrimBlockNs = 0
+            resetLookaheadStats()
         }
     }
 
@@ -216,6 +235,29 @@ class AirPlayTimelineBuffer(
         synchronized(lock) {
             running = false
             ringSkip(ringAvailable())
+            resetLookaheadStats()
+        }
+    }
+
+    /** Snapshot K-weighted LUFS and peak across every unplayed 100 ms bucket in the buffer. */
+    fun peekLookahead(): LiveLookahead? {
+        synchronized(lock) {
+            val avail = ringAvailable()
+            if (!running || priming || avail <= 0L) return null
+            val startChunk = readPos / chunkSamples
+            val endChunk = (writePos - 1L) / chunkSamples
+            val count = (endChunk - startChunk + 1L).toInt().coerceIn(0, maxBuckets)
+            if (count <= 0) return null
+            val lufs = FloatArray(count)
+            val peaks = FloatArray(count)
+            for (i in 0 until count) {
+                val slot = ((startChunk + i) % maxBuckets).toInt()
+                lufs[i] = bucketLufs[slot]
+                peaks[i] = bucketPeakDb[slot]
+            }
+            val bucketSec = chunkFrames.toFloat() / sampleRate.toFloat()
+            val firstOffsetSec = ((readPos % chunkSamples).toFloat() / chunkSamples.toFloat()) * bucketSec
+            return LiveLookahead(lufs, peaks, count, bucketSec, firstOffsetSec)
         }
     }
 
@@ -255,7 +297,60 @@ class AirPlayTimelineBuffer(
         val first = min(n, ring.size - wi)
         System.arraycopy(src, 0, ring, wi, first)
         if (n > first) System.arraycopy(src, first, ring, 0, n - first)
+        analyzeWritten(src, n, writePos)
         writePos += n
+    }
+
+    private fun analyzeWritten(src: ShortArray, count: Int, baseWritePos: Long) {
+        var off = 0
+        while (off + channels <= count) {
+            val samplePos = baseWritePos + off
+            val bIdx = samplePos / chunkSamples
+            if (bIdx != accBucketIdx) {
+                if (accFrames > 0) commitBucket(accBucketIdx, accFrames, accPeak, isPartial = false)
+                accSumSq.fill(0.0)
+                accPeak = 0f
+                accFrames = 0
+                accBucketIdx = bIdx
+            }
+            for (ch in 0 until channels) {
+                val raw = src[off + ch] / 32768.0
+                val a = abs(raw).toFloat()
+                if (a > accPeak) accPeak = a
+                val y = kwFilters[ch].process(raw)
+                accSumSq[ch] += y * y
+            }
+            accFrames++
+            off += channels
+        }
+        if (accFrames > 0) {
+            commitBucket(accBucketIdx, accFrames, accPeak, isPartial = accFrames < chunkFrames)
+        }
+    }
+
+    private fun commitBucket(bIdx: Long, frames: Int, peak: Float, isPartial: Boolean) {
+        val slot = (bIdx % maxBuckets).toInt()
+        val minLufsFrames = (chunkFrames / 10).coerceAtLeast(1)
+        bucketLufs[slot] = if (!isPartial || frames >= minLufsFrames) {
+            var z = 0.0
+            for (ch in 0 until channels) {
+                z += kwWeights[ch] * (accSumSq[ch] / frames.toDouble())
+            }
+            energyToLufs(z)
+        } else {
+            -100f
+        }
+        bucketPeakDb[slot] = if (peak > 1e-6f) (20.0 * log10(peak.toDouble())).toFloat() else -100f
+    }
+
+    private fun resetLookaheadStats() {
+        for (f in kwFilters) f.reset()
+        accSumSq.fill(0.0)
+        accPeak = 0f
+        accFrames = 0
+        accBucketIdx = writePos / chunkSamples
+        bucketLufs.fill(-100f)
+        bucketPeakDb.fill(-100f)
     }
 
     private fun ringRead(dst: ShortArray, count: Int): Int {
