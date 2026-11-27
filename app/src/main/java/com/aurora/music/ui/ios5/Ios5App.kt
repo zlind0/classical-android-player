@@ -1367,6 +1367,14 @@ fun Ios5App() {
                                 onOpenPrompt = { navController.navigate(Ios5Routes.SETTINGS_INTRO_PROMPT) },
                                 onOpenVoice = { navController.navigate(Ios5Routes.SETTINGS_INTRO_VOICE) },
                                 onOpenLog = { navController.navigate(Ios5Routes.SETTINGS_INTRO_LOG) },
+                                onOpenModel = { navController.navigate(Ios5Routes.SETTINGS_INTRO_MODEL) },
+                            )
+                        }
+                        composable(Ios5Routes.SETTINGS_INTRO_MODEL) {
+                            com.aurora.music.ui.screens.settings.SongIntroModelScreen(
+                                contentPadding = PaddingValues(0.dp),
+                                onBack = { navController.popBackStack() },
+                                confirm = { confirm(it) },
                             )
                         }
                         composable(Ios5Routes.SETTINGS_INTRO_PROMPT) {

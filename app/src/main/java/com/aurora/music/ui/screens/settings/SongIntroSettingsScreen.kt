@@ -18,11 +18,9 @@ import com.aurora.music.data.SongIntroPrefs
 import com.aurora.music.data.UnifiedTtsPrefs
 import com.aurora.music.ui.ios5.Ios5ActionRow
 import com.aurora.music.ui.ios5.Ios5CellDivider
-import com.aurora.music.ui.ios5.Ios5CheckRow
 import com.aurora.music.ui.ios5.Ios5NavRow
 import com.aurora.music.ui.ios5.Ios5SettingsPage
 import com.aurora.music.ui.ios5.Ios5SliderRow
-import com.aurora.music.ui.ios5.Ios5StaticText
 import com.aurora.music.ui.ios5.Ios5TextRow
 import com.aurora.music.ui.ios5.ios5FootNote
 import com.aurora.music.ui.ios5.ios5Section
@@ -36,6 +34,7 @@ fun SongIntroSettingsScreen(
     onOpenPrompt: () -> Unit = {},
     onOpenVoice: () -> Unit = {},
     onOpenLog: () -> Unit = {},
+    onOpenModel: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val container = remember { (context.applicationContext as AuroraApplication).container }
@@ -48,9 +47,6 @@ fun SongIntroSettingsScreen(
 
     var endpoint by remember(prefs) { mutableStateOf(prefs.llmEndpoint) }
     var apiKey by remember(prefs) { mutableStateOf(prefs.llmApiKey) }
-    var model by remember(prefs) { mutableStateOf(prefs.llmModel) }
-    var models by remember { mutableStateOf<List<String>?>(null) }
-    var fetching by remember { mutableStateOf(false) }
     var testing by remember { mutableStateOf(false) }
 
     Ios5SettingsPage("歌曲介绍", onBack) {
@@ -69,40 +65,11 @@ fun SongIntroSettingsScreen(
                 onValueChange = { apiKey = it; scope.launch { store.setIntroApiKey(it) } },
             )
             Ios5CellDivider()
-            Ios5TextRow(
+            Ios5NavRow(
                 title = "模型",
-                value = model,
-                placeholder = "手动填写，或下方获取后勾选",
-                onValueChange = { model = it; scope.launch { store.setIntroModel(it) } },
+                subtitle = prefs.llmModel.ifBlank { "未选择" },
+                onClick = onOpenModel,
             )
-            Ios5CellDivider()
-            Ios5ActionRow(
-                title = if (fetching) "正在获取模型列表…" else "获取端点中的模型列表",
-                onClick = {
-                    if (fetching) return@Ios5ActionRow
-                    fetching = true
-                    scope.launch {
-                        intro.fetchModels()
-                            .onSuccess { models = it; confirm("获取到 ${it.size} 个模型") }
-                            .onFailure { confirm("获取失败：${it.message}") }
-                        fetching = false
-                    }
-                },
-            )
-            models?.let { list ->
-                if (list.isNotEmpty()) {
-                    Ios5CellDivider()
-                    Ios5StaticText("当前：${prefs.llmModel.ifBlank { "未选择" }}")
-                    list.take(200).forEach { m ->
-                        Ios5CellDivider()
-                        Ios5CheckRow(
-                            title = m,
-                            checked = m == prefs.llmModel,
-                            onClick = { scope.launch { store.setIntroModel(m) } },
-                        )
-                    }
-                }
-            }
             Ios5CellDivider()
             Ios5ActionRow(
                 title = if (testing) "正在测试连接…" else "测试连接",

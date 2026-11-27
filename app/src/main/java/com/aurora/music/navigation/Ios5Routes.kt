@@ -98,6 +98,7 @@ object Ios5Routes {
     const val SETTINGS_AUDIOBOOK_SUBTITLES = "settings_audiobook_subtitles"
     const val SETTINGS_MULTIMODAL = "settings_multimodal"
     const val SETTINGS_INTRO = "settings_intro"
+    const val SETTINGS_INTRO_MODEL = "settings_intro_model"
     const val SETTINGS_INTRO_PROMPT = "settings_intro_prompt"
     const val SETTINGS_INTRO_VOICE = "settings_intro_voice"
     const val SETTINGS_INTRO_LOG = "settings_intro_log"
