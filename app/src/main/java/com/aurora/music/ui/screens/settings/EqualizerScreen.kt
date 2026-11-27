@@ -708,6 +708,20 @@ private fun LazyListScope.dynamicsTab(
                     FloatSliderRow(stringResource(R.string.eq_drive_peak_ceiling), prefs.dspDrivePeakCeilingDb, -6f..0f, valueText = "%.1f dBFS".format(prefs.dspDrivePeakCeilingDb)) { v -> scope.launch { store.setDspDrivePeakCeiling(v) } }
                     Ios5CellDivider()
                     FloatSliderRow(stringResource(R.string.eq_drive_silence_gate), prefs.dspDriveSilenceGateDb, -70f..-35f, valueText = "%.0f LUFS".format(prefs.dspDriveSilenceGateDb)) { v -> scope.launch { store.setDspDriveSilenceGate(v) } }
+                    Ios5CellDivider()
+                    FloatSliderRow(
+                        stringResource(R.string.eq_drive_bass_cut_ratio),
+                        prefs.dspDriveBassCutRatio,
+                        0f..0.6f,
+                        valueText = if (prefs.dspDriveBassCutRatio <= 0.005f) stringResource(R.string.eq_mode_off) else "${(prefs.dspDriveBassCutRatio * 100).roundToInt()}%",
+                    ) { v -> scope.launch { store.setDspDriveBassCutRatio(v) } }
+                    Ios5CellDivider()
+                    FloatSliderRow(stringResource(R.string.eq_drive_bass_cut_freq), prefs.dspDriveBassCutFreqHz, 60f..250f, valueText = "%.0f Hz".format(prefs.dspDriveBassCutFreqHz)) { v -> scope.launch { store.setDspDriveBassCutFreq(v) } }
+                    Text(
+                        stringResource(R.string.eq_drive_bass_cut_hint),
+                        color = Ios5Colors.TextSecondary, fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    )
                 }
             }
         }

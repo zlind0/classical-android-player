@@ -97,6 +97,8 @@ fun buildDrivingParams(ap: AudioPrefs): DrivingParams {
         microLookaheadMs = ap.dspDriveMicroLookaheadMs,
         peakCeilingDb = ap.dspDrivePeakCeilingDb,
         silenceGateDb = ap.dspDriveSilenceGateDb,
+        bassCutRatio = ap.dspDriveBassCutRatio,
+        bassCutFreqHz = ap.dspDriveBassCutFreqHz,
     )
 }
 

@@ -130,6 +130,8 @@ data class AudioProfile(
     val driveMicroLookaheadMs: Float? = null,
     val drivePeakCeilingDb: Float? = null,
     val driveSilenceGateDb: Float? = null,
+    val driveBassCutRatio: Float? = null,
+    val driveBassCutFreqHz: Float? = null,
     val compAttackMs: Float = 80f,
     val compReleaseMs: Float = 400f,
     val compKneeDb: Float = 6f,

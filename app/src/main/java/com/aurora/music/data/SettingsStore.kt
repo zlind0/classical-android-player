@@ -194,6 +194,8 @@ data class AudioPrefs(
     val dspDriveMicroLookaheadMs: Float = 100f,  // real-time transient delay lookahead (ms)
     val dspDrivePeakCeilingDb: Float = -1f,    // peak safety ceiling (dBFS)
     val dspDriveSilenceGateDb: Float = -55f,   // silence gate (LUFS)
+    val dspDriveBassCutRatio: Float = 0.35f,   // inverse equal-loudness bass cut ratio (0..0.6)
+    val dspDriveBassCutFreqHz: Float = 150f,   // 1st-order low-shelf cutoff (Hz)
     val dspCompAttackMs: Float = 80f,
     val dspCompReleaseMs: Float = 400f,
     val dspCompKneeDb: Float = 6f,
@@ -421,6 +423,8 @@ class SettingsStore(private val context: Context) {
         val DSP_DRIVE_MICRO_LOOKAHEAD = floatPreferencesKey("dsp_drive_micro_lookahead")
         val DSP_DRIVE_PEAK_CEILING = floatPreferencesKey("dsp_drive_peak_ceiling")
         val DSP_DRIVE_SILENCE_GATE = floatPreferencesKey("dsp_drive_silence_gate")
+        val DSP_DRIVE_BASS_CUT_RATIO = floatPreferencesKey("dsp_drive_bass_cut_ratio")
+        val DSP_DRIVE_BASS_CUT_FREQ = floatPreferencesKey("dsp_drive_bass_cut_freq")
         val DSP_COMP_ATTACK = floatPreferencesKey("dsp_comp_attack")
         val DSP_COMP_RELEASE = floatPreferencesKey("dsp_comp_release")
         val DSP_COMP_KNEE = floatPreferencesKey("dsp_comp_knee")
@@ -571,6 +575,8 @@ class SettingsStore(private val context: Context) {
             dspDriveMicroLookaheadMs = p[Keys.DSP_DRIVE_MICRO_LOOKAHEAD] ?: 100f,
             dspDrivePeakCeilingDb = p[Keys.DSP_DRIVE_PEAK_CEILING] ?: -1f,
             dspDriveSilenceGateDb = p[Keys.DSP_DRIVE_SILENCE_GATE] ?: -55f,
+            dspDriveBassCutRatio = p[Keys.DSP_DRIVE_BASS_CUT_RATIO] ?: 0.35f,
+            dspDriveBassCutFreqHz = p[Keys.DSP_DRIVE_BASS_CUT_FREQ] ?: 150f,
             dspCompAttackMs = p[Keys.DSP_COMP_ATTACK] ?: 80f,
             dspCompReleaseMs = p[Keys.DSP_COMP_RELEASE] ?: 400f,
             dspCompKneeDb = p[Keys.DSP_COMP_KNEE] ?: 6f,
@@ -984,6 +990,8 @@ class SettingsStore(private val context: Context) {
     suspend fun setDspDriveMicroLookaheadMs(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_MICRO_LOOKAHEAD] = v }
     suspend fun setDspDrivePeakCeiling(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_PEAK_CEILING] = v }
     suspend fun setDspDriveSilenceGate(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_SILENCE_GATE] = v }
+    suspend fun setDspDriveBassCutRatio(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_BASS_CUT_RATIO] = v }
+    suspend fun setDspDriveBassCutFreq(v: Float) = context.dataStore.edit { it[Keys.DSP_DRIVE_BASS_CUT_FREQ] = v }
     suspend fun setDspCompAttack(v: Float) = context.dataStore.edit { it[Keys.DSP_COMP_ATTACK] = v }
     suspend fun setDspCompRelease(v: Float) = context.dataStore.edit { it[Keys.DSP_COMP_RELEASE] = v }
     suspend fun setDspCompKnee(v: Float) = context.dataStore.edit { it[Keys.DSP_COMP_KNEE] = v }

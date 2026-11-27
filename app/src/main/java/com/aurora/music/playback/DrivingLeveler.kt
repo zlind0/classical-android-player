@@ -1,9 +1,12 @@
 package com.aurora.music.playback
 
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.log10
+import kotlin.math.sqrt
+import kotlin.math.tan
 
 /**
  * Configuration for Driving Mode's upward gain rider.
@@ -23,6 +26,8 @@ data class DrivingParams(
     val microLookaheadMs: Float = 100f,
     val peakCeilingDb: Float = -1f,
     val silenceGateDb: Float = -55f,
+    val bassCutRatio: Float = 0.35f,
+    val bassCutFreqHz: Float = 150f,
 ) {
     val floorDb: Float get() = targetLoudnessDb + floorOffsetDb
 }
@@ -100,6 +105,15 @@ class DrivingLeveler {
     private var cachedGainDb: Float = 0f
     private var cachedGainLin: Float = 1f
 
+    private var shelfZL: Float = 0f
+    private var shelfZR: Float = 0f
+    private var shelfB0: Float = 1f
+    private var shelfB1: Float = 0f
+    private var shelfA1: Float = 0f
+    private var cachedShelfCutDb: Float = 0f
+    private var cachedShelfFreqHz: Float = 0f
+    private var shelfActive: Boolean = false
+
     fun update(p: DrivingParams) {
         val wasEnabled = params.enabled
         params = p
@@ -165,6 +179,14 @@ class DrivingLeveler {
         liveLookaheadRate = 0f
         cachedGainDb = 0f
         cachedGainLin = 1f
+        shelfZL = 0f
+        shelfZR = 0f
+        shelfB0 = 1f
+        shelfB1 = 0f
+        shelfA1 = 0f
+        cachedShelfCutDb = 0f
+        cachedShelfFreqHz = 0f
+        shelfActive = false
         currentBoostDb = 0f
     }
 
@@ -262,8 +284,40 @@ class DrivingLeveler {
             cachedGainLin = Math.pow(10.0, curGainDb / 20.0).toFloat()
             cachedGainDb = curGainDb
         }
-        outL = dL * cachedGainLin
-        outR = dR * cachedGainLin
+        val gL = dL * cachedGainLin
+        val gR = dR * cachedGainLin
+
+        val ratio = p.bassCutRatio.coerceIn(0f, 0.6f)
+        if (ratio > 0.001f) {
+            val cutDb = (-curGainDb * ratio).coerceIn(-18f, 0f)
+            val fc = p.bassCutFreqHz.coerceIn(60f, 250f)
+            if (!shelfActive || abs(cutDb - cachedShelfCutDb) > 0.05f || abs(fc - cachedShelfFreqHz) > 0.5f) {
+                val g = Math.pow(10.0, cutDb / 20.0)
+                val sG = sqrt(g)
+                val k = tan(PI * fc.coerceIn(40f, fs * 0.25f) / fs)
+                val a0 = sG + k
+                shelfB0 = ((sG + k * g) / a0).toFloat()
+                shelfB1 = ((k * g - sG) / a0).toFloat()
+                shelfA1 = ((k - sG) / a0).toFloat()
+                cachedShelfCutDb = cutDb
+                cachedShelfFreqHz = fc
+                shelfActive = true
+            }
+            val yL = shelfB0 * gL + shelfZL
+            shelfZL = shelfB1 * gL - shelfA1 * yL
+            val yR = shelfB0 * gR + shelfZR
+            shelfZR = shelfB1 * gR - shelfA1 * yR
+            outL = yL
+            outR = yR
+        } else {
+            if (shelfActive) {
+                shelfZL = 0f
+                shelfZR = 0f
+                shelfActive = false
+            }
+            outL = gL
+            outR = gR
+        }
     }
 
     fun publishMeter() {

@@ -306,6 +306,9 @@
     <string name="eq_drive_micro_lookahead">Transient lookahead</string>
     <string name="eq_drive_peak_ceiling">Peak ceiling</string>
     <string name="eq_drive_silence_gate">Silence gate</string>
+    <string name="eq_drive_bass_cut_ratio">Bass taming</string>
+    <string name="eq_drive_bass_cut_freq">Bass cutoff</string>
+    <string name="eq_drive_bass_cut_hint">Attenuates low bass proportionally while boosting quiet passages (ISO 226) to reduce rumble. Set 0% to disable.</string>
     <string name="eq_compressor">Compressor</string>
     <string name="eq_comp_on_sub">Even out loud/quiet passages</string>
     <string name="eq_threshold">Threshold</string>

@@ -7,6 +7,7 @@ import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.log10
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 class DrivingLevelerTest {
 
@@ -309,6 +310,91 @@ class DrivingLevelerTest {
         leveler.setLiveLookahead(LiveLookahead(loudLufs, loudPeak, 8, 0.1f, 0f))
         feedSine(leveler, 0.5f, quietAmp, startSample = 6 * sr)
         assertEquals(before, leveler.currentBoostDb, 2.5f)
+    }
+
+    private fun measureGainDb(
+        leveler: DrivingLeveler,
+        freqHz: Float,
+        amp: Float,
+        settleSec: Float = 0.15f,
+        measureSec: Float = 0.25f,
+    ): Float {
+        val settleSamples = (settleSec * sr).toInt()
+        val measureSamples = (measureSec * sr).toInt()
+        var inSq = 0.0
+        var outSq = 0.0
+        for (i in 0 until settleSamples + measureSamples) {
+            val s = (amp * sin(2.0 * PI * freqHz * i / sr)).toFloat()
+            leveler.processSample(s, s)
+            if (i >= settleSamples) {
+                inSq += s * s
+                outSq += leveler.outL * leveler.outL
+            }
+        }
+        val inRms = sqrt(inSq / measureSamples)
+        val outRms = sqrt(outSq / measureSamples)
+        return (20.0 * log10(outRms / inRms)).toFloat()
+    }
+
+    @Test
+    fun bassTaming_attenuatesLowBassProportionallyWhenBoosted_andPreservesMidrange() {
+        val unitLufs = refLufsOfUnitSine()
+        val leveler = DrivingLeveler().apply {
+            configure(sr)
+            update(
+                DrivingParams(
+                    enabled = true,
+                    targetLoudnessDb = -16f,
+                    floorOffsetDb = -12f,
+                    holdSeconds = 1f,
+                    boostRateDbPerSec = 6f,
+                    maxBoostDb = 20f,
+                    bassCutRatio = 0.4f,
+                    bassCutFreqHz = 150f,
+                ),
+            )
+        }
+        feedSine(leveler, 6f, ampForLufs(-52f, unitLufs))
+        assertEquals(20f, leveler.currentBoostDb, 0.3f)
+
+        val probeAmp = Math.pow(10.0, -50.0 / 20.0).toFloat()
+        val gain1k = measureGainDb(leveler, 1000f, probeAmp)
+        val gain50 = measureGainDb(leveler, 50f, probeAmp)
+        assertEquals(19.8f, gain1k, 0.8f)
+        val diff = gain50 - gain1k
+        assertTrue("Expected 50 Hz to be 5.5..8.0 dB below 1 kHz, got $diff dB", diff in -8.0f..-5.5f)
+    }
+
+    @Test
+    fun bassTaming_isTransparentAtZeroBoost_andWhenRatioZero() {
+        val unitLufs = refLufsOfUnitSine()
+        val probeAmp = Math.pow(10.0, -40.0 / 20.0).toFloat()
+
+        val zeroBoostLeveler = DrivingLeveler().apply {
+            configure(sr)
+            update(DrivingParams(enabled = true, holdSeconds = 5f, bassCutRatio = 0.4f, bassCutFreqHz = 150f))
+        }
+        val zeroBoostGain50 = measureGainDb(zeroBoostLeveler, 50f, probeAmp)
+        assertEquals(0f, zeroBoostGain50, 0.15f)
+
+        val ratioZeroLeveler = DrivingLeveler().apply {
+            configure(sr)
+            update(
+                DrivingParams(
+                    enabled = true,
+                    holdSeconds = 1f,
+                    boostRateDbPerSec = 6f,
+                    maxBoostDb = 20f,
+                    bassCutRatio = 0f,
+                    bassCutFreqHz = 150f,
+                ),
+            )
+        }
+        feedSine(ratioZeroLeveler, 6f, ampForLufs(-52f, unitLufs))
+        assertEquals(20f, ratioZeroLeveler.currentBoostDb, 0.3f)
+        val g1k = measureGainDb(ratioZeroLeveler, 1000f, Math.pow(10.0, -50.0 / 20.0).toFloat())
+        val g50 = measureGainDb(ratioZeroLeveler, 50f, Math.pow(10.0, -50.0 / 20.0).toFloat())
+        assertEquals(g1k, g50, 0.5f)
     }
 
     @Test

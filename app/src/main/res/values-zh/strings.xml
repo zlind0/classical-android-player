@@ -303,6 +303,9 @@
     <string name="eq_drive_micro_lookahead">突发保护前瞻</string>
     <string name="eq_drive_peak_ceiling">峰值保护上限</string>
     <string name="eq_drive_silence_gate">静音门限</string>
+    <string name="eq_drive_bass_cut_ratio">低频等响抑制</string>
+    <string name="eq_drive_bass_cut_freq">低频抑制拐点</string>
+    <string name="eq_drive_bass_cut_hint">弱音大增益时按比例适度衰减低频（贴合等响曲线），减少轰鸣浑浊；0% 为关闭。</string>
     <string name="eq_compressor">压缩器</string>
     <string name="eq_comp_on_sub">拉平响亮和安静段落</string>
     <string name="eq_threshold">阈值</string>

@@ -133,6 +133,8 @@ class AutoEqController(
         settingsStore.setDspDriveMicroLookaheadMs(profile.driveMicroLookaheadMs ?: 100f)
         settingsStore.setDspDrivePeakCeiling(profile.drivePeakCeilingDb ?: -1f)
         settingsStore.setDspDriveSilenceGate(profile.driveSilenceGateDb ?: -55f)
+        settingsStore.setDspDriveBassCutRatio(profile.driveBassCutRatio ?: 0.35f)
+        settingsStore.setDspDriveBassCutFreq(profile.driveBassCutFreqHz ?: 150f)
         settingsStore.setDspCompAttack(profile.compAttackMs)
         settingsStore.setDspCompRelease(profile.compReleaseMs)
         settingsStore.setDspCompKnee(profile.compKneeDb)
@@ -179,6 +181,8 @@ class AutoEqController(
             driveMicroLookaheadMs = prefs.dspDriveMicroLookaheadMs,
             drivePeakCeilingDb = prefs.dspDrivePeakCeilingDb,
             driveSilenceGateDb = prefs.dspDriveSilenceGateDb,
+            driveBassCutRatio = prefs.dspDriveBassCutRatio,
+            driveBassCutFreqHz = prefs.dspDriveBassCutFreqHz,
             compAttackMs = prefs.dspCompAttackMs,
             compReleaseMs = prefs.dspCompReleaseMs,
             compKneeDb = prefs.dspCompKneeDb,
