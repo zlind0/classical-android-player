@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -46,9 +47,20 @@ fun Ios5SearchPage(
     val vm: SearchViewModel = viewModel()
     val st by vm.state.collectAsStateWithLifecycle()
     val recents by vm.recentSearches.collectAsStateWithLifecycle()
+    var savedQuery by com.aurora.music.ui.rememberEntryStringState("query")
+    androidx.compose.runtime.LaunchedEffect(savedQuery) {
+        if (savedQuery != st.query) vm.onQuery(savedQuery)
+    }
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "搜索", onBack = onBack)
-        Ios5SearchBar(value = st.query, onValueChange = vm::onQuery, placeholder = "曲名 / 艺人 / 专辑")
+        Ios5SearchBar(
+            value = st.query,
+            onValueChange = {
+                savedQuery = it
+                vm.onQuery(it)
+            },
+            placeholder = "曲名 / 艺人 / 专辑",
+        )
         if (st.loading) {
             Ios5Loading()
             return
@@ -69,7 +81,7 @@ fun Ios5SearchPage(
                         Ios5Group(Modifier.padding(horizontal = 12.dp)) {
                             recents.forEachIndexed { i, q ->
                                 if (i > 0) Ios5CellDivider()
-                                Ios5Cell(title = q, showChevron = false, onClick = { vm.onQuery(q) })
+                                Ios5Cell(title = q, showChevron = false, onClick = { savedQuery = q; vm.onQuery(q) })
                             }
                         }
                     }

@@ -97,14 +97,7 @@ fun Ios5RemoteDetail(
         if (album != null && album.mergeTitles) container.remoteLibrary.albumRowsFor(album)
         else emptyList()
     }
-    var expanded by remember("remote_album_expand:${album?.id}") {
-        mutableStateOf(
-            album?.let { container.uiState.expandedOf("remote_album_expand:${it.id}") } ?: emptySet(),
-        )
-    }
-    androidx.compose.runtime.LaunchedEffect(expanded, album?.id) {
-        album?.let { container.uiState.saveExpanded("remote_album_expand:${it.id}", expanded) }
-    }
+    var expanded by com.aurora.music.ui.rememberEntryExpandedState("remote_merge")
 
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = shownTitle, onBack = onBack, onSearch = onSearch)

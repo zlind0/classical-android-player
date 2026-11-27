@@ -143,7 +143,11 @@ fun EbookExportScreen(
 
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "转有声书", onBack = onBack)
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+        LazyColumn(
+            state = com.aurora.music.ui.rememberPersistentLazyListState("export"),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 24.dp),
+        ) {
             // ---- 书 ----
             item { Ios5SectionTitle("电子书") }
             item {

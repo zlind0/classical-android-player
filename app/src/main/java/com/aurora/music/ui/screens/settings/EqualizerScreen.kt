@@ -95,21 +95,25 @@ fun EqualizerScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
     val prefs by store.audioPrefs.collectAsStateWithLifecycle(initialValue = AudioPrefs())
     val scope = rememberCoroutineScope()
 
-    val expanded = remember { mutableStateMapOf<String, Boolean>() }
+    var expandedSet by com.aurora.music.ui.rememberEntryExpandedState("eq_panels")
     val activeEq by store.activeEqProfile.collectAsStateWithLifecycle(initialValue = "")
     val corrections by store.correctionProfiles.collectAsStateWithLifecycle(initialValue = emptyList())
     val activeCorrectionId by store.activeCorrectionId.collectAsStateWithLifecycle(initialValue = "flat")
     val audioProfiles by store.audioProfiles.collectAsStateWithLifecycle(initialValue = emptyList())
     val deviceProfiles by store.deviceProfiles.collectAsStateWithLifecycle(initialValue = emptyMap())
     val activeCorrection = corrections.firstOrNull { it.id == activeCorrectionId }
-    var tab by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(0) }
+    var tab by com.aurora.music.ui.rememberEntryIntState("eq_tab")
     val rgLabels = listOf(stringResource(R.string.eq_rg_off), stringResource(R.string.eq_rg_track), stringResource(R.string.eq_rg_album))
+
+    fun togglePanel(key: String, open: Boolean) {
+        expandedSet = if (open) expandedSet + key else expandedSet - key
+    }
 
     Ios5SettingsPage(title = stringResource(R.string.eq_title), onBack = onBack) {
         // 纯 UI 面板：开关只控制展开收起
-        val profilesOpen = expanded["profiles"] ?: false
+        val profilesOpen = "profiles" in expandedSet
         switchable("profiles", ctx.getString(R.string.eq_profiles), "${audioProfiles.size} saved",
-            profilesOpen, { expanded["profiles"] = it }) {
+            profilesOpen, { togglePanel("profiles", it) }) {
             AudioProfilesPanel(container, prefs, activeCorrectionId, audioProfiles, deviceProfiles, store, scope)
         }
 
@@ -117,9 +121,9 @@ fun EqualizerScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
             PillSelector(listOf(stringResource(R.string.eq_tab_correction), stringResource(R.string.eq_tab_user), stringResource(R.string.eq_tab_dynamics)), tab) { tab = it }
         }
         when (tab) {
-            0 -> correctionTab(ctx, prefs, activeCorrection, corrections, activeCorrectionId, store, scope, container, expanded)
+            0 -> correctionTab(ctx, prefs, activeCorrection, corrections, activeCorrectionId, store, scope, container, expandedSet, ::togglePanel)
             1 -> userEqTab(ctx, prefs, activeCorrection, store, scope, container, activeCorrectionId)
-            else -> dynamicsTab(ctx, prefs, store, scope, container, expanded)
+            else -> dynamicsTab(ctx, prefs, store, scope, container, expandedSet, ::togglePanel)
         }
 
         item { Ios5SectionTitle(stringResource(R.string.playback_section_output)) }
@@ -257,13 +261,13 @@ private fun AutoEqPanel(container: AppContainer, prefs: AudioPrefs, store: Setti
     val active by store.activeEqProfile.collectAsStateWithLifecycle(initialValue = "")
     val autoSwitch by store.autoEqAutoSwitch.collectAsStateWithLifecycle(initialValue = false)
     val bindings by store.eqBindings.collectAsStateWithLifecycle(initialValue = emptyList())
-    var query by rememberSaveable { mutableStateOf("") }
+    var query by com.aurora.music.ui.rememberEntryStringState("autoeq_query")
     var results by remember { mutableStateOf<List<EqProfile>>(emptyList()) }
     var working by remember { mutableStateOf(false) }
     var searching by remember { mutableStateOf(false) }
     var searchFailed by remember { mutableStateOf(false) }
     var visibleCount by remember { mutableStateOf(20) }
-    var categoryName by rememberSaveable { mutableStateOf(EqDeviceKind.ALL.name) }
+    var categoryName by com.aurora.music.ui.rememberEntryStringState("autoeq_cat", EqDeviceKind.ALL.name)
     val category = EqDeviceKind.entries.firstOrNull { it.name == categoryName } ?: EqDeviceKind.ALL
     val outLabel = container.autoEqController.currentOutputLabel()
     val ctx = LocalContext.current
@@ -447,7 +451,8 @@ private fun LazyListScope.correctionTab(
     store: SettingsStore,
     scope: CoroutineScope,
     container: AppContainer,
-    expanded: SnapshotStateMap<String, Boolean>,
+    expandedSet: Set<String>,
+    onToggleExpand: (String, Boolean) -> Unit,
 ) {
     item {
         val layout = DspCoeffBuilder.GRAPHIC_LAYOUTS.getOrElse(prefs.dspGraphicLayout) { DspCoeffBuilder.GRAPHIC_LAYOUTS[0] }
@@ -479,9 +484,9 @@ private fun LazyListScope.correctionTab(
         }) {
         CorrectionProfilesPanel(corrections, activeCorrectionId, activeCorrection, store, scope)
     }
-    val autoeqOpen = expanded["autoeq"] ?: false
+    val autoeqOpen = "autoeq" in expandedSet
     switchable("autoeq", ctx.getString(R.string.eq_device_presets), ctx.getString(R.string.eq_device_presets_sub),
-        autoeqOpen, { expanded["autoeq"] = it }) {
+        autoeqOpen, { onToggleExpand("autoeq", it) }) {
         AutoEqPanel(container, prefs, store, scope)
     }
     switchable("conv", ctx.getString(R.string.eq_convolution),
@@ -625,7 +630,8 @@ private fun LazyListScope.dynamicsTab(
     store: SettingsStore,
     scope: CoroutineScope,
     container: AppContainer,
-    expanded: SnapshotStateMap<String, Boolean>,
+    expandedSet: Set<String>,
+    onToggleExpand: (String, Boolean) -> Unit,
 ) {
     // v0.8 upward driving leveler (completely decoupled from compressor)
     val driveOn = prefs.dspDriveMode != DrivingMode.OFF
@@ -686,9 +692,9 @@ private fun LazyListScope.dynamicsTab(
             Ios5CellDivider()
             DriveBoostMeter(container, dp.maxBoostDb)
             Ios5CellDivider()
-            val advOpen = expanded["drive_adv"] ?: false
+            val advOpen = "drive_adv" in expandedSet
             Row(
-                Modifier.fillMaxWidth().clickable { expanded["drive_adv"] = !advOpen }.padding(horizontal = 12.dp, vertical = 10.dp),
+                Modifier.fillMaxWidth().clickable { onToggleExpand("drive_adv", !advOpen) }.padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(stringResource(R.string.eq_drive_advanced), color = Ios5Colors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))

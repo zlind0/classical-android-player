@@ -1782,7 +1782,7 @@ internal fun EbookTocPage(
             }
         }
         Column(Modifier.fillMaxSize()) {
-            Ios5NavBar(title = "目录", onBack = onBack)
+            Ios5NavBar(title = "目录", onBack = onBack, backLabel = "阅读")
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),

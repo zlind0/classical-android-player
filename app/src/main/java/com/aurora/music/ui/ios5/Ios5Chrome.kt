@@ -13,6 +13,8 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -23,6 +25,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -35,9 +38,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.GridView
@@ -50,6 +53,7 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
@@ -67,24 +71,34 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.aurora.music.navigation.LocalNavEntryScope
+import kotlin.math.roundToInt
 import kotlin.random.Random
 import com.aurora.music.ui.components.LocalRemoteAvailable
 import com.aurora.music.model.Song
@@ -101,10 +115,11 @@ fun Ios5Backdrop(content: @Composable () -> Unit) {
     Box(Modifier.fillMaxSize().background(Ios5Colors.linenBrush)) { content() }
 }
 
-// 横向合并顶栏的上报通道：NavHost 内的页面把自己的栏信息交出来，App 拼整条栏。
+// 横向合并顶栏的上报通道：主区页面的 Ios5NavBar 把标题/返回/搜索交出来，App 拼整条栏。
 data class TopBarSpec(
     val title: String,
     val onBack: (() -> Unit)? = null,
+    val backLabel: String? = null,
     val onSearch: (() -> Unit)? = null,
     val actionLabel: String? = null,
     val onAction: (() -> Unit)? = null,
@@ -117,103 +132,363 @@ class TopBarHost {
 val LocalTopBarHost = compositionLocalOf<TopBarHost?> { null }
 
 /**
- * Brushed-metal navigation bar (PSD "bar top", 44pt). Centered title, optional
- * back / search keys and a right-side text action.
+ * Brushed-metal navigation bar (PSD "bar top", 44pt). Centered title, pointed
+ * iOS5 back button carrying the previous screen's title, and right-side bar keys.
  */
 @Composable
 fun Ios5NavBar(
     title: String,
     onBack: (() -> Unit)? = null,
+    backLabel: String? = null,
     onSearch: (() -> Unit)? = null,
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
+    val entryScope = LocalNavEntryScope.current
+    if (entryScope != null && backLabel == null) {
+        LaunchedEffect(title, entryScope.entryId) {
+            entryScope.onTitleChanged(title)
+        }
+    }
+    val resolvedBackLabel = backLabel
+        ?: entryScope?.previousTitle?.takeIf { it.isNotBlank() }
+        ?: "返回"
+
     // 横向合并模式：自己不上栏，把标题/返回/搜索上报给 App 顶整条栏统一渲染
     val host = LocalTopBarHost.current
     if (host != null) {
-        SideEffect { host.spec = TopBarSpec(title, onBack, onSearch, actionLabel, onAction) }
+        SideEffect {
+            host.spec = TopBarSpec(title, onBack, resolvedBackLabel, onSearch, actionLabel, onAction)
+        }
         return
     }
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    Column(
-        Modifier.fillMaxWidth()
-            .background(Ios5Colors.barBrush)
-            .padding(top = topInset),
-    ) {
+    val density = LocalDensity.current
+    val titleShadowY = with(density) { -1.dp.toPx() }
+    Column(Modifier.fillMaxWidth()) {
         Box(
-            Modifier.fillMaxWidth().height(Ios5Dimens.NavHeight).padding(horizontal = 8.dp),
-            contentAlignment = Alignment.Center,
+            Modifier.fillMaxWidth()
+                .drawBehind {
+                    val navH = Ios5Dimens.NavHeight.toPx()
+                    val navTop = (size.height - navH).coerceAtLeast(0f)
+                    val splitFrac = ((navTop + navH * 0.50f) / size.height).coerceIn(0.05f, 0.95f)
+                    val splitBefore = (splitFrac - 0.005f).coerceAtLeast(0f)
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            0f to Ios5Colors.BarTop,
+                            splitBefore to Ios5Colors.BarUpper,
+                            splitFrac to Ios5Colors.BarLower,
+                            1f to Ios5Colors.BarBottom,
+                        ),
+                    )
+                }
+                .padding(top = topInset)
+                .height(Ios5Dimens.NavHeight),
         ) {
-            // Title is always centered on the bar (iOS5), independent of side keys.
-            Text(
-                title,
-                color = Color.White,
-                fontSize = Ios5Type.NavTitle,
-                fontWeight = FontWeight.Bold,
-                fontFamily = Ios5Sans,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                style = androidx.compose.ui.text.TextStyle(
-                    shadow = androidx.compose.ui.graphics.Shadow(
-                        color = Color.Black.copy(alpha = 0.4f),
-                        offset = Offset(0f, 1f),
-                    ),
-                ),
-                modifier = Modifier.align(Alignment.Center).padding(horizontal = 52.dp),
-            )
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                if (onBack != null) {
-                    Ios5BarKey(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBackIos, "返回", tint = Color.White, modifier = Modifier.size(13.dp))
-                    }
-                }
-                Spacer(Modifier.weight(1f))
-                if (actionLabel != null && onAction != null) {
-                    Ios5BarKey(onClick = onAction) {
-                        Text(
-                            actionLabel,
-                            color = Color.White,
-                            fontSize = Ios5Type.BarButton,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = Ios5Sans,
-                            maxLines = 1,
-                            style = androidx.compose.ui.text.TextStyle(
-                                shadow = androidx.compose.ui.graphics.Shadow(
-                                    color = Color.Black.copy(alpha = 0.6f),
-                                    offset = Offset(0f, 1f),
-                                ),
+            Ios5NavBarLayout(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 6.dp),
+                left = if (onBack != null) ({
+                    Ios5BackButton(label = resolvedBackLabel, onClick = onBack)
+                }) else null,
+                title = {
+                    Text(
+                        title,
+                        color = Color.White,
+                        fontSize = Ios5Type.NavTitle,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = Ios5Sans,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        style = TextStyle(
+                            shadow = Shadow(
+                                color = Color.Black.copy(alpha = 0.40f),
+                                offset = Offset(0f, titleShadowY),
                             ),
-                        )
+                        ),
+                    )
+                },
+                right = if ((actionLabel != null && onAction != null) || onSearch != null) ({
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (actionLabel != null && onAction != null) {
+                            Ios5BarKey(onClick = onAction) {
+                                Ios5BarButtonText(actionLabel)
+                            }
+                        }
+                        if (onSearch != null) {
+                            if (actionLabel != null && onAction != null) Spacer(Modifier.width(6.dp))
+                            Ios5BarKey(onClick = onSearch, horizontalPadding = 8.dp) {
+                                Icon(Icons.Filled.Search, "搜索", tint = Color.White, modifier = Modifier.size(16.dp))
+                            }
+                        }
                     }
-                }
-                if (onSearch != null) {
-                    if (actionLabel != null && onAction != null) Spacer(Modifier.width(6.dp))
-                    Ios5BarKey(onClick = onSearch) {
-                        Icon(Icons.Filled.Search, "搜索", tint = Color.White, modifier = Modifier.size(18.dp))
-                    }
-                }
-            }
+                }) else null,
+            )
         }
-        // 1px dark bottom keyline
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0xFF3B4553)))
+        // 1dp dark bottom keyline (PSD layer 535)
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Ios5Colors.BarBottomShadow))
     }
 }
 
-/** Grey-blue glossy key used for back / search / action in the bar. */
+/**
+ * iOS5 导航栏三段式布局：标题优先绝对居中，同时受左右按钮宽度挤压而不重叠。
+ */
 @Composable
-fun Ios5BarKey(onClick: () -> Unit, content: @Composable RowScope.() -> Unit) {
-    Row(
-        Modifier.height(Ios5Dimens.BarButtonHeight)
-            .clip(RoundedCornerShape(Ios5Dimens.CornerButton))
-            .background(Ios5Colors.barButtonBrush)
-            .border(1.dp, Color(0xFF3F4A5B), RoundedCornerShape(Ios5Dimens.CornerButton))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
-        content = content,
+fun Ios5NavBarLayout(
+    modifier: Modifier = Modifier,
+    left: (@Composable () -> Unit)?,
+    title: @Composable () -> Unit,
+    right: (@Composable () -> Unit)?,
+) {
+    val gapPx = with(LocalDensity.current) { 6.dp.roundToPx() }
+    val minSidePx = with(LocalDensity.current) { 56.dp.roundToPx() }
+    Layout(
+        modifier = modifier,
+        content = {
+            if (left != null) Box(Modifier.layoutId("left")) { left() }
+            Box(Modifier.layoutId("title")) { title() }
+            if (right != null) Box(Modifier.layoutId("right")) { right() }
+        },
+    ) { measurables, constraints ->
+        val barW = constraints.maxWidth
+        val barH = constraints.maxHeight
+        val maxSide = (barW * 0.36f).roundToInt().coerceAtLeast(minSidePx).coerceAtMost(barW)
+        val sideConstraints = Constraints(maxWidth = maxSide, maxHeight = barH)
+
+        val leftPlaceable = measurables.firstOrNull { it.layoutId == "left" }?.measure(sideConstraints)
+        val rightPlaceable = measurables.firstOrNull { it.layoutId == "right" }?.measure(sideConstraints)
+        val leftUsed = if (leftPlaceable != null) leftPlaceable.width + gapPx else 0
+        val rightUsed = if (rightPlaceable != null) rightPlaceable.width + gapPx else 0
+
+        val titleMaxW = (barW - leftUsed - rightUsed).coerceAtLeast(0)
+        val titlePlaceable = measurables.first { it.layoutId == "title" }
+            .measure(Constraints(maxWidth = titleMaxW, maxHeight = barH))
+
+        layout(barW, barH) {
+            leftPlaceable?.placeRelative(0, (barH - leftPlaceable.height) / 2)
+            rightPlaceable?.placeRelative(barW - rightPlaceable.width, (barH - rightPlaceable.height) / 2)
+
+            val desiredX = (barW - titlePlaceable.width) / 2
+            val minX = leftUsed
+            val maxX = (barW - rightUsed - titlePlaceable.width).coerceAtLeast(minX)
+            val titleX = desiredX.coerceIn(minX, maxX)
+            titlePlaceable.placeRelative(titleX, (barH - titlePlaceable.height) / 2)
+        }
+    }
+}
+
+@Composable
+fun Ios5BarButtonText(text: String) {
+    val shadowY = with(LocalDensity.current) { -0.5.dp.toPx() }
+    Text(
+        text,
+        color = Color.White,
+        fontSize = Ios5Type.BarButton,
+        fontWeight = FontWeight.Bold,
+        fontFamily = Ios5Sans,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        style = TextStyle(
+            shadow = Shadow(
+                color = Color.Black.copy(alpha = 0.60f),
+                offset = Offset(0f, shadowY),
+            ),
+        ),
     )
+}
+
+private data class BarButtonPalette(
+    val fill: Brush,
+    val border: Brush,
+    val highlightAlpha: Float,
+)
+
+private fun barButtonPalette(dark: Boolean, pressed: Boolean): BarButtonPalette = when {
+    dark && pressed -> BarButtonPalette(
+        fill = Ios5Colors.barButtonDarkPressedBrush,
+        border = Ios5Colors.barButtonDarkBorderBrush,
+        highlightAlpha = 0.16f,
+    )
+    dark -> BarButtonPalette(
+        fill = Ios5Colors.barButtonDarkBrush,
+        border = Ios5Colors.barButtonDarkBorderBrush,
+        highlightAlpha = 0.22f,
+    )
+    pressed -> BarButtonPalette(
+        fill = Ios5Colors.barButtonPressedBrush,
+        border = Ios5Colors.barButtonBorderBrush,
+        highlightAlpha = 0.35f,
+    )
+    else -> BarButtonPalette(
+        fill = Ios5Colors.barButtonBrush,
+        border = Ios5Colors.barButtonBorderBrush,
+        highlightAlpha = 0.48f,
+    )
+}
+
+/**
+ * PSD Layer 545 箭头返回按钮矢量轮廓：
+ * 左侧尖角宽约 25.09px@2x，右侧圆角 R5（10px@2x），形体高度 58.03px@2x（29dp）。
+ */
+private fun buildIos5BackPath(width: Float, height: Float): Path {
+    val s = height / 58.03f
+    val r = (10f * s).coerceAtMost(width * 0.4f)
+    val startX = (25.09f * s).coerceAtMost(width - r)
+    val endFlatX = (25.26f * s).coerceAtMost(width - r)
+    return Path().apply {
+        moveTo(startX, 0f)
+        lineTo(width - r, 0f)
+        cubicTo(width - r + 5.52f * s, 0f, width, 4.48f * s, width, r)
+        lineTo(width, height - r)
+        cubicTo(width, height - r + 5.53f * s, width - r + 5.52f * s, height, width - r, height)
+        lineTo(endFlatX, height)
+        cubicTo(
+            (23.76f * s).coerceAtMost(endFlatX),
+            height,
+            (21.43f * s).coerceAtMost(endFlatX),
+            height - 1.31f * s,
+            (17.10f * s).coerceAtMost(endFlatX),
+            height - 6.33f * s,
+        )
+        lineTo(0f, height * 0.5f)
+        lineTo((15.26f * s).coerceAtMost(startX), 8.33f * s)
+        cubicTo(
+            (20.93f * s).coerceAtMost(startX),
+            0.65f * s,
+            (23.93f * s).coerceAtMost(startX),
+            0f,
+            startX,
+            0f,
+        )
+        close()
+    }
+}
+
+private val Ios5BackButtonShape = GenericShape { size, _ ->
+    addPath(buildIos5BackPath(size.width, size.height))
+}
+
+/**
+ * PSD 1:1 复刻的 iOS5 尖角返回按钮：含底部白高光外描、4 段蓝灰光泽渐变、顶部/斜边内阴影及内边框。
+ */
+@Composable
+fun Ios5BackButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    dark: Boolean = false,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val palette = barButtonPalette(dark = dark, pressed = pressed)
+    Box(
+        modifier = modifier
+            .height(Ios5Dimens.BarButtonOuterHeight)
+            .defaultMinSize(minWidth = 50.dp)
+            .drawBehind {
+                val shapeH = (size.height - 1.dp.toPx()).coerceAtLeast(1f)
+                val path = buildIos5BackPath(size.width, shapeH)
+                val highlightY = 0.75.dp.toPx()
+                translate(top = highlightY) {
+                    drawPath(path, Color.White.copy(alpha = palette.highlightAlpha))
+                }
+                clipPath(path) {
+                    drawRect(brush = palette.fill, size = Size(size.width, shapeH))
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            0f to Color.Black.copy(alpha = 0.40f),
+                            0.11f to Color.Black.copy(alpha = 0.10f),
+                            0.22f to Color.Transparent,
+                            startY = 0f,
+                            endY = shapeH,
+                        ),
+                        size = Size(size.width, shapeH),
+                    )
+                    translate(top = 1.dp.toPx()) {
+                        drawPath(
+                            path = path,
+                            color = Color.Black.copy(alpha = 0.35f),
+                            style = Stroke(width = 1.5.dp.toPx()),
+                        )
+                    }
+                    drawPath(
+                        path = path,
+                        brush = palette.border,
+                        style = Stroke(width = 1.8.dp.toPx()),
+                    )
+                }
+            },
+        contentAlignment = Alignment.TopStart,
+    ) {
+        Box(
+            Modifier.height(Ios5Dimens.BarButtonHeight)
+                .defaultMinSize(minWidth = 50.dp)
+                .clip(Ios5BackButtonShape)
+                .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+                .padding(start = 15.dp, end = 9.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Ios5BarButtonText(label)
+        }
+    }
+}
+
+/** Grey-blue glossy key used for search / action in the bar (PSD Layer 541). */
+@Composable
+fun Ios5BarKey(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    dark: Boolean = false,
+    horizontalPadding: Dp = 10.dp,
+    content: @Composable RowScope.() -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val palette = barButtonPalette(dark = dark, pressed = pressed)
+    val shape = RoundedCornerShape(Ios5Dimens.CornerButton)
+    Box(
+        modifier = modifier
+            .height(Ios5Dimens.BarButtonOuterHeight)
+            .drawBehind {
+                val shapeH = (size.height - 1.dp.toPx()).coerceAtLeast(1f)
+                val r = Ios5Dimens.CornerButton.toPx()
+                val path = Path().apply {
+                    addRoundRect(RoundRect(0f, 0f, size.width, shapeH, CornerRadius(r, r)))
+                }
+                translate(top = 0.75.dp.toPx()) {
+                    drawPath(path, Color.White.copy(alpha = palette.highlightAlpha))
+                }
+                clipPath(path) {
+                    drawRect(brush = palette.fill, size = Size(size.width, shapeH))
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            0f to Color.Black.copy(alpha = 0.40f),
+                            0.11f to Color.Black.copy(alpha = 0.10f),
+                            0.22f to Color.Transparent,
+                            startY = 0f,
+                            endY = shapeH,
+                        ),
+                        size = Size(size.width, shapeH),
+                    )
+                    drawPath(
+                        path = path,
+                        brush = palette.border,
+                        style = Stroke(width = 1.8.dp.toPx()),
+                    )
+                }
+            },
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Row(
+            Modifier.height(Ios5Dimens.BarButtonHeight)
+                .clip(shape)
+                .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+                .padding(horizontal = horizontalPadding),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+            content = content,
+        )
+    }
 }
 
 private val tabIcons: Map<String, ImageVector> = mapOf(

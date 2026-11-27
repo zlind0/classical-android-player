@@ -33,8 +33,6 @@ import com.aurora.music.ui.ios5.ios5Rows
 import com.aurora.music.ui.ios5.ios5Section
 import kotlinx.coroutines.launch
 
-private const val MODEL_GROUP_EXPAND_KEY = "settings_intro_model_expand"
-
 /**
  * 歌曲介绍的模型选择页。
  *
@@ -58,13 +56,7 @@ fun SongIntroModelScreen(
     var models by remember { mutableStateOf<List<String>?>(null) }
     var fetching by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
-    var expandedGroups by remember {
-        mutableStateOf(container.uiState.expandedOf(MODEL_GROUP_EXPAND_KEY).toList())
-    }
-
-    LaunchedEffect(expandedGroups) {
-        container.uiState.saveExpanded(MODEL_GROUP_EXPAND_KEY, expandedGroups.toSet())
-    }
+    var expandedGroups by com.aurora.music.ui.rememberEntryExpandedState("model_groups")
 
     suspend fun load(showToast: Boolean) {
         if (fetching) return
@@ -216,7 +208,7 @@ private sealed interface ModelRow {
  * OpenRouter 等端点的模型 ID 形如 `vendor/model`。以第一个 `/` 前的前缀
  * 作为资源管理器式的分组；没有 `/` 的模型保持平铺在最前面。
  */
-private fun buildModelRows(models: List<String>, expandedGroups: List<String>): List<ModelRow> {
+private fun buildModelRows(models: List<String>, expandedGroups: Set<String>): List<ModelRow> {
     val grouped = models.filter { it.contains('/') }
         .groupBy { it.substringBefore('/') }
         .toSortedMap()

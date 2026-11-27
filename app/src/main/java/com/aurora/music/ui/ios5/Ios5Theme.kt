@@ -38,6 +38,7 @@ object Ios5Colors {
     val BarUpper = Color(0xFF899BB2)
     val BarLower = Color(0xFF7F94B0)
     val BarBottom = Color(0xFF6E84A1)
+    val BarBottomShadow = Color(0xFF2D3642)
 
     // ---- grey gradient toolbars (search bar 644x91, segmented bar 644x91) ----
     val GreyBarTop = Color(0xFFE0E4E6)
@@ -156,8 +157,8 @@ object Ios5Colors {
 
     val barBrush = Brush.verticalGradient(
         0f to BarTop,
-        0.49f to BarUpper,
-        0.515f to BarLower,
+        0.495f to BarUpper,
+        0.50f to BarLower,
         1f to BarBottom,
     )
 
@@ -173,9 +174,37 @@ object Ios5Colors {
 
     val barButtonBrush = Brush.verticalGradient(
         0f to BarBtnTop,
-        0.505f to BarBtnMid,
-        0.515f to Color(0xFF486A9A),
+        0.488f to BarBtnMid,
+        0.505f to Color(0xFF486A9A),
         1f to BarBtnBottom,
+    )
+    val barButtonPressedBrush = Brush.verticalGradient(
+        0f to Color(0xFF6A82A3),
+        0.488f to Color(0xFF405D87),
+        0.505f to Color(0xFF33517D),
+        1f to Color(0xFF36547F),
+    )
+    val barButtonBorderBrush = Brush.verticalGradient(
+        0f to Color(0xFF30363E),
+        0.31f to Color(0xFF375075),
+        1f to Color(0xFF375075),
+    )
+    val barButtonDarkBrush = Brush.verticalGradient(
+        0f to Color(0xFF6A6F76),
+        0.488f to Color(0xFF2B2F35),
+        0.505f to Color(0xFF1A1D22),
+        1f to Color(0xFF24282E),
+    )
+    val barButtonDarkPressedBrush = Brush.verticalGradient(
+        0f to Color(0xFF4F545A),
+        0.488f to Color(0xFF1F2328),
+        0.505f to Color(0xFF121519),
+        1f to Color(0xFF1A1D22),
+    )
+    val barButtonDarkBorderBrush = Brush.verticalGradient(
+        0f to Color(0xFF0E1013),
+        0.31f to Color(0xFF1F2329),
+        1f to Color(0xFF1F2329),
     )
     val buttonBlueBrush = Brush.verticalGradient(
         0f to BtnBlueTop,
@@ -286,7 +315,8 @@ object Ios5Dimens {
     // bars
     val NavHeight = 44.dp
     val TabHeight = 49.dp
-    val BarButtonHeight = 30.dp
+    val BarButtonHeight = 29.dp
+    val BarButtonOuterHeight = 30.dp
 
     // rows
     val CellHeight = 44.dp

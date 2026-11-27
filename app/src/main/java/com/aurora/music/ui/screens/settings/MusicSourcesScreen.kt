@@ -107,6 +107,7 @@ fun MusicSourcesScreen(
         FolderPickerScreen(
             contentPadding = contentPadding,
             onBack = { picking = false },
+            backLabel = stringResource(R.string.sources_title),
             onPicked = { path, name, type ->
                 scope.launch {
                     val added = container.musicRoots.addRoot(path, name, type)

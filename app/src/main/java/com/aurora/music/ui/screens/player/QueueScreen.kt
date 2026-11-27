@@ -94,7 +94,7 @@ fun QueueScreen(
     val strClear = stringResource(R.string.queue_clear)
 
     Column(Modifier.fillMaxSize()) {
-        Ios5NavBar(title = strTitle, onBack = onClose)
+        Ios5NavBar(title = strTitle, onBack = onClose, backLabel = "正在播放")
         LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().weight(1f)) {
             item {
                 Ios5Group(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {

@@ -162,16 +162,18 @@ fun RemoteEbookLibraryScreen(
     val history = remember(randomHistory, deviceId, rootKey) {
         randomHistory["$deviceId|$rootKey"].orEmpty()
     }
-    var openedHistoryAt by rememberSaveable(deviceId, rootKey) { mutableStateOf(0L) }
+    var openedHistoryAt by com.aurora.music.ui.rememberEntryLongState("history_at")
     val historyBatch = history.firstOrNull { it.createdAt == openedHistoryAt }
     BackHandler(enabled = historyBatch != null) { openedHistoryAt = 0L }
 
+    val libTitle = title.ifBlank { root?.displayName ?: "电子书" }
     Column(Modifier.fillMaxSize()) {
         Ios5NavBar(
             title = when {
                 historyBatch != null -> "历史随机 · ${randomTimeLabel(historyBatch.createdAt)}"
-                else -> title.ifBlank { root?.displayName ?: "电子书" }
+                else -> libTitle
             },
+            backLabel = if (historyBatch != null) libTitle else null,
             onBack = {
                 if (historyBatch != null) openedHistoryAt = 0L else onBack()
             },
@@ -218,9 +220,9 @@ fun RemoteEbookLibraryScreen(
         val randomState = randomStates["$deviceId|$rootKey"]
         val count = randomState?.count ?: 20
 
-        var query by rememberSaveable(deviceId, rootKey) { mutableStateOf("") }
-        var searchSeed by rememberSaveable(deviceId, rootKey) { mutableIntStateOf(0) }
-        var searchExpanded by rememberSaveable(deviceId, rootKey) { mutableStateOf(false) }
+        var query by com.aurora.music.ui.rememberEntryStringState("query")
+        var searchSeed by com.aurora.music.ui.rememberEntryIntState("search_seed")
+        var searchExpanded by com.aurora.music.ui.rememberEntryBooleanState("search_expanded")
         var remoteSearchResults by remember(deviceId, rootKey) {
             mutableStateOf<List<RemoteEbookEntry>>(emptyList())
         }

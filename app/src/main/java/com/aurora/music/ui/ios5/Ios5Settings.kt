@@ -59,12 +59,14 @@ import androidx.compose.ui.unit.sp
 fun Ios5SettingsPage(
     title: String,
     onBack: () -> Unit,
+    backLabel: String? = null,
     content: LazyListScope.() -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
-        Ios5NavBar(title = title, onBack = onBack)
+        Ios5NavBar(title = title, onBack = onBack, backLabel = backLabel)
         LazyColumn(
-            Modifier.fillMaxSize(),
+            state = com.aurora.music.ui.rememberPersistentLazyListState("settings_page"),
+            modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 24.dp),
             content = content,
         )

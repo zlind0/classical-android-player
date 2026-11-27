@@ -309,6 +309,7 @@ fun StorageSettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit) {
         FolderPickerScreen(
             contentPadding = contentPadding,
             onBack = { pickingModelFolder = false },
+            backLabel = strTitle,
             onPicked = { path, name, _ ->
                 pickingModelFolder = false
                 val dir = File(path)

@@ -84,6 +84,7 @@ fun AudiobookSourcesScreen(
         FolderPickerScreen(
             contentPadding = contentPadding,
             onBack = { picking = false },
+            backLabel = "有声书来源",
             onPicked = { path, name, type ->
                 scope.launch {
                     val added = container.audiobookStore.addRoot(path, name, type)

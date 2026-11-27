@@ -393,7 +393,7 @@ private fun CastSelectionPage(
     }
     val nearby = devices.filter { it.kind == com.aurora.music.data.cast.CastDeviceKind.APP }
     Column(Modifier.fillMaxSize().background(Ios5Colors.linenBrush)) {
-        Ios5NavBar(title = "投屏", onBack = onBack)
+        Ios5NavBar(title = "投屏", onBack = onBack, backLabel = "阅读")
         Column(
             Modifier.fillMaxSize()
                 .windowInsetsPadding(WindowInsets.navigationBars)

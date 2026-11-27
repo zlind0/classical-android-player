@@ -84,6 +84,7 @@ fun EbookSourcesScreen(
         FolderPickerScreen(
             contentPadding = contentPadding,
             onBack = { picking = false },
+            backLabel = "电子书来源",
             onPicked = { path, name, type ->
                 scope.launch {
                     val added = container.ebookStore.addRoot(path, name, type)

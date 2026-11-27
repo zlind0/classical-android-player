@@ -1,6 +1,7 @@
 package com.aurora.music.ui.ios5
 
 import android.app.Activity
+import android.app.Application
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
@@ -35,7 +37,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
@@ -52,6 +53,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,18 +74,18 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.NavGraph.Companion.findStartDestination
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
-import androidx.navigation.compose.rememberNavController
 import com.aurora.music.AuroraApplication
 import com.aurora.music.R
 import com.aurora.music.navigation.Ios5Routes
-import com.aurora.music.navigation.filledRoute
+import com.aurora.music.navigation.Ios5TabNavViewModel
+import com.aurora.music.navigation.Ios5TabNavigator
+import com.aurora.music.navigation.LocalNavEntryScope
+import com.aurora.music.navigation.NavEntryScope
 import com.aurora.music.navigation.ios5TabRoutes
 import com.aurora.music.navigation.ios5Tabs
+import com.aurora.music.navigation.parseIos5Route
 import com.aurora.music.ui.browse.Ios5AlbumsBrowse
 import com.aurora.music.ui.browse.Ios5Detail
 import com.aurora.music.ui.browse.Ios5FolderLevel
@@ -118,16 +120,29 @@ import kotlinx.coroutines.launch
 @Composable
 fun Ios5App() {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val container = (context.applicationContext as AuroraApplication).container
+    val app = context.applicationContext as Application
+    val container = (app as AuroraApplication).container
 
-    val navController = rememberNavController()
+    val navVm: Ios5TabNavViewModel = viewModel()
+    val saveableStateHolder = rememberSaveableStateHolder()
+    val tabNav = remember(container.uiState, navVm, saveableStateHolder) {
+        Ios5TabNavigator(container.uiState, navVm, saveableStateHolder)
+    }
 
-    // 阅读器是覆盖在当前页面之上的全屏层，不占 NavHost 返回栈：
+    // 阅读器是覆盖在当前页面之上的全屏层，不占 Tab 返回栈：
     // 这样打开/返回时底层页面（书库、随机列表、滚动位置）始终留在组合里，
     // 淡出阅读器时直接露出原来的 UI，不会先退回空白再重新加载，闪两下。
-    var readerPath by rememberSaveable { mutableStateOf<String?>(null) }
+    // 从外部“打开方式”直接进来的书优先：别先把旧阅读页恢复出来再叠一层。
+    val initialSavedReader = remember {
+        if (container.ebookStore.openRequest.value == null) {
+            container.uiState.readerPath().takeIf { it.isNotBlank() }
+        } else {
+            null
+        }
+    }
+    var readerPath by rememberSaveable { mutableStateOf<String?>(initialSavedReader) }
     // 关闭时 readerPath 立刻变 null，但淡出动画还要用最后一次的路径，故单独留一份。
-    var lastReaderPath by rememberSaveable { mutableStateOf("") }
+    var lastReaderPath by rememberSaveable { mutableStateOf(initialSavedReader.orEmpty()) }
     // 随机阅读也是全屏覆盖层：设备/书库固定，池子由服务端与本地缓存恢复。
     var feedReaderOpen by rememberSaveable { mutableStateOf(false) }
     var feedDeviceId by rememberSaveable { mutableStateOf("") }
@@ -263,8 +278,10 @@ fun Ios5App() {
     var remoteBrowsing by rememberSaveable {
         mutableStateOf(
             container.uiState.remoteBrowsing() ||
-                container.uiState.navRoutes().any {
-                    it.startsWith("ios5_remote_group") || it.startsWith("ios5_remote_ebook_lib")
+                container.uiState.tabStacks().values.flatten().any {
+                    it.route.startsWith("ios5_remote_group") ||
+                        it.route.startsWith("ios5_remote_ebook_lib") ||
+                        it.route.startsWith("ios5_video_browse")
                 },
         )
     }
@@ -386,8 +403,7 @@ fun Ios5App() {
         }
     }
 
-    val backStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = backStackEntry?.destination?.route
+    val currentRoute = tabNav.currentRoute
 
     // 远端浏览会话内展示完整缓存（离线条目灰色不可点）；回到任意 Tab 顶层立即隐藏离线内容。
     val showUnavailableRemote = remoteBrowsing && currentRoute !in ios5TabRoutes
@@ -409,87 +425,20 @@ fun Ios5App() {
             visibleRemoteAbookRecents
         }
     }
-    // 冷启动恢复到退出前的返回栈（滑掉任务/被系统杀进程时 savedInstanceState 不一定存在）
-    var navRestored by rememberSaveable { mutableStateOf(false) }
-    var lastTab by rememberSaveable {
-        mutableStateOf(container.uiState.lastTab().ifBlank { Ios5Routes.HOME })
-    }
-    val initialNavRoutes = remember { container.uiState.navRoutes() }
-    // 当前所在 Tab（由返回栈推出），用于“再点同一个 Tab 回到根页”和详情页的高亮。
-    // 初值优先从保存的返回栈推，避免冷启动先亮首页再跳。
-    var currentTab by remember {
-        mutableStateOf(
-            initialNavRoutes.lastOrNull { it in ios5TabRoutes }
-                ?: container.uiState.lastTab().ifBlank { Ios5Routes.HOME },
-        )
-    }
-    LaunchedEffect(currentRoute, navRestored) {
-        if (navRestored) {
-            when {
-                currentRoute in ios5TabRoutes -> remoteBrowsing = false
-                currentRoute?.startsWith("ios5_remote_group") == true ||
-                    currentRoute?.startsWith("ios5_remote_ebook_lib") == true -> remoteBrowsing = true
-            }
+    LaunchedEffect(currentRoute) {
+        when {
+            currentRoute in ios5TabRoutes -> remoteBrowsing = false
+            currentRoute.startsWith("ios5_remote_group") ||
+                currentRoute.startsWith("ios5_remote_ebook_lib") ||
+                currentRoute.startsWith("ios5_video_browse") -> remoteBrowsing = true
         }
-        if (navRestored && currentRoute in ios5TabRoutes) lastTab = currentRoute ?: Ios5Routes.HOME
     }
-    LaunchedEffect(lastTab) { container.uiState.saveLastTab(lastTab) }
-    // 高亮跟着“当前页属于哪个 Tab”走：在艺人 Tab 的专辑详情上也要亮艺人，
-    // 所以详情页用 currentTab（从返回栈推出来的），不能用只在 Tab 根页更新的 lastTab
-    val tabHighlight = if (currentRoute in ios5TabRoutes) currentRoute else currentTab
+    val tabHighlight = tabNav.activeTab
     // 阅读器全屏独占：不带 tab/mini 条，不参与翻转动画
     val isEbookReader = readerPath != null || feedReaderOpen
-    // 是否真的有要重放的返回栈（只有首页时不用盖加载圈）
-    val hasNavToRestore = remember(initialNavRoutes) {
-        initialNavRoutes.size > 1 || initialNavRoutes.firstOrNull()?.let { it != Ios5Routes.HOME } == true
-    }
-    LaunchedEffect(navController) {
-        if (!navRestored) {
-            // 从外部“打开方式”直接进来的书优先：别先把旧阅读页恢复出来再叠一层
-            if (container.ebookStore.openRequest.value != null) {
-                navRestored = true
-                return@LaunchedEffect
-            }
-            // 旧版本把阅读器当成普通路由压进返回栈；现在阅读器是覆盖层，
-            // 恢复时把它从导航栈里摘出来，改为冷启动后直接盖在原来的页面上。
-            val legacyReaderPath = initialNavRoutes.lastOrNull { it.startsWith("ebook_reader") }
-                ?.let { runCatching { Uri.parse(it).getQueryParameter("epath") }.getOrNull() }
-                ?.takeIf { it.isNotBlank() }
-            val saved = initialNavRoutes.filterNot { it.startsWith("ebook_reader") }
-            if (saved.isNotEmpty()) {
-                val tab = saved.first()
-                // 首页是 NavHost 起点；恢复的 Tab 不是首页时先补上它。
-                // 故意把首页留在栈底：Tab 切换靠 popUpTo(首页){saveState} 兜底，
-                // 栈底没有首页的话连续切 Tab 会把旧 Tab 越攒越多。
-                if (tab in ios5TabRoutes && tab != Ios5Routes.HOME) {
-                    runCatching { navController.navigate(tab) { launchSingleTop = true } }
-                }
-                saved.drop(1).forEach { route ->
-                    runCatching { navController.navigate(route) { launchSingleTop = true } }
-                }
-            }
-            if (!feedReaderOpen) {
-                legacyReaderPath?.let { openReader(it) }
-                    ?: container.uiState.readerPath().takeIf { it.isNotBlank() }?.let { openReader(it) }
-            }
-            navRestored = true
-        }
-    }
-    // 阅读器不在 NavHost 返回栈里，单独把“上次读到哪本书”落盘，冷启动才能恢复。
-    LaunchedEffect(readerPath, navRestored) {
-        if (navRestored && !feedReaderOpen) container.uiState.saveReaderPath(readerPath.orEmpty())
-    }
-    // 每次导航都记下完整返回栈（含参数），下次冷启动原样重建
-    LaunchedEffect(navController, navRestored) {
-        if (!navRestored) return@LaunchedEffect
-        navController.currentBackStack.collect { entries ->
-            val routes = entries.mapNotNull { it.filledRoute() }
-            if (routes.isNotEmpty()) container.uiState.saveNav(routes)
-            // 当前所在 Tab = 返回栈里最靠上的那个 Tab 页（详情页归它管）。
-            // 注意必须取最后一个：首页永远是栈底，取第一个会永远得到“首页”。
-            routes.lastOrNull { it in ios5TabRoutes }?.let { currentTab = it }
-            android.util.Log.i("AuroraNav", "stack=$routes tab=$currentTab last=$lastTab")
-        }
+    // 阅读器不在 Tab 返回栈里，单独把“上次读到哪本书”落盘，冷启动才能恢复。
+    LaunchedEffect(readerPath) {
+        if (!feedReaderOpen) container.uiState.saveReaderPath(readerPath.orEmpty())
     }
     // 播放页是全屏翻转页，属于页面现场的一部分
     var expandedRestored by remember { mutableStateOf(false) }
@@ -514,8 +463,8 @@ fun Ios5App() {
         if (expandedRestored) container.uiState.savePlayerExpanded(playerState.expanded)
     }
     // 冷启动恢复队列后再把播放页翻回来（只做一次）
-    LaunchedEffect(playerState.hasTrack, navRestored) {
-        if (!expandedRestored && navRestored && playerState.hasTrack) {
+    LaunchedEffect(playerState.hasTrack) {
+        if (!expandedRestored && playerState.hasTrack) {
             expandedRestored = true
             if (container.uiState.playerExpanded()) playerVM.setExpanded(true)
         }
@@ -534,7 +483,7 @@ fun Ios5App() {
     }
 
     var showQueue by remember { mutableStateOf(false) }
-    // 短视频播放页：不占 NavHost 返回栈，只作为最上层浮层，关掉就露出原来的页面。
+    // 短视频播放页：不占 Tab 返回栈，只作为最上层浮层，关掉就露出原来的页面。
     val videoFeed by container.videoFeed.state.collectAsStateWithLifecycle()
     // 横屏有声书/接收页的气泡宿主：气泡必须盖住整屏，不能只盖右栏。
     var abookBubble by remember { mutableStateOf<com.aurora.music.ui.player.AbookBubble?>(null) }
@@ -544,31 +493,16 @@ fun Ios5App() {
         if (receivingCast) showQueue = false
     }
 
-    // 横向合并顶栏的上报宿主：NavHost 内页面的 Ios5NavBar 把标题/返回/搜索交到这里统一渲染
+    // 横向合并顶栏的上报宿主：主区页面的 Ios5NavBar 把标题/返回/搜索交到这里统一渲染
     val topBarHost = remember { TopBarHost() }
 
     fun navigateTopLevel(route: String) {
-        android.util.Log.i("AuroraNav", "tap $route cur=$currentRoute tab=$currentTab last=$lastTab")
         if (route in ios5TabRoutes) remoteBrowsing = false
-        if (currentRoute == route) return
-        container.haptic()
-        // 再点当前 Tab 的图标：回到这个 Tab 的根页（而不是把刚存下的详情页又还原回来）
-        if (currentTab == route && runCatching { navController.popBackStack(route, inclusive = false) }.getOrDefault(false)) {
-            android.util.Log.i("AuroraNav", "tap $route -> pop to root, stack=${navController.currentBackStack.value.map { it.destination.route }}")
-            return
-        }
-        // 每个 Tab 各留一份返回栈：切走时 saveState，切回来 restoreState
-        navController.navigate(route) {
-            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-            launchSingleTop = true
-            // 首页是 popUpTo 的目标：NavController 会把刚弹出的那个 Tab 栈映射到首页，
-            // 这时再对首页 restoreState，就会“还原”成原来的 Tab（点主页回不了主页）。
-            restoreState = route != Ios5Routes.HOME
-        }
-        android.util.Log.i("AuroraNav", "tap $route -> cur=${navController.currentBackStackEntry?.destination?.route} stack=${navController.currentBackStack.value.map { it.destination.route }}")
+        if (tabNav.activeTab != route || tabNav.canPop) container.haptic()
+        tabNav.selectTab(route)
     }
     fun openDetail(kind: String, id: String, title: String = "") =
-        navController.navigate(Ios5Routes.detail(kind, id, title))
+        tabNav.push(Ios5Routes.detail(kind, id, title), title)
     fun playCollection(kind: String, id: String) = scope.launch {
         container.repository.detail(kind, id)
             ?.let { if (it.tracks.isNotEmpty()) playerVM.playCollection(kind, id, it.tracks, 0, it.info.songCount) }
@@ -628,7 +562,7 @@ fun Ios5App() {
     ) {
         if (group.songs.isEmpty()) return
         remoteBrowsing = true
-        navController.navigate(
+        tabNav.push(
             Ios5Routes.remoteGroup(
                 device = lib.deviceId,
                 kind = "artist",
@@ -636,6 +570,7 @@ fun Ios5App() {
                 title = group.name,
                 subtitle = "${lib.deviceName} · 远程",
             ),
+            group.name,
         )
     }
 
@@ -645,7 +580,7 @@ fun Ios5App() {
     ) {
         if (album.songs.isEmpty()) return
         remoteBrowsing = true
-        navController.navigate(
+        tabNav.push(
             Ios5Routes.remoteGroup(
                 device = lib.deviceId,
                 kind = "album",
@@ -653,6 +588,7 @@ fun Ios5App() {
                 title = album.title,
                 subtitle = "${album.artist} · ${lib.deviceName} · 远程",
             ),
+            album.title,
         )
     }
 
@@ -762,704 +698,681 @@ fun Ios5App() {
                 Box(
                     Modifier.weight(1f).fillMaxWidth(),
                 ) {
-                    NavHost(
-                        navController = navController,
-                        startDestination = Ios5Routes.HOME,
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        composable(Ios5Routes.HOME) {
-                            val homeVM: HomeViewModel = viewModel()
-                            val homeState by homeVM.state.collectAsStateWithLifecycle()
-                            HomeTab(
-                                state = homeState,
-                                onOpenDetail = { k, i, t -> openDetail(k, i, t) },
-                                onPlaySongs = { songs, index -> playerVM.playAll(songs, index) },
-                                onOpenBook = { p -> openReader(p) },
-                                onPlayAudiobook = { playAudiobook(it) },
-                                onOpenExport = { p -> navController.navigate(Ios5Routes.ebookExport(p)) },
-                                remoteEbookRecents = visibleRemoteEbookRecents,
-                                remoteAbookRecents = visibleRemoteAbookRecents,
-                                onOpenRemoteBook = { openRemoteBook(it) },
-                                onPlayRemoteAudiobook = { playRemoteAudiobook(it) },
-                            )
-                        }
-                        composable(Ios5Routes.PLAYLISTS) {
-                            PlaylistsTab(
-                                playlists = browseState.playlists,
-                                smartCount = 0,
-                                onOpenDetail = { k, i, t -> openDetail(k, i, t) },
-                                onCreatePlaylist = { name ->
-                                    scope.launch {
-                                        container.repository.createPlaylist(name)
-                                        browseVM.load()
-                                    }
-                                },
-                                onOpenSearch = { navController.navigate(Ios5Routes.search("songs")) },
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.ARTISTS) {
-                            ArtistsTab(
-                                artists = browseState.artists,
-                                loading = browseState.loading,
-                                remote = browsingRemoteLibraries,
-                                onOpenDetail = { k, i, t -> openDetail(k, i, t) },
-                                onOpenRemoteArtist = { lib, g -> openRemoteArtist(lib, g) },
-                                onOpenSearch = { navController.navigate(Ios5Routes.search("artists")) },
-                            )
-                        }
-                        composable(Ios5Routes.EBOOKS) {
-                            EbooksTab(
-                                onOpenShelf = { navController.navigate(Ios5Routes.ebookLib(shelf = true, title = "默认书架")) },
-                                onOpenRoot = { id, dir, title ->
-                                    navController.navigate(
-                                        Ios5Routes.ebookLib(rootId = id, rootPath = dir, dir = dir, title = title),
-                                    )
-                                },
-                                onOpenBook = { p -> openReader(p) },
-                                onOpenSearch = { navController.navigate(Ios5Routes.EBOOK_SEARCH) },
-                                onOpenExport = { p -> navController.navigate(Ios5Routes.ebookExport(p)) },
-                                onStartRandomShelf = {
-                                    openLocalRandomReader(
-                                        key = "shelf",
-                                        shelf = true,
-                                        rootId = com.aurora.music.data.ebook.EBOOK_SHELF_ROOT_ID,
-                                        rootPath = "",
-                                        dirPath = "",
-                                    )
-                                },
-                                onStartRandomRoot = { id, dir, _ ->
-                                    openLocalRandomReader(
-                                        key = "root:$id",
-                                        shelf = false,
-                                        rootId = id,
-                                        rootPath = dir,
-                                        dirPath = "",
-                                    )
-                                },
-                                remoteLibraries = browsingRemoteLibraries,
-                                remoteRecents = browsingRemoteEbookRecents,
-                                onOpenRemoteBook = { openRemoteBook(it) },
-                                onStartRandomRemoteRoot = { deviceId, rootKey ->
-                                    openRandomReader(deviceId, rootKey)
-                                },
-                                onStartRandomRemotePool = { deviceId, rootKey, paths ->
-                                    openRemoteDirRandomReader(
-                                        deviceId,
-                                        rootKey,
-                                        key = "remote:$deviceId:$rootKey",
-                                        poolPaths = paths,
-                                    )
-                                },
-                                onOpenRemoteRoot = { deviceId, rootKey, rootTitle ->
-                                    remoteBrowsing = true
-                                    navController.navigate(
-                                        Ios5Routes.remoteEbookLib(deviceId, rootKey, title = rootTitle),
-                                    )
-                                },
-                            )
-                        }
-                        composable(Ios5Routes.AUDIOBOOKS) {
-                            AudiobooksTab(
-                                onPlayBook = { playAudiobook(it) },
-                                remoteLibraries = browsingRemoteLibraries,
-                                remoteRecents = browsingRemoteAbookRecents,
-                                onPlayRemoteBook = { playRemoteAudiobook(it) },
-                                player = playerState,
-                            )
-                        }
-                        composable(
-                            Ios5Routes.EBOOK_LIB,
-                            arguments = listOf(
-                                androidx.navigation.navArgument("shelf") { defaultValue = "false" },
-                                androidx.navigation.navArgument("rootId") { defaultValue = "0" },
-                                androidx.navigation.navArgument("rpath") { defaultValue = "" },
-                                androidx.navigation.navArgument("dir") { defaultValue = "" },
-                                androidx.navigation.navArgument("title") { defaultValue = "" },
+                    if (tabNav.canPop) {
+                        BackHandler { tabNav.pop() }
+                    }
+                    val entry = tabNav.currentEntry
+                    val parsed = remember(entry.route) { parseIos5Route(entry.route) }
+                    saveableStateHolder.SaveableStateProvider(entry.id) {
+                        CompositionLocalProvider(
+                            LocalViewModelStoreOwner provides navVm.ownerFor(entry.id, app),
+                            LocalNavEntryScope provides NavEntryScope(
+                                tabRoute = tabNav.activeTab,
+                                entryId = entry.id,
+                                previousTitle = tabNav.previousTitle,
+                                onTitleChanged = { tabNav.updateTitle(tabNav.activeTab, entry.id, it) },
                             ),
-                        ) { entry ->
-                            val shelf = entry.arguments?.getString("shelf") == "true"
-                            val rootId = entry.arguments?.getString("rootId")?.toLongOrNull() ?: 0L
-                            val rootPath = Uri.decode(entry.arguments?.getString("rpath").orEmpty())
-                            val dirArg = Uri.decode(entry.arguments?.getString("dir").orEmpty())
-                            val libTitle = Uri.decode(entry.arguments?.getString("title").orEmpty())
-                            com.aurora.music.ui.ebook.EbookLibraryScreen(
-                                isShelf = shelf,
-                                rootId = rootId,
-                                rootPath = rootPath.ifBlank { dirArg },
-                                dirPath = if (shelf) "" else dirArg,
-                                title = libTitle.ifBlank { if (shelf) "默认书架" else "" },
-                                onBack = { navController.popBackStack() },
-                                onOpenDir = { d, t ->
-                                    navController.navigate(
-                                        Ios5Routes.ebookLib(rootId = rootId, rootPath = rootPath.ifBlank { dirArg }, dir = d, title = t),
+                        ) {
+                            when (parsed.base) {
+                                Ios5Routes.HOME -> {
+                                    val homeVM: HomeViewModel = viewModel()
+                                    val homeState by homeVM.state.collectAsStateWithLifecycle()
+                                    HomeTab(
+                                        state = homeState,
+                                        onOpenDetail = { k, i, t -> openDetail(k, i, t) },
+                                        onPlaySongs = { songs, index -> playerVM.playAll(songs, index) },
+                                        onOpenBook = { p -> openReader(p) },
+                                        onPlayAudiobook = { playAudiobook(it) },
+                                        onOpenExport = { p -> tabNav.push(Ios5Routes.ebookExport(p)) },
+                                        remoteEbookRecents = visibleRemoteEbookRecents,
+                                        remoteAbookRecents = visibleRemoteAbookRecents,
+                                        onOpenRemoteBook = { openRemoteBook(it) },
+                                        onPlayRemoteAudiobook = { playRemoteAudiobook(it) },
                                     )
-                                },
-                                onOpenBook = { p -> openReader(p) },
-                                onOpenExport = { p -> navController.navigate(Ios5Routes.ebookExport(p)) },
-                                onStartRandomDir = { dir, _ ->
-                                    openLocalRandomReader(
-                                        key = "root:$rootId:$dir",
-                                        shelf = false,
+                                }
+                                Ios5Routes.PLAYLISTS -> {
+                                    PlaylistsTab(
+                                        playlists = browseState.playlists,
+                                        smartCount = 0,
+                                        onOpenDetail = { k, i, t -> openDetail(k, i, t) },
+                                        onCreatePlaylist = { name ->
+                                            scope.launch {
+                                                container.repository.createPlaylist(name)
+                                                browseVM.load()
+                                            }
+                                        },
+                                        onOpenSearch = { tabNav.push(Ios5Routes.search("songs")) },
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.ARTISTS -> {
+                                    ArtistsTab(
+                                        artists = browseState.artists,
+                                        loading = browseState.loading,
+                                        remote = browsingRemoteLibraries,
+                                        onOpenDetail = { k, i, t -> openDetail(k, i, t) },
+                                        onOpenRemoteArtist = { lib, g -> openRemoteArtist(lib, g) },
+                                        onOpenSearch = { tabNav.push(Ios5Routes.search("artists")) },
+                                    )
+                                }
+                                Ios5Routes.EBOOKS -> {
+                                    EbooksTab(
+                                        onOpenShelf = {
+                                            tabNav.push(Ios5Routes.ebookLib(shelf = true, title = "默认书架"), "默认书架")
+                                        },
+                                        onOpenRoot = { id, dir, title ->
+                                            tabNav.push(
+                                                Ios5Routes.ebookLib(rootId = id, rootPath = dir, dir = dir, title = title),
+                                                title,
+                                            )
+                                        },
+                                        onOpenBook = { p -> openReader(p) },
+                                        onOpenSearch = { tabNav.push(Ios5Routes.EBOOK_SEARCH) },
+                                        onOpenExport = { p -> tabNav.push(Ios5Routes.ebookExport(p)) },
+                                        onStartRandomShelf = {
+                                            openLocalRandomReader(
+                                                key = "shelf",
+                                                shelf = true,
+                                                rootId = com.aurora.music.data.ebook.EBOOK_SHELF_ROOT_ID,
+                                                rootPath = "",
+                                                dirPath = "",
+                                            )
+                                        },
+                                        onStartRandomRoot = { id, dir, _ ->
+                                            openLocalRandomReader(
+                                                key = "root:$id",
+                                                shelf = false,
+                                                rootId = id,
+                                                rootPath = dir,
+                                                dirPath = "",
+                                            )
+                                        },
+                                        remoteLibraries = browsingRemoteLibraries,
+                                        remoteRecents = browsingRemoteEbookRecents,
+                                        onOpenRemoteBook = { openRemoteBook(it) },
+                                        onStartRandomRemoteRoot = { deviceId, rootKey ->
+                                            openRandomReader(deviceId, rootKey)
+                                        },
+                                        onStartRandomRemotePool = { deviceId, rootKey, paths ->
+                                            openRemoteDirRandomReader(
+                                                deviceId,
+                                                rootKey,
+                                                key = "remote:$deviceId:$rootKey",
+                                                poolPaths = paths,
+                                            )
+                                        },
+                                        onOpenRemoteRoot = { deviceId, rootKey, rootTitle ->
+                                            remoteBrowsing = true
+                                            tabNav.push(
+                                                Ios5Routes.remoteEbookLib(deviceId, rootKey, title = rootTitle),
+                                                rootTitle,
+                                            )
+                                        },
+                                    )
+                                }
+                                Ios5Routes.AUDIOBOOKS -> {
+                                    AudiobooksTab(
+                                        onPlayBook = { playAudiobook(it) },
+                                        remoteLibraries = browsingRemoteLibraries,
+                                        remoteRecents = browsingRemoteAbookRecents,
+                                        onPlayRemoteBook = { playRemoteAudiobook(it) },
+                                        player = playerState,
+                                    )
+                                }
+                                "ios5_ebook_lib" -> {
+                                    val shelf = parsed.query["shelf"] == "true"
+                                    val rootId = parsed.query["rootId"]?.toLongOrNull() ?: 0L
+                                    val rootPath = parsed.query["rpath"].orEmpty()
+                                    val dirArg = parsed.query["dir"].orEmpty()
+                                    val libTitle = parsed.query["title"].orEmpty()
+                                    com.aurora.music.ui.ebook.EbookLibraryScreen(
+                                        isShelf = shelf,
                                         rootId = rootId,
                                         rootPath = rootPath.ifBlank { dirArg },
+                                        dirPath = if (shelf) "" else dirArg,
+                                        title = libTitle.ifBlank { if (shelf) "默认书架" else "" },
+                                        onBack = { tabNav.pop() },
+                                        onOpenDir = { d, t ->
+                                            tabNav.push(
+                                                Ios5Routes.ebookLib(rootId = rootId, rootPath = rootPath.ifBlank { dirArg }, dir = d, title = t),
+                                                t,
+                                            )
+                                        },
+                                        onOpenBook = { p -> openReader(p) },
+                                        onOpenExport = { p -> tabNav.push(Ios5Routes.ebookExport(p)) },
+                                        onStartRandomDir = { dir, _ ->
+                                            openLocalRandomReader(
+                                                key = "root:$rootId:$dir",
+                                                shelf = false,
+                                                rootId = rootId,
+                                                rootPath = rootPath.ifBlank { dirArg },
+                                                dirPath = dir,
+                                            )
+                                        },
+                                        confirm = { confirm(it) },
+                                    )
+                                }
+                                Ios5Routes.EBOOK_SEARCH -> {
+                                    com.aurora.music.ui.ebook.EbookSearchScreen(
+                                        onBack = { tabNav.pop() },
+                                        onOpenBook = { p -> openReader(p) },
+                                        onOpenExport = { p -> tabNav.push(Ios5Routes.ebookExport(p)) },
+                                    )
+                                }
+                                "ios5_remote_ebook_lib" -> {
+                                    val deviceId = parsed.query["device"].orEmpty()
+                                    val rootKey = parsed.query["root"].orEmpty()
+                                    val dir = parsed.query["dir"].orEmpty()
+                                    val libTitle = parsed.query["title"].orEmpty()
+                                    com.aurora.music.ui.ebook.RemoteEbookLibraryScreen(
+                                        deviceId = deviceId,
+                                        rootKey = rootKey,
                                         dirPath = dir,
+                                        title = libTitle,
+                                        allowOffline = remoteBrowsing,
+                                        onBack = { tabNav.pop() },
+                                        onOpenDir = { d, t ->
+                                            tabNav.push(
+                                                Ios5Routes.remoteEbookLib(deviceId, rootKey, dir = d, title = t),
+                                                t,
+                                            )
+                                        },
+                                        onOpenBook = { openRemoteBook(it) },
+                                        onOpenRandomBook = { bookEntry, rk -> openRandomBook(bookEntry, rk) },
+                                        onStartRandomReading = { d, r -> openRandomReader(d, r) },
+                                        onStartRandomDir = { d, rk, key, paths ->
+                                            openRemoteDirRandomReader(d, rk, key, paths)
+                                        },
+                                        onMessage = { confirm(it) },
                                     )
-                                },
-                                confirm = { confirm(it) },
-                            )
-                        }
-                        composable(Ios5Routes.EBOOK_SEARCH) {
-                            com.aurora.music.ui.ebook.EbookSearchScreen(
-                                onBack = { navController.popBackStack() },
-                                onOpenBook = { p -> openReader(p) },
-                                onOpenExport = { p -> navController.navigate(Ios5Routes.ebookExport(p)) },
-                            )
-                        }
-                        composable(
-                            Ios5Routes.REMOTE_EBOOK_LIB,
-                            arguments = listOf(
-                                androidx.navigation.navArgument("device") { defaultValue = "" },
-                                androidx.navigation.navArgument("root") { defaultValue = "" },
-                                androidx.navigation.navArgument("dir") { defaultValue = "" },
-                                androidx.navigation.navArgument("title") { defaultValue = "" },
-                            ),
-                        ) { entry ->
-                            val deviceId = Uri.decode(entry.arguments?.getString("device").orEmpty())
-                            val rootKey = Uri.decode(entry.arguments?.getString("root").orEmpty())
-                            val dir = Uri.decode(entry.arguments?.getString("dir").orEmpty())
-                            val libTitle = Uri.decode(entry.arguments?.getString("title").orEmpty())
-                            com.aurora.music.ui.ebook.RemoteEbookLibraryScreen(
-                                deviceId = deviceId,
-                                rootKey = rootKey,
-                                dirPath = dir,
-                                title = libTitle,
-                                allowOffline = remoteBrowsing,
-                                onBack = { navController.popBackStack() },
-                                onOpenDir = { d, t ->
-                                    navController.navigate(
-                                        Ios5Routes.remoteEbookLib(deviceId, rootKey, dir = d, title = t),
-                                    )
-                                },
-                                onOpenBook = { openRemoteBook(it) },
-                                onOpenRandomBook = { entry, rk -> openRandomBook(entry, rk) },
-                                onStartRandomReading = { d, r -> openRandomReader(d, r) },
-                                onStartRandomDir = { d, rk, key, paths ->
-                                    openRemoteDirRandomReader(d, rk, key, paths)
-                                },
-                                onMessage = { confirm(it) },
-                            )
-                        }
-                        composable(
-                            Ios5Routes.EBOOK_EXPORT,
-                            arguments = listOf(
-                                androidx.navigation.navArgument("epath") { defaultValue = "" },
-                            ),
-                        ) { entry ->
-                            val epath = Uri.decode(entry.arguments?.getString("epath").orEmpty())
-                            com.aurora.music.ui.ebook.EbookExportScreen(
-                                bookPath = epath,
-                                onBack = { navController.popBackStack() },
-                                onOpenAudiobooks = { navigateTopLevel(Ios5Routes.AUDIOBOOKS) },
-                                onOpenAudiobookSources = {
-                                    navController.navigate(Ios5Routes.SETTINGS_AUDIOBOOK_SOURCES)
-                                },
-                                confirm = { confirm(it) },
-                            )
-                        }
-                        composable(Ios5Routes.VIDEOS) {
-                            VideosTab(
-                                onOpenRoot = { deviceId, rootKey, title ->
-                                    navController.navigate(
-                                        Ios5Routes.videoBrowse(deviceId, rootKey, title = title),
-                                    )
-                                },
-                            )
-                        }
-                        composable(
-                            Ios5Routes.VIDEO_BROWSE,
-                            arguments = listOf(
-                                androidx.navigation.navArgument("device") { defaultValue = "" },
-                                androidx.navigation.navArgument("root") { defaultValue = "" },
-                                androidx.navigation.navArgument("dir") { defaultValue = "" },
-                                androidx.navigation.navArgument("title") { defaultValue = "" },
-                            ),
-                        ) { entry ->
-                            val deviceId = Uri.decode(entry.arguments?.getString("device").orEmpty())
-                            val rootKey = Uri.decode(entry.arguments?.getString("root").orEmpty())
-                            val dir = Uri.decode(entry.arguments?.getString("dir").orEmpty())
-                            val title = Uri.decode(entry.arguments?.getString("title").orEmpty())
-                            RemoteVideoBrowseScreen(
-                                deviceId = deviceId,
-                                rootKey = rootKey,
-                                dir = dir,
-                                title = title,
-                                onBack = { navController.popBackStack() },
-                                onOpenDir = { childDir, childTitle ->
-                                    navController.navigate(
-                                        Ios5Routes.videoBrowse(
-                                            deviceId,
-                                            rootKey,
-                                            dir = childDir,
-                                            title = childTitle,
-                                        ),
-                                    )
-                                },
-                            )
-                        }
-                        composable(Ios5Routes.MORE) {
-                            MoreTab(onOpenRoute = { navController.navigate(it) })
-                        }
-                        composable(Ios5Routes.SETTINGS) {
-                            SettingsTab(
-                                onOpen = { navController.navigate(it) },
-                                onOpenDetail = { k, i, t -> openDetail(k, i, t) },
-                            )
-                        }
-                        composable(Ios5Routes.MORE_SONGS) {
-                            Ios5SongsBrowse(
-                                songs = browseState.songs,
-                                loading = browseState.loading,
-                                player = playerState,
-                                onBack = { navController.popBackStack() },
-                                onSearch = { navController.navigate(Ios5Routes.search("songs")) },
-                                onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
-                                remote = browsingRemoteLibraries,
-                            )
-                        }
-                        composable(Ios5Routes.MORE_ALBUMS) {
-                            Ios5AlbumsBrowse(
-                                albums = browseState.albums,
-                                loading = browseState.loading,
-                                onBack = { navController.popBackStack() },
-                                onSearch = { navController.navigate(Ios5Routes.search("albums")) },
-                                onOpenDetail = { k, i, t -> openDetail(k, i, t) },
-                                remote = browsingRemoteLibraries,
-                                onOpenRemoteAlbum = { lib, a -> openRemoteAlbum(lib, a) },
-                            )
-                        }
-                        composable(
-                            Ios5Routes.REMOTE_GROUP,
-                            arguments = listOf(
-                                androidx.navigation.navArgument("device") { defaultValue = "" },
-                                androidx.navigation.navArgument("kind") { defaultValue = "" },
-                                androidx.navigation.navArgument("key") { defaultValue = "" },
-                                androidx.navigation.navArgument("title") { defaultValue = "" },
-                                androidx.navigation.navArgument("subtitle") { defaultValue = "" },
-                            ),
-                        ) { entry ->
-                            val deviceId = Uri.decode(entry.arguments?.getString("device").orEmpty())
-                            val kind = Uri.decode(entry.arguments?.getString("kind").orEmpty())
-                            val key = Uri.decode(entry.arguments?.getString("key").orEmpty())
-                            val savedTitle = Uri.decode(entry.arguments?.getString("title").orEmpty())
-                            val savedSubtitle = Uri.decode(entry.arguments?.getString("subtitle").orEmpty())
-                            // 从完整缓存解析：冷启动时设备还没核对完也能先画出灰色内容。
-                            val lib = cachedRemoteLibraries.firstOrNull { it.deviceId == deviceId }
-                            val album = if (kind == "album") {
-                                lib?.albums?.firstOrNull { it.id == key }
-                            } else {
-                                null
-                            }
-                            val artist = if (kind == "artist") {
-                                lib?.artists?.firstOrNull { it.name == key }
-                            } else {
-                                null
-                            }
-                            if (lib == null || (album == null && artist == null)) {
-                                com.aurora.music.ui.browse.Ios5RemoteDetailEmpty(
-                                    onBack = { navController.popBackStack() },
-                                )
-                            } else {
-                                val artistAlbumList = if (artist != null) {
-                                    val songIds = artist.songs.map { it.id }.toSet()
-                                    lib.albums.filter { a -> a.songs.any { it.id in songIds } }
-                                } else {
-                                    emptyList()
                                 }
-                                com.aurora.music.ui.browse.Ios5RemoteDetail(
-                                    title = album?.title ?: artist?.name ?: savedTitle,
-                                    subtitle = if (album != null) {
-                                        "${album.artist} · ${lib.deviceName} · 远程"
+                                "ebook_export" -> {
+                                    val epath = parsed.query["epath"].orEmpty()
+                                    com.aurora.music.ui.ebook.EbookExportScreen(
+                                        bookPath = epath,
+                                        onBack = { tabNav.pop() },
+                                        onOpenAudiobooks = { navigateTopLevel(Ios5Routes.AUDIOBOOKS) },
+                                        onOpenAudiobookSources = {
+                                            tabNav.push(Ios5Routes.SETTINGS_AUDIOBOOK_SOURCES)
+                                        },
+                                        confirm = { confirm(it) },
+                                    )
+                                }
+                                Ios5Routes.VIDEOS -> {
+                                    VideosTab(
+                                        onOpenRoot = { deviceId, rootKey, title ->
+                                            remoteBrowsing = true
+                                            tabNav.push(
+                                                Ios5Routes.videoBrowse(deviceId, rootKey, title = title),
+                                                title,
+                                            )
+                                        },
+                                    )
+                                }
+                                "ios5_video_browse" -> {
+                                    val deviceId = parsed.query["device"].orEmpty()
+                                    val rootKey = parsed.query["root"].orEmpty()
+                                    val dir = parsed.query["dir"].orEmpty()
+                                    val title = parsed.query["title"].orEmpty()
+                                    RemoteVideoBrowseScreen(
+                                        deviceId = deviceId,
+                                        rootKey = rootKey,
+                                        dir = dir,
+                                        title = title,
+                                        onBack = { tabNav.pop() },
+                                        onOpenDir = { childDir, childTitle ->
+                                            remoteBrowsing = true
+                                            tabNav.push(
+                                                Ios5Routes.videoBrowse(
+                                                    deviceId,
+                                                    rootKey,
+                                                    dir = childDir,
+                                                    title = childTitle,
+                                                ),
+                                                childTitle,
+                                            )
+                                        },
+                                    )
+                                }
+                                Ios5Routes.MORE -> {
+                                    MoreTab(onOpenRoute = { tabNav.push(it) })
+                                }
+                                Ios5Routes.SETTINGS -> {
+                                    SettingsTab(
+                                        onOpen = { tabNav.push(it) },
+                                        onOpenDetail = { k, i, t -> openDetail(k, i, t) },
+                                    )
+                                }
+                                Ios5Routes.MORE_SONGS -> {
+                                    Ios5SongsBrowse(
+                                        songs = browseState.songs,
+                                        loading = browseState.loading,
+                                        player = playerState,
+                                        onBack = { tabNav.pop() },
+                                        onSearch = { tabNav.push(Ios5Routes.search("songs")) },
+                                        onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
+                                        remote = browsingRemoteLibraries,
+                                    )
+                                }
+                                Ios5Routes.MORE_ALBUMS -> {
+                                    Ios5AlbumsBrowse(
+                                        albums = browseState.albums,
+                                        loading = browseState.loading,
+                                        onBack = { tabNav.pop() },
+                                        onSearch = { tabNav.push(Ios5Routes.search("albums")) },
+                                        onOpenDetail = { k, i, t -> openDetail(k, i, t) },
+                                        remote = browsingRemoteLibraries,
+                                        onOpenRemoteAlbum = { lib, a -> openRemoteAlbum(lib, a) },
+                                    )
+                                }
+                                "ios5_remote_group" -> {
+                                    val deviceId = parsed.query["device"].orEmpty()
+                                    val kind = parsed.query["kind"].orEmpty()
+                                    val key = parsed.query["key"].orEmpty()
+                                    val savedTitle = parsed.query["title"].orEmpty()
+                                    val savedSubtitle = parsed.query["subtitle"].orEmpty()
+                                    // 从完整缓存解析：冷启动时设备还没核对完也能先画出灰色内容。
+                                    val lib = cachedRemoteLibraries.firstOrNull { it.deviceId == deviceId }
+                                    val album = if (kind == "album") {
+                                        lib?.albums?.firstOrNull { it.id == key }
                                     } else {
-                                        savedSubtitle.ifBlank { "${lib.deviceName} · 远程" }
-                                    },
-                                    deviceId = deviceId,
-                                    deviceName = lib.deviceName,
-                                    songs = album?.songs ?: artist?.songs.orEmpty(),
-                                    albums = artistAlbumList,
-                                    singleAlbum = album,
-                                    available = lib.online,
-                                    player = playerState,
-                                    onBack = { navController.popBackStack() },
-                                    onSearch = { navController.navigate(Ios5Routes.search("songs")) },
-                                    onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
-                                    onOpenAlbum = { a ->
-                                        remoteBrowsing = true
-                                        navController.navigate(
-                                            Ios5Routes.remoteGroup(
-                                                device = deviceId,
-                                                kind = "album",
-                                                key = a.id,
-                                                title = a.title,
-                                                subtitle = "${a.artist} · ${lib.deviceName} · 远程",
-                                            ),
-                                        )
-                                    },
-                                )
-                            }
-                        }
-                        composable(Ios5Routes.MORE_GENRES) {
-                            Ios5GroupsBrowse(
-                                title = "风格",
-                                groups = browseState.genres,
-                                loading = browseState.loading,
-                                searchScope = "all",
-                                onBack = { navController.popBackStack() },
-                                onSearch = { navController.navigate(Ios5Routes.search("all")) },
-                                onOpenGroup = { name -> openDetail("genre", name, name) },
-                            )
-                        }
-                        composable(Ios5Routes.MORE_COMPOSERS) {
-                            Ios5GroupsBrowse(
-                                title = "作曲家",
-                                groups = browseState.composers,
-                                loading = browseState.loading,
-                                searchScope = "all",
-                                onBack = { navController.popBackStack() },
-                                onSearch = { navController.navigate(Ios5Routes.search("all")) },
-                                onOpenGroup = { name -> openDetail("composer", name, name) },
-                            )
-                        }
-                        composable(Ios5Routes.MORE_FOLDERS) {
-                            Ios5FoldersRoot(
-                                onBack = { navController.popBackStack() },
-                                onSearch = { navController.navigate(Ios5Routes.search("songs")) },
-                                onOpenFolder = { fid, title -> navController.navigate(Ios5Routes.folder(fid, title)) },
-                                player = playerState,
-                                onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
-                            )
-                        }
-                        composable(
-                            Ios5Routes.FOLDER,
-                            arguments = listOf(
-                                androidx.navigation.navArgument("fid") { defaultValue = "" },
-                                androidx.navigation.navArgument("title") { defaultValue = "" },
-                            ),
-                        ) { entry ->
-                            val fid = entry.arguments?.getString("fid").orEmpty()
-                            val folderTitle = entry.arguments?.getString("title").orEmpty()
-                            Ios5FolderLevel(
-                                fid = fid,
-                                title = folderTitle,
-                                onBack = { navController.popBackStack() },
-                                onSearch = { navController.navigate(Ios5Routes.search("songs")) },
-                                onOpenFolder = { id, name -> navController.navigate(Ios5Routes.folder(id, name)) },
-                                player = playerState,
-                                onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
-                            )
-                        }
-                        composable(
-                            Ios5Routes.DETAIL,
-                            arguments = listOf(
-                                androidx.navigation.navArgument("kind") { defaultValue = "" },
-                                androidx.navigation.navArgument("id") { defaultValue = "" },
-                                androidx.navigation.navArgument("title") { defaultValue = "" },
-                            ),
-                        ) { entry ->
-                            val kind = Uri.decode(entry.arguments?.getString("kind").orEmpty())
-                            val id = Uri.decode(entry.arguments?.getString("id").orEmpty())
-                            val title = Uri.decode(entry.arguments?.getString("title").orEmpty())
-                            when (kind) {
-                                "genre" -> {
-                                    val songs = browseState.genres.firstOrNull { it.name == id }?.songs.orEmpty()
-                                    Ios5GroupDetail(
-                                        title = title.ifBlank { id },
-                                        songs = songs,
-                                        player = playerState,
-                                        onBack = { navController.popBackStack() },
-                                        onSearch = { navController.navigate(Ios5Routes.search("all")) },
-                                        onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
-                                        onPlayAll = { if (songs.isNotEmpty()) playerVM.playAll(songs, 0) },
-                                        onShuffleAll = { if (songs.isNotEmpty()) playerVM.shufflePlay(songs) },
-                                    )
-                                }
-                                "composer" -> {
-                                    val songs = browseState.composers.firstOrNull { it.name == id }?.songs.orEmpty()
-                                    Ios5GroupDetail(
-                                        title = title.ifBlank { id },
-                                        songs = songs,
-                                        player = playerState,
-                                        onBack = { navController.popBackStack() },
-                                        onSearch = { navController.navigate(Ios5Routes.search("all")) },
-                                        onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
-                                        onPlayAll = { if (songs.isNotEmpty()) playerVM.playAll(songs, 0) },
-                                        onShuffleAll = { if (songs.isNotEmpty()) playerVM.shufflePlay(songs) },
-                                    )
-                                }
-                                else -> Ios5Detail(
-                                    kind = kind,
-                                    id = id,
-                                    title = title,
-                                    player = playerState,
-                                    onBack = { navController.popBackStack() },
-                                    onSearch = { navController.navigate(Ios5Routes.search(searchScopeFor(currentRoute))) },
-                                    onOpenDetail = { k, i, t -> openDetail(k, i, t) },
-                                    onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
-                                    onPlayCollection = { k, i -> playCollection(k, i) },
-                                    onShuffleCollection = { k, i -> shuffleCollection(k, i) },
-                                )
-                            }
-                        }
-                        composable(
-                            Ios5Routes.SEARCH,
-                            arguments = listOf(
-                                androidx.navigation.navArgument("scope") { defaultValue = "all" },
-                            ),
-                        ) { entry ->
-                            val scopeArg = entry.arguments?.getString("scope") ?: "all"
-                            Ios5SearchPage(
-                                scope = scopeArg,
-                                player = playerState,
-                                onBack = { navController.popBackStack() },
-                                onOpenDetail = { k, i, t -> openDetail(k, i, t) },
-                                onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_PLAYBACK) {
-                            com.aurora.music.ui.screens.settings.PlaybackSettingsScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_EQ) {
-                            com.aurora.music.ui.screens.settings.EqualizerScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_VISUALIZER) {
-                            com.aurora.music.ui.screens.settings.VisualizerSettingsScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_SONIC) {
-                            com.aurora.music.ui.screens.settings.SonicSettingsScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_SOURCES) {
-                            com.aurora.music.ui.screens.settings.MusicSourcesScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                                onPlayRoot = { id ->
-                                    scope.launch {
-                                        val songs = container.musicRoots.songsOf(id)
-                                        if (songs.isEmpty()) confirm(context.getString(R.string.msg_no_scanned_tracks))
-                                        else playerVM.playAll(songs, 0)
+                                        null
                                     }
-                                },
-                                confirm = { confirm(it) },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_EBOOK_SOURCES) {
-                            com.aurora.music.ui.screens.settings.EbookSourcesScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                                confirm = { confirm(it) },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_EBOOK) {
-                            com.aurora.music.ui.screens.settings.EbookSettingsScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_AUDIOBOOK_SOURCES) {
-                            com.aurora.music.ui.screens.settings.AudiobookSourcesScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                                confirm = { confirm(it) },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_AUDIOBOOK) {
-                            com.aurora.music.ui.screens.settings.AudiobookSettingsScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                                onOpenSubtitles = {
-                                    navController.navigate(Ios5Routes.SETTINGS_AUDIOBOOK_SUBTITLES)
-                                },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_AUDIOBOOK_SUBTITLES) {
-                            com.aurora.music.ui.screens.settings.SubtitleSettingsScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_MULTIMODAL) {
-                            com.aurora.music.ui.screens.settings.MultimodalSettingsScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_STORAGE) {
-                            com.aurora.music.ui.screens.settings.StorageSettingsScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_APPEARANCE) {
-                            com.aurora.music.ui.screens.settings.AppearanceScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_GESTURES) {
-                            com.aurora.music.ui.screens.settings.GesturesSettingsScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_INTEGRATIONS) {
-                            com.aurora.music.ui.screens.settings.IntegrationsSettingsScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_AIRPLAY_DIAGNOSTICS) {
-                            com.aurora.music.ui.screens.settings.AirPlayDiagnosticsScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_RELAY) {
-                            com.aurora.music.ui.screens.settings.RelaySettingsScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_PERMISSIONS) {
-                            com.aurora.music.ui.screens.settings.PermissionsScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_ABOUT) {
-                            com.aurora.music.ui.screens.settings.AboutSettingsScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_BACKUP) {
-                            com.aurora.music.ui.screens.settings.BackupScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                                confirm = { confirm(it) },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_INTRO) {
-                            com.aurora.music.ui.screens.settings.SongIntroSettingsScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                                confirm = { confirm(it) },
-                                onOpenPrompt = { navController.navigate(Ios5Routes.SETTINGS_INTRO_PROMPT) },
-                                onOpenVoice = { navController.navigate(Ios5Routes.SETTINGS_INTRO_VOICE) },
-                                onOpenLog = { navController.navigate(Ios5Routes.SETTINGS_INTRO_LOG) },
-                                onOpenModel = { navController.navigate(Ios5Routes.SETTINGS_INTRO_MODEL) },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_INTRO_MODEL) {
-                            com.aurora.music.ui.screens.settings.SongIntroModelScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                                confirm = { confirm(it) },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_INTRO_PROMPT) {
-                            com.aurora.music.ui.screens.settings.SongIntroPromptScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_INTRO_VOICE) {
-                            com.aurora.music.ui.screens.settings.SongIntroVoiceScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(Ios5Routes.SETTINGS_INTRO_LOG) {
-                            com.aurora.music.ui.screens.settings.SongIntroLogScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                                confirm = { confirm(it) },
-                            )
-                        }
-                        composable(Ios5Routes.HISTORY) {
-                            com.aurora.music.ui.screens.stats.ListeningHistoryScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                                onPlay = { playById(it) },
-                            )
-                        }
-                        composable(Ios5Routes.STATS) {
-                            com.aurora.music.ui.screens.stats.ListeningStatsScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                onBack = { navController.popBackStack() },
-                                onPlay = { playById(it) },
-                                onOpenDetail = { k, i -> openDetail(k, i) },
-                            )
-                        }
-                        composable(Ios5Routes.DUPLICATES) {
-                            val dupVM: com.aurora.music.viewmodel.DuplicatesViewModel = viewModel()
-                            val dupState by dupVM.state.collectAsStateWithLifecycle()
-                            com.aurora.music.ui.screens.library.DuplicatesScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                loading = dupState.loading,
-                                scanned = dupState.scanned,
-                                groups = dupState.groups,
-                                currentSongId = playerState.current.id,
-                                onBack = { navController.popBackStack() },
-                                onPlay = { s -> playerVM.playAll(listOf(s), 0) },
-                            )
-                        }
-                        composable(
-                            Ios5Routes.SMART_EDIT,
-                            arguments = listOf(androidx.navigation.navArgument("id") { defaultValue = "" }),
-                        ) { entry ->
-                            val smartId = entry.arguments?.getString("id").orEmpty()
-                            val smartVM: com.aurora.music.viewmodel.SmartPlaylistViewModel = viewModel()
-                            LaunchedEffect(smartId) { smartVM.load(smartId) }
-                            val smartState by smartVM.state.collectAsStateWithLifecycle()
-                            com.aurora.music.ui.screens.library.SmartPlaylistEditScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                playlist = smartState,
-                                isNew = smartId.isBlank(),
-                                onUpdate = smartVM::update,
-                                onSave = { smartVM.save { navController.popBackStack() } },
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                        composable(
-                            Ios5Routes.TAG_EDIT,
-                            arguments = listOf(androidx.navigation.navArgument("songId") { defaultValue = "" }),
-                        ) { entry ->
-                            val songId = entry.arguments?.getString("songId").orEmpty()
-                            val tagVM: com.aurora.music.viewmodel.TagEditViewModel = viewModel()
-                            LaunchedEffect(songId) { tagVM.load(songId) }
-                            val tagState by tagVM.state.collectAsStateWithLifecycle()
-                            com.aurora.music.ui.screens.detail.TagEditScreen(
-                                contentPadding = PaddingValues(0.dp),
-                                state = tagState,
-                                onEdit = tagVM::edit,
-                                onMatch = tagVM::matchOnline,
-                                onApplyMatch = tagVM::applyMatch,
-                                onIdentify = if (container.acoustId.available && tagState.localFile) ({ tagVM.identify() }) else null,
-                                identifying = tagState.identifying,
-                                onBack = { navController.popBackStack() },
-                                confirm = { confirm(it) },
-                            )
+                                    val artist = if (kind == "artist") {
+                                        lib?.artists?.firstOrNull { it.name == key }
+                                    } else {
+                                        null
+                                    }
+                                    if (lib == null || (album == null && artist == null)) {
+                                        com.aurora.music.ui.browse.Ios5RemoteDetailEmpty(
+                                            onBack = { tabNav.pop() },
+                                        )
+                                    } else {
+                                        val artistAlbumList = if (artist != null) {
+                                            val songIds = artist.songs.map { it.id }.toSet()
+                                            lib.albums.filter { a -> a.songs.any { it.id in songIds } }
+                                        } else {
+                                            emptyList()
+                                        }
+                                        com.aurora.music.ui.browse.Ios5RemoteDetail(
+                                            title = album?.title ?: artist?.name ?: savedTitle,
+                                            subtitle = if (album != null) {
+                                                "${album.artist} · ${lib.deviceName} · 远程"
+                                            } else {
+                                                savedSubtitle.ifBlank { "${lib.deviceName} · 远程" }
+                                            },
+                                            deviceId = deviceId,
+                                            deviceName = lib.deviceName,
+                                            songs = album?.songs ?: artist?.songs.orEmpty(),
+                                            albums = artistAlbumList,
+                                            singleAlbum = album,
+                                            available = lib.online,
+                                            player = playerState,
+                                            onBack = { tabNav.pop() },
+                                            onSearch = { tabNav.push(Ios5Routes.search("songs")) },
+                                            onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
+                                            onOpenAlbum = { a ->
+                                                remoteBrowsing = true
+                                                tabNav.push(
+                                                    Ios5Routes.remoteGroup(
+                                                        device = deviceId,
+                                                        kind = "album",
+                                                        key = a.id,
+                                                        title = a.title,
+                                                        subtitle = "${a.artist} · ${lib.deviceName} · 远程",
+                                                    ),
+                                                    a.title,
+                                                )
+                                            },
+                                        )
+                                    }
+                                }
+                                Ios5Routes.MORE_GENRES -> {
+                                    Ios5GroupsBrowse(
+                                        title = "风格",
+                                        groups = browseState.genres,
+                                        loading = browseState.loading,
+                                        searchScope = "all",
+                                        onBack = { tabNav.pop() },
+                                        onSearch = { tabNav.push(Ios5Routes.search("all")) },
+                                        onOpenGroup = { name -> openDetail("genre", name, name) },
+                                    )
+                                }
+                                Ios5Routes.MORE_COMPOSERS -> {
+                                    Ios5GroupsBrowse(
+                                        title = "作曲家",
+                                        groups = browseState.composers,
+                                        loading = browseState.loading,
+                                        searchScope = "all",
+                                        onBack = { tabNav.pop() },
+                                        onSearch = { tabNav.push(Ios5Routes.search("all")) },
+                                        onOpenGroup = { name -> openDetail("composer", name, name) },
+                                    )
+                                }
+                                Ios5Routes.MORE_FOLDERS -> {
+                                    Ios5FoldersRoot(
+                                        onBack = { tabNav.pop() },
+                                        onSearch = { tabNav.push(Ios5Routes.search("songs")) },
+                                        onOpenFolder = { fid, title -> tabNav.push(Ios5Routes.folder(fid, title), title) },
+                                        player = playerState,
+                                        onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
+                                    )
+                                }
+                                "ios5_folder" -> {
+                                    val fid = parsed.query["fid"].orEmpty()
+                                    val folderTitle = parsed.query["title"].orEmpty()
+                                    Ios5FolderLevel(
+                                        fid = fid,
+                                        title = folderTitle,
+                                        onBack = { tabNav.pop() },
+                                        onSearch = { tabNav.push(Ios5Routes.search("songs")) },
+                                        onOpenFolder = { id, name -> tabNav.push(Ios5Routes.folder(id, name), name) },
+                                        player = playerState,
+                                        onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
+                                    )
+                                }
+                                "ios5_detail" -> {
+                                    val kind = parsed.pathSegments.getOrNull(1).orEmpty()
+                                    val id = parsed.pathSegments.getOrNull(2).orEmpty()
+                                    val title = parsed.pathSegments.getOrNull(3).orEmpty()
+                                    when (kind) {
+                                        "genre" -> {
+                                            val songs = browseState.genres.firstOrNull { it.name == id }?.songs.orEmpty()
+                                            Ios5GroupDetail(
+                                                title = title.ifBlank { id },
+                                                songs = songs,
+                                                player = playerState,
+                                                onBack = { tabNav.pop() },
+                                                onSearch = { tabNav.push(Ios5Routes.search("all")) },
+                                                onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
+                                                onPlayAll = { if (songs.isNotEmpty()) playerVM.playAll(songs, 0) },
+                                                onShuffleAll = { if (songs.isNotEmpty()) playerVM.shufflePlay(songs) },
+                                            )
+                                        }
+                                        "composer" -> {
+                                            val songs = browseState.composers.firstOrNull { it.name == id }?.songs.orEmpty()
+                                            Ios5GroupDetail(
+                                                title = title.ifBlank { id },
+                                                songs = songs,
+                                                player = playerState,
+                                                onBack = { tabNav.pop() },
+                                                onSearch = { tabNav.push(Ios5Routes.search("all")) },
+                                                onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
+                                                onPlayAll = { if (songs.isNotEmpty()) playerVM.playAll(songs, 0) },
+                                                onShuffleAll = { if (songs.isNotEmpty()) playerVM.shufflePlay(songs) },
+                                            )
+                                        }
+                                        else -> Ios5Detail(
+                                            kind = kind,
+                                            id = id,
+                                            title = title,
+                                            player = playerState,
+                                            onBack = { tabNav.pop() },
+                                            onSearch = { tabNav.push(Ios5Routes.search(searchScopeFor(parsed.base))) },
+                                            onOpenDetail = { k, i, t -> openDetail(k, i, t) },
+                                            onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
+                                            onPlayCollection = { k, i -> playCollection(k, i) },
+                                            onShuffleCollection = { k, i -> shuffleCollection(k, i) },
+                                        )
+                                    }
+                                }
+                                "ios5_search" -> {
+                                    val scopeArg = parsed.query["scope"]?.ifBlank { "all" } ?: "all"
+                                    Ios5SearchPage(
+                                        scope = scopeArg,
+                                        player = playerState,
+                                        onBack = { tabNav.pop() },
+                                        onOpenDetail = { k, i, t -> openDetail(k, i, t) },
+                                        onPlaySongs = { songs, i -> playerVM.playAll(songs, i) },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_PLAYBACK -> {
+                                    com.aurora.music.ui.screens.settings.PlaybackSettingsScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_EQ -> {
+                                    com.aurora.music.ui.screens.settings.EqualizerScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_VISUALIZER -> {
+                                    com.aurora.music.ui.screens.settings.VisualizerSettingsScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_SONIC -> {
+                                    com.aurora.music.ui.screens.settings.SonicSettingsScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_SOURCES -> {
+                                    com.aurora.music.ui.screens.settings.MusicSourcesScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                        onPlayRoot = { id ->
+                                            scope.launch {
+                                                val songs = container.musicRoots.songsOf(id)
+                                                if (songs.isEmpty()) confirm(context.getString(R.string.msg_no_scanned_tracks))
+                                                else playerVM.playAll(songs, 0)
+                                            }
+                                        },
+                                        confirm = { confirm(it) },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_EBOOK_SOURCES -> {
+                                    com.aurora.music.ui.screens.settings.EbookSourcesScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                        confirm = { confirm(it) },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_EBOOK -> {
+                                    com.aurora.music.ui.screens.settings.EbookSettingsScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_AUDIOBOOK_SOURCES -> {
+                                    com.aurora.music.ui.screens.settings.AudiobookSourcesScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                        confirm = { confirm(it) },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_AUDIOBOOK -> {
+                                    com.aurora.music.ui.screens.settings.AudiobookSettingsScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                        onOpenSubtitles = {
+                                            tabNav.push(Ios5Routes.SETTINGS_AUDIOBOOK_SUBTITLES)
+                                        },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_AUDIOBOOK_SUBTITLES -> {
+                                    com.aurora.music.ui.screens.settings.SubtitleSettingsScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_MULTIMODAL -> {
+                                    com.aurora.music.ui.screens.settings.MultimodalSettingsScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_STORAGE -> {
+                                    com.aurora.music.ui.screens.settings.StorageSettingsScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_APPEARANCE -> {
+                                    com.aurora.music.ui.screens.settings.AppearanceScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_GESTURES -> {
+                                    com.aurora.music.ui.screens.settings.GesturesSettingsScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_INTEGRATIONS -> {
+                                    com.aurora.music.ui.screens.settings.IntegrationsSettingsScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_AIRPLAY_DIAGNOSTICS -> {
+                                    com.aurora.music.ui.screens.settings.AirPlayDiagnosticsScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_RELAY -> {
+                                    com.aurora.music.ui.screens.settings.RelaySettingsScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_PERMISSIONS -> {
+                                    com.aurora.music.ui.screens.settings.PermissionsScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_ABOUT -> {
+                                    com.aurora.music.ui.screens.settings.AboutSettingsScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_BACKUP -> {
+                                    com.aurora.music.ui.screens.settings.BackupScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                        confirm = { confirm(it) },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_INTRO -> {
+                                    com.aurora.music.ui.screens.settings.SongIntroSettingsScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                        confirm = { confirm(it) },
+                                        onOpenPrompt = { tabNav.push(Ios5Routes.SETTINGS_INTRO_PROMPT) },
+                                        onOpenVoice = { tabNav.push(Ios5Routes.SETTINGS_INTRO_VOICE) },
+                                        onOpenLog = { tabNav.push(Ios5Routes.SETTINGS_INTRO_LOG) },
+                                        onOpenModel = { tabNav.push(Ios5Routes.SETTINGS_INTRO_MODEL) },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_INTRO_MODEL -> {
+                                    com.aurora.music.ui.screens.settings.SongIntroModelScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                        confirm = { confirm(it) },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_INTRO_PROMPT -> {
+                                    com.aurora.music.ui.screens.settings.SongIntroPromptScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_INTRO_VOICE -> {
+                                    com.aurora.music.ui.screens.settings.SongIntroVoiceScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                Ios5Routes.SETTINGS_INTRO_LOG -> {
+                                    com.aurora.music.ui.screens.settings.SongIntroLogScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                        confirm = { confirm(it) },
+                                    )
+                                }
+                                Ios5Routes.HISTORY -> {
+                                    com.aurora.music.ui.screens.stats.ListeningHistoryScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                        onPlay = { playById(it) },
+                                    )
+                                }
+                                Ios5Routes.STATS -> {
+                                    com.aurora.music.ui.screens.stats.ListeningStatsScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        onBack = { tabNav.pop() },
+                                        onPlay = { playById(it) },
+                                        onOpenDetail = { k, i -> openDetail(k, i) },
+                                    )
+                                }
+                                Ios5Routes.DUPLICATES -> {
+                                    val dupVM: com.aurora.music.viewmodel.DuplicatesViewModel = viewModel()
+                                    val dupState by dupVM.state.collectAsStateWithLifecycle()
+                                    com.aurora.music.ui.screens.library.DuplicatesScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        loading = dupState.loading,
+                                        scanned = dupState.scanned,
+                                        groups = dupState.groups,
+                                        currentSongId = playerState.current.id,
+                                        onBack = { tabNav.pop() },
+                                        onPlay = { s -> playerVM.playAll(listOf(s), 0) },
+                                    )
+                                }
+                                "smart_edit" -> {
+                                    val smartId = parsed.query["id"].orEmpty()
+                                    val smartVM: com.aurora.music.viewmodel.SmartPlaylistViewModel = viewModel()
+                                    LaunchedEffect(smartId) { smartVM.load(smartId) }
+                                    val smartState by smartVM.state.collectAsStateWithLifecycle()
+                                    com.aurora.music.ui.screens.library.SmartPlaylistEditScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        playlist = smartState,
+                                        isNew = smartId.isBlank(),
+                                        onUpdate = smartVM::update,
+                                        onSave = { smartVM.save { tabNav.pop() } },
+                                        onBack = { tabNav.pop() },
+                                    )
+                                }
+                                "tag_edit" -> {
+                                    val songId = parsed.pathSegments.getOrNull(1).orEmpty()
+                                    val tagVM: com.aurora.music.viewmodel.TagEditViewModel = viewModel()
+                                    LaunchedEffect(songId) { tagVM.load(songId) }
+                                    val tagState by tagVM.state.collectAsStateWithLifecycle()
+                                    com.aurora.music.ui.screens.detail.TagEditScreen(
+                                        contentPadding = PaddingValues(0.dp),
+                                        state = tagState,
+                                        onEdit = tagVM::edit,
+                                        onMatch = tagVM::matchOnline,
+                                        onApplyMatch = tagVM::applyMatch,
+                                        onIdentify = if (container.acoustId.available && tagState.localFile) ({ tagVM.identify() }) else null,
+                                        identifying = tagState.identifying,
+                                        onBack = { tabNav.pop() },
+                                        confirm = { confirm(it) },
+                                    )
+                                }
+                                else -> {
+                                    val homeVM: HomeViewModel = viewModel()
+                                    val homeState by homeVM.state.collectAsStateWithLifecycle()
+                                    HomeTab(
+                                        state = homeState,
+                                        onOpenDetail = { k, i, t -> openDetail(k, i, t) },
+                                        onPlaySongs = { songs, index -> playerVM.playAll(songs, index) },
+                                        onOpenBook = { p -> openReader(p) },
+                                        onPlayAudiobook = { playAudiobook(it) },
+                                        onOpenExport = { p -> tabNav.push(Ios5Routes.ebookExport(p)) },
+                                        remoteEbookRecents = visibleRemoteEbookRecents,
+                                        remoteAbookRecents = visibleRemoteAbookRecents,
+                                        onOpenRemoteBook = { openRemoteBook(it) },
+                                        onPlayRemoteAudiobook = { playRemoteAudiobook(it) },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1534,43 +1447,55 @@ fun Ios5App() {
                         ).padding(top = statusTop, end = navEnd),
                     ) {
                         Row(Modifier.fillMaxWidth().height(46.dp)) {
-                            Row(
-                                Modifier.weight(1f).fillMaxHeight().padding(horizontal = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                val sideW = if (topSpec?.onAction != null) 100.dp else 56.dp
-                                Box(Modifier.width(sideW), contentAlignment = Alignment.CenterStart) {
-                                    topSpec?.onBack?.let { back ->
-                                        Icon(
-                                            Icons.AutoMirrored.Filled.ArrowBackIos, "返回", tint = Color.White,
-                                            modifier = Modifier.size(30.dp).clip(CircleShape).clickable(onClick = back).padding(6.dp),
-                                        )
-                                    }
-                                }
-                                Text(
-                                    topSpec?.title
-                                        ?: ios5Tabs.firstOrNull { it.route == tabHighlight }?.label.orEmpty(),
-                                    color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold,
-                                    fontFamily = Ios5Sans,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                Box(Modifier.width(sideW), contentAlignment = Alignment.CenterEnd) {
-                                    topSpec?.takeIf { it.onAction != null && it.actionLabel != null }?.let { spec ->
+                            Box(Modifier.weight(1f).fillMaxHeight()) {
+                                val curTitle = topSpec?.title
+                                    ?: ios5Tabs.firstOrNull { it.route == tabHighlight }?.label.orEmpty()
+                                val titleShadowY = with(LocalDensity.current) { -1.dp.toPx() }
+                                Ios5NavBarLayout(
+                                    modifier = Modifier.fillMaxSize().padding(horizontal = 6.dp),
+                                    left = topSpec?.onBack?.let { back ->
+                                        {
+                                            Ios5BackButton(
+                                                label = topSpec.backLabel ?: "返回",
+                                                onClick = back,
+                                                dark = true,
+                                            )
+                                        }
+                                    },
+                                    title = {
                                         Text(
-                                            spec.actionLabel.orEmpty(), color = Color.White,
-                                            fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = Ios5Sans,
+                                            curTitle,
+                                            color = Color.White,
+                                            fontSize = 18.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = Ios5Sans,
                                             maxLines = 1,
-                                            modifier = Modifier.clip(CircleShape).clickable(onClick = { spec.onAction?.invoke() }).padding(6.dp),
+                                            overflow = TextOverflow.Ellipsis,
+                                            textAlign = TextAlign.Center,
+                                            style = androidx.compose.ui.text.TextStyle(
+                                                shadow = androidx.compose.ui.graphics.Shadow(
+                                                    color = Color.Black.copy(alpha = 0.50f),
+                                                    offset = androidx.compose.ui.geometry.Offset(0f, titleShadowY),
+                                                ),
+                                            ),
                                         )
-                                    }
-                                    topSpec?.onSearch?.let { search ->
-                                        Icon(
-                                            Icons.Filled.Search, "搜索", tint = Color.White,
-                                            modifier = Modifier.size(30.dp).clip(CircleShape).clickable(onClick = search).padding(5.dp),
-                                        )
-                                    }
-                                }
+                                    },
+                                    right = if ((topSpec?.onAction != null && topSpec.actionLabel != null) || topSpec?.onSearch != null) ({
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            topSpec.takeIf { it.onAction != null && it.actionLabel != null }?.let { spec ->
+                                                Ios5BarKey(onClick = { spec.onAction?.invoke() }, dark = true) {
+                                                    Ios5BarButtonText(spec.actionLabel.orEmpty())
+                                                }
+                                            }
+                                            if (topSpec?.onSearch != null) {
+                                                if (topSpec.onAction != null && topSpec.actionLabel != null) Spacer(Modifier.width(6.dp))
+                                                Ios5BarKey(onClick = { topSpec.onSearch.invoke() }, dark = true, horizontalPadding = 8.dp) {
+                                                    Icon(Icons.Filled.Search, "搜索", tint = Color.White, modifier = Modifier.size(16.dp))
+                                                }
+                                            }
+                                        }
+                                    }) else null,
+                                )
                             }
                             Row(
                                 Modifier.width(panelWidth).fillMaxHeight().padding(horizontal = 8.dp),
@@ -1881,11 +1806,11 @@ fun Ios5App() {
                             onOpenQueue = { showQueue = true },
                             onOpenSubtitleSettings = {
                                 playerVM.setExpanded(false)
-                                navController.navigate(Ios5Routes.SETTINGS_AUDIOBOOK_SUBTITLES)
+                                tabNav.push(Ios5Routes.SETTINGS_AUDIOBOOK_SUBTITLES)
                             },
                             onOpenMultimodalSettings = {
                                 playerVM.setExpanded(false)
-                                navController.navigate(Ios5Routes.SETTINGS_MULTIMODAL)
+                                tabNav.push(Ios5Routes.SETTINGS_MULTIMODAL)
                             },
                             chapterAvailable = { i ->
                                 val e = remoteAbookEntry
@@ -1998,15 +1923,6 @@ fun Ios5App() {
                                 onClose = { closeReader() },
                             )
                         }
-                    }
-                }
-            }
-
-            // 恢复返回栈期间盖住首页，避免闪一下再跳到上次的页面（没有可恢复的栈就别闪加载圈）
-            if (!navRestored && hasNavToRestore) {
-                Ios5Backdrop {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        com.aurora.music.ui.components.LottieLoader(modifier = Modifier.size(90.dp))
                     }
                 }
             }

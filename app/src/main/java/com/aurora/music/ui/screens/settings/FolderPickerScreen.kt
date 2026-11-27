@@ -56,6 +56,7 @@ fun FolderPickerScreen(
     contentPadding: PaddingValues,
     onBack: () -> Unit,
     onPicked: (path: String, displayName: String, type: StorageType) -> Unit,
+    backLabel: String? = null,
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val owner = LocalLifecycleOwner.current
@@ -111,7 +112,7 @@ fun FolderPickerScreen(
     val selName = if (selVolume != null) File(current).name.ifBlank { selVolume.label } else ""
     val selLabel = if (selVolume != null) "$selName (${selVolume.label})" else ""
 
-    Ios5SettingsPage(title = strTitle, onBack = onBack) {
+    Ios5SettingsPage(title = strTitle, onBack = onBack, backLabel = backLabel) {
         if (!hasRead) {
             ios5Section(strTitle) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {

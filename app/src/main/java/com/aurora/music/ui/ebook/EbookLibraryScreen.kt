@@ -73,9 +73,9 @@ fun EbookLibraryScreen(
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
     val scope = rememberCoroutineScope()
-    var searching by rememberSaveable { mutableStateOf(false) }
-    var query by rememberSaveable { mutableStateOf("") }
-    var editing by rememberSaveable { mutableStateOf(false) }
+    var searching by com.aurora.music.ui.rememberEntryBooleanState("searching")
+    var query by com.aurora.music.ui.rememberEntryStringState("query")
+    var editing by com.aurora.music.ui.rememberEntryBooleanState("editing")
     var selected by remember { mutableStateOf(setOf<String>()) }
 
     val shelfBooks by container.ebookStore.shelf.collectAsStateWithLifecycle()
@@ -279,7 +279,7 @@ fun EbookSearchScreen(
     onOpenExport: (path: String) -> Unit,
 ) {
     val container = (LocalContext.current.applicationContext as AuroraApplication).container
-    var query by rememberSaveable { mutableStateOf("") }
+    var query by com.aurora.music.ui.rememberEntryStringState("query")
     val shelf by container.ebookStore.shelf.collectAsStateWithLifecycle()
     var scanned by remember { mutableStateOf(emptyList<EbookBook>()) }
     val roots by container.ebookStore.roots.collectAsStateWithLifecycle()

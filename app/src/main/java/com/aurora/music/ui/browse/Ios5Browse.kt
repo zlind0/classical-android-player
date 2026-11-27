@@ -404,12 +404,7 @@ fun Ios5Detail(
                         mapMergeRows(libMerges[id], d.tracks)
                     }
                 }
-                var mergeExpanded by remember("detail_expand:$kind|$id") {
-                    mutableStateOf(mergeContainer.uiState.expandedOf("detail_expand:$kind|$id"))
-                }
-                LaunchedEffect(mergeExpanded, kind, id) {
-                    mergeContainer.uiState.saveExpanded("detail_expand:$kind|$id", mergeExpanded)
-                }
+                var mergeExpanded by com.aurora.music.ui.rememberEntryExpandedState("merge")
                 val mergeKey: (AlbumRow) -> String = { row ->
                     when (row) {
                         is AlbumRow.Single -> "s:${row.song.id}"
