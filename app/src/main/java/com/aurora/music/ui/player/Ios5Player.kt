@@ -68,6 +68,8 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -75,6 +77,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
@@ -193,6 +196,66 @@ fun rememberMergedTitle(song: Song): Pair<String, String>? {
     }
 }
 
+/**
+ * 播放页顶栏：艺人名绝对居中于整屏，左右按钮各自贴边。
+ *
+ * 原来的 Row + weight(1f) 会让艺人名落在返回键和队列键之间的剩余空间里居中，
+ * 而两侧按钮宽度不同（返回键带文字、队列键是图标），名字因此整体偏移。
+ * 这里用 Layout 量出两侧按钮的实际宽度，取较宽者作为对称留白，
+ * 再把艺人名放在整栏正中间：既不会被按钮压住，也始终对准屏幕中线。
+ */
+@Composable
+private fun Ios5PlayerTopBar(
+    artist: String,
+    backLabel: String,
+    onCollapse: () -> Unit,
+    modifier: Modifier = Modifier,
+    trailing: @Composable () -> Unit,
+) {
+    val gapPx = with(LocalDensity.current) { 6.dp.roundToPx() }
+    Layout(
+        modifier = modifier,
+        content = {
+            Box(Modifier.layoutId("back")) {
+                Ios5BackButton(label = backLabel, onClick = onCollapse, dark = true)
+            }
+            Box(Modifier.layoutId("artist")) {
+                Text(
+                    artist.ifBlank { " " },
+                    color = Color(0xFF9AA0AB),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = Ios5Sans,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+                )
+            }
+            Box(Modifier.layoutId("trailing")) { trailing() }
+        },
+    ) { measurables, constraints ->
+        val barW = constraints.maxWidth
+        val barH = constraints.maxHeight
+        // 侧键最宽不超过整栏 36%（和导航栏 Ios5NavBarLayout 的上限一致），
+        // 否则长返回文字会把中间的艺人名挤没
+        val maxSide = (barW * 0.36f).roundToInt().coerceAtLeast(0)
+        val sideConstraints = Constraints(maxWidth = maxSide, maxHeight = barH)
+        val backPlaceable = measurables.first { it.layoutId == "back" }.measure(sideConstraints)
+        val trailingPlaceable = measurables.first { it.layoutId == "trailing" }.measure(sideConstraints)
+        // 两侧取较宽者对称预留，保证艺人名的中点正好是整栏中点
+        val sideReserve = maxOf(backPlaceable.width, trailingPlaceable.width) + gapPx
+        val artistPlaceable = measurables.first { it.layoutId == "artist" }.measure(
+            Constraints(
+                maxWidth = (barW - sideReserve * 2).coerceAtLeast(0),
+                maxHeight = barH,
+            ),
+        )
+        layout(barW, barH) {
+            backPlaceable.placeRelative(0, (barH - backPlaceable.height) / 2)
+            trailingPlaceable.placeRelative(barW - trailingPlaceable.width, (barH - trailingPlaceable.height) / 2)
+            artistPlaceable.placeRelative((barW - artistPlaceable.width) / 2, (barH - artistPlaceable.height) / 2)
+        }
+    }
+}
+
 @Composable
 fun Ios5PlayerPage(
     state: PlayerUiState,
@@ -294,9 +357,6 @@ fun Ios5PlayerPage(
         val topExtra = leftover * 0.4f
         val bottomExtra = leftover - topExtra
         val third = topExtra / 3f
-        // 返回键最宽不超过整栏 36%（和导航栏 Ios5NavBarLayout 的侧键上限一致），
-        // 否则长标题会把中间的艺人名挤没
-        val backMaxWidth = maxWidth * 0.36f
         Column(Modifier.fillMaxSize()) {
         // 黑顶栏：返回 | 艺人 | 队列 + 标题区（合并时大/小标题两行占标题位）
         Column(
@@ -304,27 +364,13 @@ fun Ios5PlayerPage(
                 .background(iPodBlack)
                 .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + third),
         ) {
-            // 第一行：返回 | 艺人 | 队列/退出投屏（同高对齐，永远显示歌手）
-            Row(
-                Modifier.fillMaxWidth().height(36.dp + third).padding(horizontal = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            // 第一行：返回 | 艺人 | 队列/退出投屏（艺人名按整屏中线居中，不受两侧按钮宽度影响）
+            Ios5PlayerTopBar(
+                artist = song.artist,
+                backLabel = backLabel,
+                onCollapse = onCollapse,
+                modifier = Modifier.fillMaxWidth().height(36.dp + third).padding(horizontal = 8.dp),
             ) {
-                // 和导航栏同一套 iOS5 尖角返回键，文字是收起后露出的页面标题
-                Ios5BackButton(
-                    label = backLabel,
-                    onClick = onCollapse,
-                    modifier = Modifier.widthIn(max = backMaxWidth),
-                    dark = true,
-                )
-                Text(
-                    song.artist.ifBlank { " " },
-                    color = Color(0xFF9AA0AB),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = Ios5Sans,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
-                    modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
-                )
                 if (mode.isReceive) {
                     Ios5ExitCastButton(onClick = { onExitCast?.invoke() })
                 } else {
