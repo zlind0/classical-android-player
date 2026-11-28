@@ -60,6 +60,16 @@ class AuroraDspProcessor : BaseAudioProcessor() {
     @Volatile var lastProcessedMs: Long = 0L
         private set
 
+    // Media3 drains the processor chain and then flushes it when the stream changes
+    // (gapless media item transition). A flush that follows an end-of-stream is a
+    // track boundary, not a seek: the DSP state must survive it, otherwise the
+    // driving leveler's 100 ms micro-lookahead ring is zeroed and every track starts
+    // with 100 ms of silence. A plain flush (seek / reset) still resets everything.
+    // The short window guards against a flush long after a real end-of-stream
+    // (e.g. the user seeks after playback stopped), which must reset instead.
+    private var flushedAfterEos: Boolean = false
+    private var eosAtMs: Long = 0L
+
     fun readMeters(nowMs: Long = System.currentTimeMillis(), idleTimeoutMs: Long = 600L): com.aurora.music.data.DspMeters =
         if (lastProcessedMs > 0L && (nowMs - lastProcessedMs) <= idleTimeoutMs) {
             com.aurora.music.data.DspMeters(compGrDb, limGrDb, driveBoostDb, driveLookaheadActive)
@@ -90,11 +100,17 @@ class AuroraDspProcessor : BaseAudioProcessor() {
         if (inputAudioFormat.channelCount != 2 || inputAudioFormat.encoding != C.ENCODING_PCM_16BIT) {
             return AudioFormat.NOT_SET
         }
+        // configure() is also called when a new media item reuses the same format;
+        // resetting here would drop the previous track's buffered tail before the
+        // gapless drain. Only a real sample-rate change invalidates the state.
+        val rateChanged = configuredRate != inputAudioFormat.sampleRate
         configuredRate = inputAudioFormat.sampleRate
         smoothCoef = exp(-1.0 / (0.005 * configuredRate)).toFloat()
-        drivingLeveler.configure(configuredRate)
+        if (rateChanged) {
+            drivingLeveler.configure(configuredRate)
+            zeroState()
+        }
         coeffs = DspCoeffBuilder.build(params, configuredRate)
-        zeroState()
         return inputAudioFormat
     }
 
@@ -277,11 +293,31 @@ class AuroraDspProcessor : BaseAudioProcessor() {
         drivingLeveler.reset()
     }
 
+    override fun onQueueEndOfStream() {
+        flushedAfterEos = true
+        eosAtMs = System.currentTimeMillis()
+    }
+
     override fun onFlush() {
+        val gaplessBoundary = flushedAfterEos &&
+            System.currentTimeMillis() - eosAtMs <= GAPLESS_FLUSH_WINDOW_MS
+        flushedAfterEos = false
+        if (gaplessBoundary) {
+            // Gapless track boundary: keep filter memory and the leveler delay ring
+            // so the tail of the previous track flows straight into the next one.
+            return
+        }
         zeroState()
     }
 
     override fun onReset() {
+        flushedAfterEos = false
         zeroState()
+    }
+
+    private companion object {
+        // The EOS drain and the following flush happen within one or two render
+        // cycles; anything much later is a seek after playback ended, not gapless.
+        const val GAPLESS_FLUSH_WINDOW_MS = 1000L
     }
 }
