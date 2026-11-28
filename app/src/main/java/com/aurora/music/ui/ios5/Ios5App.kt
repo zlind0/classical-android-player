@@ -797,10 +797,10 @@ fun Ios5App() {
             animationSpec = tween(600, easing = FastOutSlowInEasing),
             label = "playerFlip",
         )
-        // 翻转过程中衬黑（转到侧面露黑场）；静止时透明，亚麻底才能透出来
+        // 翻转衬底永远是黑色：动画首尾两帧卡片仍带一点角度，边缘会露底，
+        // 一旦中途改透明就会闪出白色。常驻黑底，静止时被不透明的卡片完全盖住。
         Box(
-            Modifier.fillMaxSize()
-                .background(if (flip > 0.02f && flip < 0.98f) Color.Black else Color.Transparent),
+            Modifier.fillMaxSize().background(Color.Black),
         ) {
             // ---- 内容面：自带亚麻底，转起来是一张实卡，真空才露黑 ----
             // 抽成局部函数，竖屏翻转与横向双栏共用同一棵树，状态天然一致
