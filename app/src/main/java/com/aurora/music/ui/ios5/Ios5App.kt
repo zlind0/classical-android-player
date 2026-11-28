@@ -88,6 +88,7 @@ import com.aurora.music.navigation.Ios5TabNavigator
 import com.aurora.music.navigation.LocalNavEntryScope
 import com.aurora.music.navigation.NavDirection
 import com.aurora.music.navigation.NavEntryScope
+import com.aurora.music.navigation.defaultTitleForRoute
 import com.aurora.music.navigation.ios5TabRoutes
 import com.aurora.music.navigation.ios5Tabs
 import com.aurora.music.navigation.parseIos5Route
@@ -521,6 +522,11 @@ fun Ios5App() {
     }
 
     val currentRoute = tabNav.currentRoute
+
+    // 播放页返回键上的文字：收起播放页后露出的那个页面的标题
+    val playerBackLabel = tabNav.currentEntry.title
+        .ifBlank { defaultTitleForRoute(tabNav.currentEntry.route) }
+        .ifBlank { "返回" }
 
     // 远端浏览会话内展示完整缓存（离线条目灰色不可点）；回到任意 Tab 顶层立即隐藏离线内容。
     val showUnavailableRemote = remoteBrowsing && currentRoute !in ios5TabRoutes
@@ -1844,6 +1850,7 @@ fun Ios5App() {
                     Ios5PlayerPage(
                         state = nowPlayingState,
                         onCollapse = { castPageExpanded = false },
+                        backLabel = playerBackLabel,
                         onTogglePlay = {
                             when {
                                 podMusicReceive != null -> container.castReceiver.togglePlay()
@@ -1920,6 +1927,7 @@ fun Ios5App() {
                             book = abook,
                             allowMix = abookPrefs.allowMix,
                             onCollapse = { playerVM.setExpanded(false) },
+                            backLabel = playerBackLabel,
                             onTogglePlay = { playerVM.togglePlay() },
                             onPrevChapter = { playerVM.abookChapter(-1) },
                             onNextChapter = { playerVM.abookChapter(+1) },
@@ -1956,6 +1964,7 @@ fun Ios5App() {
                     Ios5PlayerPage(
                         state = playerState,
                         onCollapse = { playerVM.setExpanded(false) },
+                        backLabel = playerBackLabel,
                         onTogglePlay = { playerVM.togglePlay() },
                         onNext = { playerVM.next() },
                         onPrevious = { playerVM.previous() },

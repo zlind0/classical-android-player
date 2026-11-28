@@ -19,12 +19,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.MusicNote
@@ -70,6 +70,8 @@ import com.aurora.music.data.llm.TranslationUiMemory
 import com.aurora.music.ui.components.MarqueeText
 import com.aurora.music.ui.components.TrackArtwork
 import com.aurora.music.ui.components.formatTime
+import com.aurora.music.ui.ios5.Ios5BackButton
+import com.aurora.music.ui.ios5.Ios5BarKey
 import com.aurora.music.ui.ios5.Ios5Sans
 import com.aurora.music.ui.ios5.Ios5Slider
 import com.aurora.music.ui.ios5.Ios5SliderRow
@@ -98,6 +100,8 @@ fun Ios5AudiobookPlayerPage(
     book: AudiobookBook,
     allowMix: Boolean,
     onCollapse: () -> Unit,
+    /** 返回键上的文字：收起播放页后露出的那个页面的标题。 */
+    backLabel: String = "返回",
     onTogglePlay: () -> Unit,
     onPrevChapter: () -> Unit,
     onNextChapter: () -> Unit,
@@ -326,6 +330,8 @@ fun Ios5AudiobookPlayerPage(
             maxWidth,
             maxHeight - statusTop - 87.dp - 100.dp - 174.dp - navBottom,
         ).coerceAtLeast(0.dp)
+        // 返回键最宽不超过整栏 36%（和导航栏 Ios5NavBarLayout 的侧键上限一致）
+        val backMaxWidth = maxWidth * 0.36f
         Column(Modifier.fillMaxSize()) {
             // 黑顶栏：返回 | 书名 | 队列 + 章节标题区
             Column(
@@ -337,9 +343,12 @@ fun Ios5AudiobookPlayerPage(
                     Modifier.fillMaxWidth().height(36.dp).padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IpodBarButton(onClick = onCollapse) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBackIos, "返回", tint = Color.White, modifier = Modifier.size(20.dp))
-                    }
+                    Ios5BackButton(
+                        label = backLabel,
+                        onClick = onCollapse,
+                        modifier = Modifier.widthIn(max = backMaxWidth),
+                        dark = true,
+                    )
                     Text(
                         book.displayTitle.ifBlank { " " },
                         color = Color(0xFF9AA0AB),
@@ -349,7 +358,7 @@ fun Ios5AudiobookPlayerPage(
                         maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
                         modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
                     )
-                    IpodBarButton(onClick = onOpenQueue) {
+                    Ios5BarKey(onClick = onOpenQueue, dark = true, horizontalPadding = 8.dp) {
                         Icon(Icons.AutoMirrored.Filled.QueueMusic, "队列", tint = Color.White, modifier = Modifier.size(20.dp))
                     }
                 }

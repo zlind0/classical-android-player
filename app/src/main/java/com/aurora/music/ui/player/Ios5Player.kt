@@ -31,7 +31,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Airplay
 import androidx.compose.material.icons.filled.Bedtime
@@ -90,6 +89,8 @@ import com.aurora.music.ui.cast.CastPickerCard
 import com.aurora.music.ui.components.MarqueeText
 import com.aurora.music.ui.components.TrackArtwork
 import com.aurora.music.ui.components.formatTime
+import com.aurora.music.ui.ios5.Ios5BackButton
+import com.aurora.music.ui.ios5.Ios5BarKey
 import com.aurora.music.ui.ios5.Ios5Colors
 import com.aurora.music.ui.ios5.Ios5Sans
 import com.aurora.music.ui.ios5.Ios5Slider
@@ -196,6 +197,8 @@ fun rememberMergedTitle(song: Song): Pair<String, String>? {
 fun Ios5PlayerPage(
     state: PlayerUiState,
     onCollapse: () -> Unit,
+    /** 返回键上的文字：收起播放页后露出的那个页面的标题。 */
+    backLabel: String = "返回",
     onTogglePlay: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
@@ -291,6 +294,9 @@ fun Ios5PlayerPage(
         val topExtra = leftover * 0.4f
         val bottomExtra = leftover - topExtra
         val third = topExtra / 3f
+        // 返回键最宽不超过整栏 36%（和导航栏 Ios5NavBarLayout 的侧键上限一致），
+        // 否则长标题会把中间的艺人名挤没
+        val backMaxWidth = maxWidth * 0.36f
         Column(Modifier.fillMaxSize()) {
         // 黑顶栏：返回 | 艺人 | 队列 + 标题区（合并时大/小标题两行占标题位）
         Column(
@@ -298,19 +304,18 @@ fun Ios5PlayerPage(
                 .background(iPodBlack)
                 .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + third),
         ) {
-            // 第一行：返回 | 艺人 | 队列/退出投屏（同高对齐，永远显示歌手；行高压到刚好包住 36dp 按钮）
+            // 第一行：返回 | 艺人 | 队列/退出投屏（同高对齐，永远显示歌手）
             Row(
                 Modifier.fillMaxWidth().height(36.dp + third).padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IpodBarButton(onClick = onCollapse) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBackIos,
-                        "返回",
-                        tint = Color.White,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
+                // 和导航栏同一套 iOS5 尖角返回键，文字是收起后露出的页面标题
+                Ios5BackButton(
+                    label = backLabel,
+                    onClick = onCollapse,
+                    modifier = Modifier.widthIn(max = backMaxWidth),
+                    dark = true,
+                )
                 Text(
                     song.artist.ifBlank { " " },
                     color = Color(0xFF9AA0AB),
@@ -323,7 +328,7 @@ fun Ios5PlayerPage(
                 if (mode.isReceive) {
                     Ios5ExitCastButton(onClick = { onExitCast?.invoke() })
                 } else {
-                    IpodBarButton(onClick = onOpenQueue) {
+                    Ios5BarKey(onClick = onOpenQueue, dark = true, horizontalPadding = 8.dp) {
                         Icon(Icons.AutoMirrored.Filled.QueueMusic, "队列", tint = Color.White, modifier = Modifier.size(20.dp))
                     }
                 }
@@ -750,24 +755,6 @@ internal fun SleepBubble(onDismiss: () -> Unit) {
             }
         }
     }
-}
-
-@Composable
-internal fun IpodBarButton(onClick: () -> Unit, content: @Composable () -> Unit) {
-    Box(
-        Modifier.size(width = 52.dp, height = 36.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color.White.copy(alpha = 0.22f), Color.Black.copy(alpha = 0.3f)),
-                ),
-            )
-            .border(1.dp, Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp),
-        contentAlignment = Alignment.Center,
-        content = { content() },
-    )
 }
 
 /** 接收投屏时的退出键：iOS5 红色圆形按钮 + 白色叉。 */
