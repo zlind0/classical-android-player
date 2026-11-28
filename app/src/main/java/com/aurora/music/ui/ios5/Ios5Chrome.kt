@@ -132,6 +132,42 @@ class TopBarHost {
 val LocalTopBarHost = compositionLocalOf<TopBarHost?> { null }
 
 /**
+ * 页面切换时导航栏的金属底不参与滑动/淡出：由 App 在页面之外静态绘制，
+ * 页面里的 [Ios5NavBar] 只画标题和按钮。覆盖层（阅读器、队列等）不受影响，仍自绘底。
+ */
+val LocalStaticNavBar = compositionLocalOf { false }
+
+/** 导航栏金属底 + 底部 1dp 分隔线，位置与 [Ios5NavBar] 完全一致。 */
+@Composable
+fun Ios5NavBarBackdrop(modifier: Modifier = Modifier) {
+    val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    Column(modifier.fillMaxWidth()) {
+        Box(
+            Modifier.fillMaxWidth()
+                .drawBehind { drawNavBarGradient() }
+                .padding(top = topInset)
+                .height(Ios5Dimens.NavHeight),
+        )
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Ios5Colors.BarBottomShadow))
+    }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawNavBarGradient() {
+    val navH = Ios5Dimens.NavHeight.toPx()
+    val navTop = (size.height - navH).coerceAtLeast(0f)
+    val splitFrac = ((navTop + navH * 0.50f) / size.height).coerceIn(0.05f, 0.95f)
+    val splitBefore = (splitFrac - 0.005f).coerceAtLeast(0f)
+    drawRect(
+        brush = Brush.verticalGradient(
+            0f to Ios5Colors.BarTop,
+            splitBefore to Ios5Colors.BarUpper,
+            splitFrac to Ios5Colors.BarLower,
+            1f to Ios5Colors.BarBottom,
+        ),
+    )
+}
+
+/**
  * Brushed-metal navigation bar (PSD "bar top", 44pt). Centered title, pointed
  * iOS5 back button carrying the previous screen's title, and right-side bar keys.
  */
@@ -165,23 +201,12 @@ fun Ios5NavBar(
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val density = LocalDensity.current
     val titleShadowY = with(density) { -1.dp.toPx() }
+    // 页面切换时金属底由 App 静态绘制（LocalStaticNavBar），这里只画标题和按钮
+    val staticBackdrop = LocalStaticNavBar.current
     Column(Modifier.fillMaxWidth()) {
         Box(
             Modifier.fillMaxWidth()
-                .drawBehind {
-                    val navH = Ios5Dimens.NavHeight.toPx()
-                    val navTop = (size.height - navH).coerceAtLeast(0f)
-                    val splitFrac = ((navTop + navH * 0.50f) / size.height).coerceIn(0.05f, 0.95f)
-                    val splitBefore = (splitFrac - 0.005f).coerceAtLeast(0f)
-                    drawRect(
-                        brush = Brush.verticalGradient(
-                            0f to Ios5Colors.BarTop,
-                            splitBefore to Ios5Colors.BarUpper,
-                            splitFrac to Ios5Colors.BarLower,
-                            1f to Ios5Colors.BarBottom,
-                        ),
-                    )
-                }
+                .then(if (staticBackdrop) Modifier else Modifier.drawBehind { drawNavBarGradient() })
                 .padding(top = topInset)
                 .height(Ios5Dimens.NavHeight),
         ) {
@@ -225,8 +250,11 @@ fun Ios5NavBar(
                 }) else null,
             )
         }
-        // 1dp dark bottom keyline (PSD layer 535)
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Ios5Colors.BarBottomShadow))
+        // 1dp dark bottom keyline (PSD layer 535)；静态金属底模式下由 App 那边画
+        Box(
+            Modifier.fillMaxWidth().height(1.dp)
+                .then(if (staticBackdrop) Modifier else Modifier.background(Ios5Colors.BarBottomShadow)),
+        )
     }
 }
 

@@ -5,6 +5,8 @@ import android.app.Application
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -49,6 +51,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -68,6 +71,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -82,6 +86,7 @@ import com.aurora.music.navigation.Ios5Routes
 import com.aurora.music.navigation.Ios5TabNavViewModel
 import com.aurora.music.navigation.Ios5TabNavigator
 import com.aurora.music.navigation.LocalNavEntryScope
+import com.aurora.music.navigation.NavDirection
 import com.aurora.music.navigation.NavEntryScope
 import com.aurora.music.navigation.ios5TabRoutes
 import com.aurora.music.navigation.ios5Tabs
@@ -117,6 +122,115 @@ import com.aurora.music.viewmodel.Ios5BrowseViewModel
 import com.aurora.music.viewmodel.PlayerViewModel
 import kotlinx.coroutines.launch
 
+/** 页面前进/后退转场时长（iOS 推入大约 0.35s）。 */
+private const val PAGE_SLIDE_MS = 340
+private val pageSlideSpec = tween<Float>(PAGE_SLIDE_MS, easing = FastOutSlowInEasing)
+
+/**
+ * iOS5 页栈转场容器。
+ *
+ * 和 AnimatedContent 不同，这里显式保留“出场页”和“入场页”两棵树，直到动画播完才移除出场页，
+ * 所以返回时旧页面不会在动画刚开始就被卸载：
+ * - push：新页从右侧推入，旧页左移 1/3 并淡出；
+ * - pop：上一页从左侧回到原位，当前页右移整屏并淡出；
+ * - 切 Tab：原地淡入淡出。
+ *
+ * 两个槽位在树里的位置固定，页面只会在自己的槽里出现/消失，转场结束不会把当前页搬来搬去重建。
+ * 位移/透明度都在 graphicsLayer 里读取 [Animatable]，逐帧只更新图层，不触发整页重组。
+ */
+@Composable
+private fun PageTransitionHost(
+    pageId: String,
+    direction: NavDirection,
+    modifier: Modifier = Modifier,
+    onSettled: () -> Unit = {},
+    content: @Composable (String) -> Unit,
+) {
+    // 两个固定槽位：front 槽永远是当前页，back 槽在转场时放正在退场的旧页。
+    var slotAId by remember { mutableStateOf<String?>(pageId) }
+    var slotBId by remember { mutableStateOf<String?>(null) }
+    var frontIsA by remember { mutableStateOf(true) }
+    var motion by remember { mutableStateOf(NavDirection.SWITCH) }
+    var animating by remember { mutableStateOf(false) }
+    val progress = remember { Animatable(1f) }
+
+    // 组合被提前拆掉（如翻转/重建）时，动画协程会被取消，这里补一次清理，避免条目泄漏。
+    DisposableEffect(Unit) {
+        onDispose { onSettled() }
+    }
+
+    LaunchedEffect(pageId) {
+        val front = if (frontIsA) slotAId else slotBId
+        if (pageId == front) return@LaunchedEffect
+        // 打断上一轮动画时先收掉还在退场的页，避免归零时闪一下。
+        // 注意：这里不能 cleanupPending——刚退栈、正要播退场动画的那一页还在 pendingCleanup 里。
+        animating = false
+        if (frontIsA) slotBId = null else slotAId = null
+        progress.snapTo(0f)
+        motion = direction
+        if (frontIsA) slotBId = pageId else slotAId = pageId
+        frontIsA = !frontIsA
+        animating = true
+        progress.animateTo(1f, pageSlideSpec)
+        animating = false
+        if (frontIsA) slotBId = null else slotAId = null
+        // 动画播完才允许释放已退栈条目的 ViewModel/SaveableState
+        onSettled()
+    }
+
+    BoxWithConstraints(modifier) {
+        val widthPx = constraints.maxWidth.toFloat()
+        // 槽 A / 槽 B 的调用位置固定，清空其中一个不会挪动另一个的组合位置。
+        PageSlot(slotAId, frontIsA, animating, motion, progress, widthPx, content)
+        PageSlot(slotBId, !frontIsA, animating, motion, progress, widthPx, content)
+    }
+}
+
+@Composable
+private fun PageSlot(
+    id: String?,
+    isFront: Boolean,
+    animating: Boolean,
+    motion: NavDirection,
+    progress: Animatable<Float, AnimationVector1D>,
+    widthPx: Float,
+    content: @Composable (String) -> Unit,
+) {
+    if (id == null) return
+    key(id) {
+        Box(
+            Modifier.fillMaxSize()
+                // 当前页永远盖在退场页上面（push 时新页从右边压上来）
+                .zIndex(if (isFront) 1f else 0f)
+                .graphicsLayer {
+                    val p = progress.value
+                    if (!animating) {
+                        translationX = 0f
+                        alpha = 1f
+                        return@graphicsLayer
+                    }
+                    if (isFront) {
+                        translationX = when (motion) {
+                            NavDirection.FORWARD -> (1f - p) * widthPx
+                            NavDirection.BACKWARD -> -(1f - p) * widthPx
+                            NavDirection.SWITCH -> 0f
+                        }
+                        alpha = if (motion == NavDirection.SWITCH) p else 1f
+                    } else {
+                        translationX = when (motion) {
+                            // 旧页左移 1/3 后淡出，新页从右侧盖上来
+                            NavDirection.FORWARD -> -p * widthPx / 3f
+                            // 旧页右移整屏并淡出，上一页从左侧顶上来
+                            NavDirection.BACKWARD -> p * widthPx
+                            NavDirection.SWITCH -> 0f
+                        }
+                        alpha = 1f - p
+                    }
+                },
+        ) { content(id) }
+    }
+}
+
 @Composable
 fun Ios5App() {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -128,6 +242,9 @@ fun Ios5App() {
     val tabNav = remember(container.uiState, navVm, saveableStateHolder) {
         Ios5TabNavigator(container.uiState, navVm, saveableStateHolder)
     }
+
+    // 兜底：转场正常结束时会由 PageTransitionHost 的 onSettled 立即清理；
+    // 万一组合被提前拆掉（动画协程被取消），PageTransitionHost 销毁时也会补一次。
 
     // 阅读器是覆盖在当前页面之上的全屏层，不占 Tab 返回栈：
     // 这样打开/返回时底层页面（书库、随机列表、滚动位置）始终留在组合里，
@@ -698,10 +815,21 @@ fun Ios5App() {
                 Box(
                     Modifier.weight(1f).fillMaxWidth(),
                 ) {
+                    // 导航栏金属底固定在页面之外：切页时只有标题和按钮跟着页面走，底不动也不淡出
+                    val mergedBar = LocalTopBarHost.current != null
+                    if (!mergedBar) Ios5NavBarBackdrop()
                     if (tabNav.canPop) {
                         BackHandler { tabNav.pop() }
                     }
-                    val entry = tabNav.currentEntry
+                    CompositionLocalProvider(LocalStaticNavBar provides !mergedBar) {
+                    PageTransitionHost(
+                        // 用条目 id 而不是条目对象：标题回写会换新对象，不能因此触发转场
+                        pageId = tabNav.currentEntry.id,
+                        direction = tabNav.direction,
+                        modifier = Modifier.fillMaxSize(),
+                        onSettled = { tabNav.cleanupPending() },
+                    ) { entryId ->
+                    val entry = tabNav.entryById(entryId) ?: return@PageTransitionHost
                     val parsed = remember(entry.route) { parseIos5Route(entry.route) }
                     saveableStateHolder.SaveableStateProvider(entry.id) {
                         CompositionLocalProvider(
@@ -709,7 +837,7 @@ fun Ios5App() {
                             LocalNavEntryScope provides NavEntryScope(
                                 tabRoute = tabNav.activeTab,
                                 entryId = entry.id,
-                                previousTitle = tabNav.previousTitle,
+                                previousTitle = tabNav.previousTitleFor(entry.id),
                                 onTitleChanged = { tabNav.updateTitle(tabNav.activeTab, entry.id, it) },
                             ),
                         ) {
@@ -1374,6 +1502,8 @@ fun Ios5App() {
                                 }
                             }
                         }
+                    }
+                    }
                     }
                 }
 

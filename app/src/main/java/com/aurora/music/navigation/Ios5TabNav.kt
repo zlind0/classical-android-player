@@ -182,10 +182,14 @@ class Ios5TabNavViewModel : ViewModel() {
     }
 }
 
+/** 页面切换方向：决定进退场动画（push 右进左移、pop 左回右移、切 Tab 淡入淡出）。 */
+enum class NavDirection { FORWARD, BACKWARD, SWITCH }
+
 /**
  * iOS5 分 Tab 独立导航器：
  * - 每个 Tab 各自维护完整的入栈历史，切 Tab 不丢栈，冷启动直接从 UiStateStore 同步还原；
- * - 退栈（返回 / 再点当前 Tab 回根页）立即销毁对应条目的 ViewModelStore、SaveableState 与持久化数据。
+ * - 退栈（返回 / 再点当前 Tab 回根页）等退场动画播完后再销毁条目的 ViewModelStore、
+ *   SaveableState 与持久化数据，避免动画中途把正在退场的页面清空。
  */
 class Ios5TabNavigator(
     private val uiState: UiStateStore,
@@ -195,8 +199,44 @@ class Ios5TabNavigator(
     var activeTab by mutableStateOf(uiState.activeTab())
         private set
 
+    /** 最近一次导航的方向。只在转场开始时读取一次，故意不做成 Compose 状态。 */
+    var direction = NavDirection.SWITCH
+        private set
+
+    /** 已退栈、但还要播完退场动画的条目；由 UI 在动画结束后调用 [cleanupPending]。 */
+    var pendingCleanup by mutableStateOf<List<String>>(emptyList())
+        private set
+
+    /** 正在播退场动画的条目快照：退栈后仍要能按 id 取到它来渲染。 */
+    private var exitingEntries by mutableStateOf<Map<String, SavedStackEntry>>(emptyMap())
+
+    /** 退场条目的上一级标题快照：退栈后返回按钮上的文字不能再变。 */
+    private var exitingPreviousTitles by mutableStateOf<Map<String, String?>>(emptyMap())
+
     var stacks by mutableStateOf(uiState.tabStacks())
         private set
+
+    /** 按 id 取条目，包含刚退栈、正在播退场动画的条目（切 Tab 淡出时也要能找到旧页）。 */
+    fun entryById(entryId: String): SavedStackEntry? {
+        for (stack in stacks.values) {
+            stack.firstOrNull { it.id == entryId }?.let { return it }
+        }
+        return exitingEntries[entryId]
+    }
+
+    /**
+     * 某个条目自己那一级的上一页标题（不是当前栈顶的上一页）：
+     * 入栈后旧页面退场时，它的返回按钮仍应显示它原来的上一级。
+     */
+    fun previousTitleFor(entryId: String): String? {
+        for (stack in stacks.values) {
+            val idx = stack.indexOfFirst { it.id == entryId }
+            if (idx >= 0) {
+                return if (idx == 0) null else stack[idx - 1].title.takeIf { it.isNotBlank() }
+            }
+        }
+        return exitingPreviousTitles[entryId]
+    }
 
     val currentStack: List<SavedStackEntry>
         get() = stacks[activeTab].orEmpty()
@@ -207,9 +247,6 @@ class Ios5TabNavigator(
     val currentRoute: String
         get() = currentEntry.route
 
-    val previousTitle: String?
-        get() = currentStack.getOrNull(currentStack.lastIndex - 1)?.title?.takeIf { it.isNotBlank() }
-
     val canPop: Boolean
         get() = currentStack.size > 1
 
@@ -219,6 +256,7 @@ class Ios5TabNavigator(
             popToRoot(tabRoute)
             return
         }
+        direction = NavDirection.SWITCH
         activeTab = tabRoute
         uiState.saveNavigation(activeTab, stacks)
     }
@@ -235,6 +273,7 @@ class Ios5TabNavigator(
             route = route,
             title = initialTitle.ifBlank { defaultTitleForRoute(route) },
         )
+        direction = NavDirection.FORWARD
         val next = stacks.toMutableMap()
         next[activeTab] = stack + entry
         stacks = next
@@ -245,23 +284,31 @@ class Ios5TabNavigator(
         val stack = currentStack
         if (stack.size <= 1) return false
         val popped = stack.last()
+        direction = NavDirection.BACKWARD
         val next = stacks.toMutableMap()
         next[activeTab] = stack.dropLast(1)
         stacks = next
         uiState.saveNavigation(activeTab, stacks)
-        cleanupEntry(popped.id)
+        exitingEntries = exitingEntries + (popped.id to popped)
+        exitingPreviousTitles = exitingPreviousTitles +
+            (popped.id to stack.getOrNull(stack.lastIndex - 1)?.title?.takeIf { it.isNotBlank() })
+        pendingCleanup = pendingCleanup + popped.id
         return true
     }
 
     fun popToRoot(tabRoute: String = activeTab) {
         val stack = stacks[tabRoute].orEmpty()
         if (stack.size <= 1) return
+        direction = NavDirection.BACKWARD
         val dropped = stack.drop(1)
         val next = stacks.toMutableMap()
         next[tabRoute] = listOf(stack.first())
         stacks = next
         uiState.saveNavigation(tabRoute, stacks)
-        dropped.forEach { cleanupEntry(it.id) }
+        exitingEntries = exitingEntries + (stack.last().id to stack.last())
+        exitingPreviousTitles = exitingPreviousTitles +
+            (stack.last().id to stack.getOrNull(stack.lastIndex - 1)?.title?.takeIf { it.isNotBlank() })
+        pendingCleanup = pendingCleanup + dropped.map { it.id }
     }
 
     fun updateTitle(tabRoute: String, entryId: String, title: String) {
@@ -276,6 +323,16 @@ class Ios5TabNavigator(
         next[tabRoute] = updated
         stacks = next
         uiState.updateEntryTitle(tabRoute, entryId, clean)
+    }
+
+    /** 退场动画结束后释放已退栈条目（ViewModelStore / SaveableState）。 */
+    fun cleanupPending() {
+        val ids = pendingCleanup
+        if (ids.isEmpty()) return
+        pendingCleanup = emptyList()
+        exitingEntries = exitingEntries - ids.toSet()
+        exitingPreviousTitles = exitingPreviousTitles - ids.toSet()
+        ids.forEach { cleanupEntry(it) }
     }
 
     private fun cleanupEntry(entryId: String) {

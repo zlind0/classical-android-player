@@ -2,6 +2,7 @@ package com.aurora.music.ui.browse
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.PaddingValues
@@ -416,8 +417,11 @@ private fun LazyListScope.remoteMergedAlbumRows(
 /** 空状态占位，避免远程路由冷启动恢复时闪黑。 */
 @Composable
 fun Ios5RemoteDetailEmpty(onBack: () -> Unit) {
-    Column(Modifier.fillMaxSize().background(Ios5Colors.CellBg)) {
+    // 背景只铺内容区：导航栏的金属底由外层静态绘制
+    Column(Modifier.fillMaxSize()) {
         Ios5NavBar(title = "远程资料库", onBack = onBack)
-        Ios5Empty("这台设备的资料库暂时不可用")
+        Box(Modifier.fillMaxSize().background(Ios5Colors.CellBg)) {
+            Ios5Empty("这台设备的资料库暂时不可用")
+        }
     }
 }
